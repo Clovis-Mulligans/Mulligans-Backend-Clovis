@@ -1,0 +1,3 @@
+-- Baseline migration for feedback table
+-- This table already exists in the database
+-- This migration is marked as applied to resolve drift

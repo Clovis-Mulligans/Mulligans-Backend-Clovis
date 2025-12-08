@@ -1,0 +1,322 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model conversations {
+  id                                   String     @id
+  listing_id                           String
+  buyer_id                             String
+  seller_id                            String
+  last_message_at                      DateTime   @default(now())
+  is_archived                          Boolean    @default(false)
+  created_at                           DateTime   @default(now())
+  users_conversations_buyer_idTousers  users      @relation("conversations_buyer_idTousers", fields: [buyer_id], references: [id], onDelete: Cascade)
+  listings                             listings   @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+  users_conversations_seller_idTousers users      @relation("conversations_seller_idTousers", fields: [seller_id], references: [id], onDelete: Cascade)
+  messages                             messages[]
+
+  @@unique([listing_id, buyer_id])
+  @@index([buyer_id])
+  @@index([listing_id])
+  @@index([seller_id])
+}
+
+model favorites {
+  id         String   @id
+  user_id    String
+  listing_id String
+  created_at DateTime @default(now())
+  listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, listing_id])
+  @@index([listing_id])
+  @@index([user_id])
+}
+
+model images {
+  id            String   @id
+  listing_id    String
+  image_url     String
+  s3_key        String
+  is_primary    Boolean  @default(false)
+  display_order Int      @default(0)
+  alt_text      String?
+  created_at    DateTime @default(now())
+  listings      listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+
+  @@index([listing_id])
+  @@index([listing_id, is_primary])
+}
+
+model listing_attributes {
+  id         String   @id
+  listing_id String
+  key        String
+  value      String
+  created_at DateTime @default(now())
+  listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+
+  @@index([key])
+  @@index([key, value])
+  @@index([listing_id])
+}
+
+model listings {
+  id                  String               @id
+  seller_id           String
+  title               String
+  description         String?
+  category            String
+  brand               String?
+  model               String?
+  price               Decimal              @db.Decimal(10, 2)
+  original_price      Decimal?             @db.Decimal(10, 2)
+  currency            String               @default("GBP")
+  status              String               @default("active")
+  location            String?
+  is_featured         Boolean              @default(false)
+  is_negotiable       Boolean              @default(true)
+  views               Int                  @default(0)
+  favorites_count     Int                  @default(0)
+  created_at          DateTime             @default(now())
+  updated_at          DateTime
+  ball_condition_type String?
+  condition_grip      Int?
+  condition_head      Int?
+  condition_overall   Int?
+  condition_shaft     Int?
+  subcategory         String?
+  specifications      Json?
+  parcel_size         String?
+  shipping_cost       Decimal?             @db.Decimal(10, 2)
+  cart_items          cart_items[]
+  conversations       conversations[]
+  favorites           favorites[]
+  images              images[]
+  listing_attributes  listing_attributes[]
+  users               users                @relation(fields: [seller_id], references: [id], onDelete: Cascade)
+  orders              orders[]
+
+  @@index([brand])
+  @@index([category])
+  @@index([subcategory])
+  @@index([condition_overall])
+  @@index([created_at])
+  @@index([location])
+  @@index([price])
+  @@index([seller_id])
+  @@index([status])
+}
+
+model messages {
+  id                                String        @id
+  conversation_id                   String
+  sender_id                         String
+  receiver_id                       String
+  content                           String
+  message_type                      String        @default("text")
+  offer_amount                      Decimal?      @db.Decimal(10, 2)
+  is_read                           Boolean       @default(false)
+  created_at                        DateTime      @default(now())
+  conversations                     conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  users_messages_receiver_idTousers users         @relation("messages_receiver_idTousers", fields: [receiver_id], references: [id], onDelete: Cascade)
+  users_messages_sender_idTousers   users         @relation("messages_sender_idTousers", fields: [sender_id], references: [id], onDelete: Cascade)
+
+  @@index([conversation_id])
+  @@index([created_at])
+  @@index([receiver_id])
+  @@index([sender_id])
+}
+
+model orders {
+  id                            String            @id
+  listing_id                    String?
+  buyer_id                      String
+  seller_id                     String
+  amount                        Decimal           @db.Decimal(10, 2)
+  currency                      String            @default("GBP")
+  stripe_payment_intent_id      String?
+  stripe_payment_method_id      String?
+  status                        String            @default("pending")
+  shipping_address              Json?
+  tracking_number               String?
+  created_at                    DateTime          @default(now())
+  paid_at                       DateTime?
+  shipped_at                    DateTime?
+  delivered_at                  DateTime?
+  completed_at                  DateTime?
+  updated_at                    DateTime
+  auto_cancel_at                DateTime?
+  buyer_viewed_at               DateTime?
+  cancel_reason                 String?
+  cancelled_at                  DateTime?
+  carrier                       String?
+  dispute_reason                String?
+  disputed_at                   DateTime?
+  seller_payout                 Decimal?          @db.Decimal(10, 2)
+  label_url                     String?
+  shipping_cost                 Decimal?          @db.Decimal(10, 2)
+  shippo_shipment_id            String?
+  shippo_transaction_id         String?
+  users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
+  listings                      listings?         @relation(fields: [listing_id], references: [id])
+  users_orders_seller_idTousers users             @relation("orders_seller_idTousers", fields: [seller_id], references: [id])
+  reviews                       reviews[]
+  support_tickets               support_tickets[]
+
+  @@index([buyer_id])
+  @@index([created_at])
+  @@index([seller_id])
+  @@index([status])
+  @@index([auto_cancel_at])
+}
+
+model reviews {
+  id                                    String   @id
+  order_id                              String
+  reviewer_id                           String
+  reviewed_user_id                      String
+  rating                                Int
+  review_text                           String?
+  review_type                           String
+  is_public                             Boolean  @default(true)
+  created_at                            DateTime @default(now())
+  orders                                orders   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  users_reviews_reviewed_user_idTousers users    @relation("reviews_reviewed_user_idTousers", fields: [reviewed_user_id], references: [id], onDelete: Cascade)
+  users_reviews_reviewer_idTousers      users    @relation("reviews_reviewer_idTousers", fields: [reviewer_id], references: [id], onDelete: Cascade)
+}
+
+model users {
+  id                                           String            @id
+  cognito_id                                   String            @unique
+  email                                        String            @unique
+  display_name                                 String?
+  phone                                        String?
+  location                                     String?
+  bio                                          String?
+  avatar_url                                   String?
+  is_verified                                  Boolean           @default(false)
+  rating                                       Decimal           @default(0.00) @db.Decimal(3, 2)
+  total_sales                                  Int               @default(0)
+  total_purchases                              Int               @default(0)
+  created_at                                   DateTime          @default(now())
+  updated_at                                   DateTime
+  default_shipping_cost                        Decimal?          @db.Decimal(10, 2)
+  offers_free_shipping                         Boolean           @default(false)
+  postcode_area                                String?
+  preferred_carriers                           String?
+  email_notifications                          Boolean           @default(true)
+  marketing_emails                             Boolean           @default(false)
+  order_notifications                          Boolean           @default(true)
+  handicap                                     String?
+  clothing_size                                String[]
+  glove_size                                   String[]
+  shoe_size                                    String[]
+  sizing_preference                            String?
+  stripe_connect_id                            String?           @db.VarChar(255)
+  stripe_connect_status                        String?           @db.VarChar(50)
+  cart_items                                   cart_items[]
+  conversations_conversations_buyer_idTousers  conversations[]   @relation("conversations_buyer_idTousers")
+  conversations_conversations_seller_idTousers conversations[]   @relation("conversations_seller_idTousers")
+  favorites                                    favorites[]
+  feedback                                     Feedback[]
+  listings                                     listings[]
+  messages_messages_receiver_idTousers         messages[]        @relation("messages_receiver_idTousers")
+  messages_messages_sender_idTousers           messages[]        @relation("messages_sender_idTousers")
+  notifications                                notifications[]
+  orders_orders_buyer_idTousers                orders[]          @relation("orders_buyer_idTousers")
+  orders_orders_seller_idTousers               orders[]          @relation("orders_seller_idTousers")
+  reviews_reviews_reviewed_user_idTousers      reviews[]         @relation("reviews_reviewed_user_idTousers")
+  reviews_reviews_reviewer_idTousers           reviews[]         @relation("reviews_reviewer_idTousers")
+  support_tickets                              support_tickets[]
+}
+
+model notifications {
+  id              String   @id
+  user_id         String
+  type            String
+  title           String
+  message         String
+  image_url       String?
+  related_id      String?
+  related_user_id String?
+  is_read         Boolean  @default(false)
+  created_at      DateTime @default(now())
+  users           users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([is_read])
+  @@index([created_at])
+}
+
+model Feedback {
+  id            Int      @id @default(autoincrement())
+  userId        String?  @map("user_id")
+  feedbackType  String   @map("feedback_type") @db.VarChar(50)
+  screenFeature String   @map("screen_feature") @db.VarChar(100)
+  description   String
+  severity      String   @db.VarChar(20)
+  deviceInfo    String?  @map("device_info")
+  status        String   @default("new") @db.VarChar(20)
+  createdAt     DateTime @default(now()) @map("created_at")
+  user          users?   @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("feedback")
+}
+
+model support_tickets {
+  id         String                  @id
+  user_id    String
+  type       String
+  order_id   String?
+  subject    String
+  message    String
+  status     String                  @default("open")
+  created_at DateTime                @default(now())
+  updated_at DateTime                @updatedAt
+  images     support_ticket_images[]
+  orders     orders?                 @relation(fields: [order_id], references: [id])
+  users      users                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([created_at])
+  @@map("support_tickets")
+}
+
+model support_ticket_images {
+  id              String          @id
+  ticket_id       String
+  image_url       String
+  s3_key          String
+  created_at      DateTime        @default(now())
+  support_tickets support_tickets @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+
+  @@index([ticket_id])
+  @@map("support_ticket_images")
+}
+
+model cart_items {
+  id         String   @id
+  user_id    String
+  listing_id String
+  added_at   DateTime @default(now())
+  expires_at DateTime
+  listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, listing_id])
+  @@index([user_id])
+  @@index([listing_id])
+  @@index([expires_at])
+  @@map("cart_items")
+}

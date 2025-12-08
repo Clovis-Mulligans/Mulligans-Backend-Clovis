@@ -1,0 +1,18 @@
+### Register a new user
+POST http://localhost:3001/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@mulligans.com",
+  "password": "TestPassword123!",
+  "displayName": "Test User"
+}
+
+### Login
+POST http://localhost:3001/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@mulligans.com",
+  "password": "TestPassword123!"
+}
