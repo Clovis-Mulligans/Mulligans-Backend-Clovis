@@ -28,6 +28,8 @@ const app = express();
 const httpServer = createServer(app);
 const PORT = Number(process.env.PORT) || 3001;
 
+app.set('trust proxy', 1);
+
 // Initialize WebSocket
 const socketService = new SocketService(httpServer);
 
