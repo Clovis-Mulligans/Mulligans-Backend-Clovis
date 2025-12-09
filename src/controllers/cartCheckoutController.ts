@@ -571,13 +571,19 @@ export class CartCheckoutController {
             ? `${shippingAddressJson.name}\n${shippingAddressJson.line1}${shippingAddressJson.line2 ? '\n' + shippingAddressJson.line2 : ''}\n${shippingAddressJson.city}\n${shippingAddressJson.postal_code}`
             : 'Address not available';
 
+          // Format items as a string for the email template
+          const itemsListHtml = orderItems.map(item => 
+            `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${item.name}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">${item.price}</td></tr>`
+          ).join('');
+
           await sendOrderConfirmation(buyer.email, {
             buyerName: buyer.display_name || 'there',
             orderId: createdOrders[0]?.id || session.id,
-            items: orderItems,
+            itemsList: itemsListHtml,
             totalAmount: `£${grandTotal}`,
-            shippingAddress: formattedAddress,
+            shippingAddress: formattedAddress.replace(/\n/g, '<br>'),
           });
+          
           console.log('📧 Order confirmation email sent to:', buyer.email);
         } catch (emailError) {
           console.error('⚠️ Failed to send order confirmation email:', emailError);
