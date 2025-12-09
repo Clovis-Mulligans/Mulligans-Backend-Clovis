@@ -2,10 +2,12 @@
 // Handles checkout for cart with multiple items (potentially from multiple sellers)
 // UPDATED: Now saves shipping address from Stripe checkout
 // ✅ FIXED: Now includes image_url in notifications
+// ✅ UPDATED: Sends order confirmation email to buyer
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { sendOrderConfirmation } from '../services/emailService';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -333,6 +335,7 @@ export class CartCheckoutController {
    * Fulfill Cart Order (called from webhook)
    * Creates separate orders for each seller
    * ✅ UPDATED: Now includes image_url in notifications
+   * ✅ UPDATED: Sends order confirmation email to buyer
    */
   static async fulfillCartOrder(session: Stripe.Checkout.Session) {
     try {
@@ -343,6 +346,8 @@ export class CartCheckoutController {
       const listingIds = metadata.listing_ids.split(',');
       const sellerBreakdown = JSON.parse(metadata.seller_breakdown);
       const firstItemImage = metadata.first_item_image || null; // ✅ For buyer notification
+      const grandTotal = metadata.grand_total;
+      const shippingTotal = metadata.shipping_total || '0';
 
       // Get shipping address from session
       // Note: In newer Stripe API versions, shipping is in collected_information.shipping_details
@@ -378,12 +383,22 @@ export class CartCheckoutController {
         return;
       }
 
+      // ✅ Get buyer info for email
+      const buyer = await prisma.users.findUnique({
+        where: { id: buyerId },
+        select: {
+          email: true,
+          display_name: true,
+        },
+      });
+
       // Auto-cancel date (7 days from now)
       const autoCancelAt = new Date();
       autoCancelAt.setDate(autoCancelAt.getDate() + 7);
 
       // Create orders for each seller
       const createdOrders: any[] = [];
+      const orderItems: { name: string; price: string }[] = []; // ✅ For email
 
       for (const sellerData of sellerBreakdown) {
         const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, first_image } = sellerData;  // ✅ Added shipping_total
@@ -408,6 +423,12 @@ export class CartCheckoutController {
           const itemPrice = parseFloat(listing.price.toString());
           const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());  // ✅ ADDED
           const listingImage = listing.images[0]?.image_url || null;
+
+          // ✅ Add to email items list
+          orderItems.push({
+            name: listing.title,
+            price: `£${itemPrice.toFixed(2)}`,
+          });
 
           // Create order with shipping address and shipping cost
           const order = await prisma.orders.create({
@@ -541,6 +562,28 @@ export class CartCheckoutController {
         },
       });
       console.log('📬 Buyer notification created with image:', buyerNotificationImage ? 'YES' : 'NO');
+
+      // ✅ Send order confirmation email to buyer
+      if (buyer?.email) {
+        try {
+          // Format shipping address for email
+          const formattedAddress = shippingAddressJson 
+            ? `${shippingAddressJson.name}\n${shippingAddressJson.line1}${shippingAddressJson.line2 ? '\n' + shippingAddressJson.line2 : ''}\n${shippingAddressJson.city}\n${shippingAddressJson.postal_code}`
+            : 'Address not available';
+
+          await sendOrderConfirmation(buyer.email, {
+            buyerName: buyer.display_name || 'there',
+            orderId: createdOrders[0]?.id || session.id,
+            items: orderItems,
+            totalAmount: `£${grandTotal}`,
+            shippingAddress: formattedAddress,
+          });
+          console.log('📧 Order confirmation email sent to:', buyer.email);
+        } catch (emailError) {
+          console.error('⚠️ Failed to send order confirmation email:', emailError);
+          // Don't fail the order if email fails
+        }
+      }
 
       console.log('✅ Cart order fulfilled successfully');
       console.log('📦 Orders created:', createdOrders.length);

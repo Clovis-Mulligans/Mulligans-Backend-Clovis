@@ -2,9 +2,11 @@
 // ✅ UPDATED: Added buyer_viewed_at tracking for purchase notifications
 // ✅ UPDATED: Added is_new flags to purchases and sales
 // ✅ UPDATED: Creates notifications when order is shipped/delivered
+// ✅ UPDATED: Sends shipping notification email
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { sendShippingNotification } from '../services/emailService';
 
 const prisma = new PrismaClient();
 
@@ -452,7 +454,7 @@ export class OrderController {
   /**
    * Mark order as shipped (seller only)
    * PUT /api/orders/:id/ship
-   * ✅ UPDATED: Now creates notification for buyer
+   * ✅ UPDATED: Now creates notification for buyer AND sends shipping email
    */
   static async markAsShipped(req: Request, res: Response) {
     try {
@@ -462,7 +464,7 @@ export class OrderController {
 
       console.log('📦 Marking order as shipped:', orderId);
 
-      // Verify seller owns this order
+      // Verify seller owns this order and get buyer email
       const order = await prisma.orders.findFirst({
         where: {
           id: orderId,
@@ -477,6 +479,12 @@ export class OrderController {
                 take: 1,
                 orderBy: { display_order: 'asc' },
               },
+            },
+          },
+          users_orders_buyer_idTousers: {
+            select: {
+              email: true,
+              display_name: true,
             },
           },
         },
@@ -517,6 +525,24 @@ export class OrderController {
 
       console.log('✅ Order marked as shipped:', orderId);
       console.log('📬 Shipped notification sent to buyer:', order.buyer_id);
+
+      // ✅ Send shipping notification email
+      const buyerEmail = order.users_orders_buyer_idTousers?.email;
+      if (buyerEmail) {
+        try {
+          await sendShippingNotification(buyerEmail, {
+            buyerName: order.users_orders_buyer_idTousers?.display_name || 'there',
+            itemName: listingTitle,
+            trackingNumber: tracking_number || undefined,
+            carrier: carrier || undefined,
+            orderId: orderId,
+          });
+          console.log('📧 Shipping notification email sent to:', buyerEmail);
+        } catch (emailError) {
+          console.error('⚠️ Failed to send shipping email:', emailError);
+          // Don't fail the request if email fails
+        }
+      }
       
       res.json({ success: true, order: updatedOrder });
     } catch (error: any) {
