@@ -15,7 +15,6 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
-import jwt from 'jsonwebtoken';
 import { sendWelcomeEmail } from '../services/emailService';
 
 const router = Router();
