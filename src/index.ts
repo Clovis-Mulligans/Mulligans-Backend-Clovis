@@ -4,6 +4,8 @@ dotenv.config();
 import express from 'express';
 import { createServer } from 'http';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/authRoutes';
 import listingRoutes from './routes/listingRoutes';
 import searchRoutes from './routes/searchRoutes';
@@ -24,7 +26,7 @@ import sesRoutes from './routes/sesRoutes';
 
 const app = express();
 const httpServer = createServer(app);
-const PORT = Number(process.env.PORT) || 3001;  // ← FIXED: Convert to number
+const PORT = Number(process.env.PORT) || 3001;
 
 // Initialize WebSocket
 const socketService = new SocketService(httpServer);
@@ -32,9 +34,33 @@ const socketService = new SocketService(httpServer);
 // Make socket service available to routes
 app.set('socketService', socketService);
 
-// Middleware
+// Security: Add protective HTTP headers
+app.use(helmet());
+
+// Rate limiting - general API (100 requests per 15 minutes per IP)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Strict rate limiting for auth routes (10 attempts per 15 minutes per IP)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many login attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply general rate limiting to all routes
+app.use(generalLimiter);
+
+// CORS configuration
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: process.env.FRONTEND_URL || '*',
   credentials: true,
 }));
 
@@ -49,8 +75,8 @@ app.use((req, res, next) => {
 
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use('/api/auth', authRoutes);
+// Routes - auth has stricter rate limiting
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/listings', listingRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/messages', messageRoutes);
@@ -92,12 +118,6 @@ app.use((req, res) => {
 });
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📱 Mobile access: http://192.168.1.233:${PORT}`);
-  console.log(`📊 Health check: http://192.168.1.233:${PORT}/health`);
-  console.log(`🔐 Auth API: http://192.168.1.233:${PORT}/api/auth`);
-  console.log(`📦 Listings API: http://192.168.1.233:${PORT}/api/listings`);
-  console.log(`🔍 Search API: http://192.168.1.233:${PORT}/api/search`);
-  console.log(`💬 Messages API: http://192.168.1.233:${PORT}/api/messages`);
-  console.log(`⚡ WebSocket: Enabled`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🔒 Security: Helmet + Rate Limiting enabled`);
 });
