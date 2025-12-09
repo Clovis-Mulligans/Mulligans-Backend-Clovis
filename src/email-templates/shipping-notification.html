@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Order Has Shipped - Mulligans</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Montserrat', Arial, Helvetica, sans-serif; background-color: #EAEAE0;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+          <tr>
+            <td align="center" style="padding: 30px 40px; background-color: #ffffff;">
+              <img src="https://mulligans-golf-images-mvp.s3.eu-west-2.amazonaws.com/email-assets/mulligans-logo.png" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
+            </td>
+          </tr>
+          <tr>
+            <td style="height: 4px; background-color: #1DC690;"></td>
+          </tr>
+          <tr>
+            <td style="padding: 40px;">
+              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Your Order is On Its Way!</h1>
+              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
+              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">Great news! Your item has been shipped and is on its way to you.</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #1DC690; border-radius: 8px; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 25px; text-align: center;">
+                    <p style="margin: 0 0 5px 0; color: #ffffff; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Tracking Number</p>
+                    <p style="margin: 0; color: #ffffff; font-size: 22px; font-weight: bold; letter-spacing: 1px;">{{trackingNumber}}</p>
+                    <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 14px;">Carrier: {{carrier}}</p>
+                  </td>
+                </tr>
+              </table>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 15px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Order #{{orderNumber}}</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td width="80" style="padding-right: 15px; vertical-align: top;">
+                          <img src="{{itemImage}}" alt="{{itemTitle}}" width="80" height="80" style="display: block; border-radius: 6px; object-fit: cover;">
+                        </td>
+                        <td style="vertical-align: top;">
+                          <p style="margin: 0 0 5px 0; color: #111827; font-size: 16px; font-weight: bold;">{{itemTitle}}</p>
+                          <p style="margin: 0; color: #6B7280; font-size: 14px;">Sold by: {{sellerName}}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 10px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Delivering To</p>
+                    <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.6;">{{shippingName}}<br>{{shippingAddress}}<br>{{shippingCity}}, {{shippingPostcode}}<br>{{shippingCountry}}</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;"><strong>Estimated delivery:</strong> {{estimatedDelivery}}</p>
+              <p style="margin: 0; color: #374151; font-size: 16px; line-height: 1.6;">Happy golfing!<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 30px 40px; background-color: #1C4670;">
+              <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
+              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">© 2025 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligansgolf.carrd.co" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

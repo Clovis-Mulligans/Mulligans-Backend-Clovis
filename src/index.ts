@@ -1,8 +1,9 @@
 // src/index.ts
+import dotenv from 'dotenv';
+dotenv.config();
 import express from 'express';
 import { createServer } from 'http';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes';
 import listingRoutes from './routes/listingRoutes';
 import searchRoutes from './routes/searchRoutes';
@@ -19,8 +20,7 @@ import reviewRoutes from './routes/reviewRoutes';
 import stripeConnectRoutes from './routes/stripeConnectRoutes';
 import cartRoutes from './routes/cartRoutes';
 import shippingRoutes from './routes/shippingRoutes';
-
-dotenv.config();
+import sesRoutes from './routes/sesRoutes';
 
 const app = express();
 const httpServer = createServer(app);
@@ -65,6 +65,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/stripe/connect', stripeConnectRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/shipping', shippingRoutes);
+app.use('/api/ses', sesRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

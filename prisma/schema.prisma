@@ -320,3 +320,17 @@ model cart_items {
   @@index([expires_at])
   @@map("cart_items")
 }
+
+model email_suppressions {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  reason         String // 'bounce' or 'complaint'
+  bounce_type    String? // 'Permanent', 'Transient'
+  bounce_subtype String? // 'General', 'NoEmail', etc.
+  source         String? // The SNS message ID or diagnostic info
+  created_at     DateTime @default(now())
+
+  @@index([email])
+  @@index([reason])
+  @@map("email_suppressions")
+}
