@@ -15,6 +15,8 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import { sendWelcomeEmail } from '../services/emailService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -160,6 +162,15 @@ router.post('/verify-email', async (req: Request, res: Response) => {
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+// Send welcome email
+    try {
+      await sendWelcomeEmail(email, user?.display_name || 'there');
+      console.log('📧 Welcome email sent to:', email);
+    } catch (emailError) {
+      console.error('⚠️ Failed to send welcome email:', emailError);
+      // Don't fail the verification if email fails
     }
 
     // Now that email is verified, create JWT token and auto-login
