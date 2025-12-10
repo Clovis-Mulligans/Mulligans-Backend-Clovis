@@ -164,6 +164,8 @@ model orders {
   shipping_cost                 Decimal?          @db.Decimal(10, 2)
   shippo_shipment_id            String?
   shippo_transaction_id         String?
+  escrow_release_at             DateTime?
+  reported_lost_at              DateTime?
   users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
   listings                      listings?         @relation(fields: [listing_id], references: [id])
   users_orders_seller_idTousers users             @relation("orders_seller_idTousers", fields: [seller_id], references: [id])
@@ -221,6 +223,7 @@ model users {
   sizing_preference                            String?
   stripe_connect_id                            String?           @db.VarChar(255)
   stripe_connect_status                        String?           @db.VarChar(50)
+  shipping_strikes                             Int               @default(0)
   cart_items                                   cart_items[]
   conversations_conversations_buyer_idTousers  conversations[]   @relation("conversations_buyer_idTousers")
   conversations_conversations_seller_idTousers conversations[]   @relation("conversations_seller_idTousers")

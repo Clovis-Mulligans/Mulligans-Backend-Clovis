@@ -1,31 +1,38 @@
 // src/controllers/orderController.ts
-// ✅ UPDATED: Added buyer_viewed_at tracking for purchase notifications
-// ✅ UPDATED: Added is_new flags to purchases and sales
-// ✅ UPDATED: Creates notifications when order is shipped/delivered
-// ✅ UPDATED: Sends shipping notification email
+// ✅ UPDATED: Escrow system implementation
+// - Shipping deadline: 5 days
+// - Escrow release: 5 days after delivery
+// - Tracking number required
+// - Confirm receipt / Report lost endpoints
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import Stripe from 'stripe';
 import { sendShippingNotification } from '../services/emailService';
 
 const prisma = new PrismaClient();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2025-11-17.clover',
+});
+
+// ============================================
+// CONSTANTS
+// ============================================
+const SHIPPING_DEADLINE_DAYS = 5;
+const ESCROW_RELEASE_DAYS = 5;
 
 // Fee calculation - matches your pricing structure
 const calculateSellerPayout = (totalAmount: number): number => {
-  // Buyer pays: item price + 7% + £0.99
-  // So we reverse: seller_payout = total / 1.07 - (0.99 / 1.07)
-  // Simplified: seller gets the original listing price
   const platformFeePercent = 0.07;
   const platformFeeFixed = 0.99;
   const sellerPayout = (totalAmount - platformFeeFixed) / (1 + platformFeePercent);
-  return Math.round(sellerPayout * 100) / 100; // Round to 2 decimal places
+  return Math.round(sellerPayout * 100) / 100;
 };
 
 export class OrderController {
   /**
    * Get order counts for badges (pending sales + new purchases)
    * GET /api/orders/counts
-   * ✅ UPDATED: new_purchases only counts orders buyer hasn't viewed
    */
   static async getOrderCounts(req: Request, res: Response) {
     try {
@@ -35,8 +42,6 @@ export class OrderController {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      // Count orders where user is seller and status is 'to_ship' (needs action)
-      // This clears when seller ships the item
       const pendingSales = await prisma.orders.count({
         where: {
           seller_id: userId,
@@ -46,15 +51,13 @@ export class OrderController {
         },
       });
 
-      // ✅ UPDATED: Count purchases that buyer HASN'T viewed yet
-      // This clears when buyer clicks on the order
       const newPurchases = await prisma.orders.count({
         where: {
           buyer_id: userId,
           status: {
             in: ['to_ship', 'in_transit'],
           },
-          buyer_viewed_at: null, // ✅ Only count unviewed
+          buyer_viewed_at: null,
         },
       });
 
@@ -72,18 +75,14 @@ export class OrderController {
   }
 
   /**
-   * ✅ NEW: Mark order as viewed by buyer
+   * Mark order as viewed by buyer
    * PUT /api/orders/:id/viewed
-   * Clears the "new purchase" notification for this order
    */
   static async markAsViewed(req: Request, res: Response) {
     try {
       const userId = (req as any).user?.id;
       const orderId = req.params.id;
 
-      console.log('👁️ Marking order as viewed:', orderId, 'by user:', userId);
-
-      // Verify buyer owns this order
       const order = await prisma.orders.findFirst({
         where: {
           id: orderId,
@@ -95,13 +94,10 @@ export class OrderController {
         return res.status(404).json({ error: 'Order not found' });
       }
 
-      // If already viewed, return success (idempotent)
       if (order.buyer_viewed_at) {
-        console.log('✅ Order already viewed:', orderId);
         return res.json({ success: true, already_viewed: true });
       }
 
-      // Mark as viewed
       await prisma.orders.update({
         where: { id: orderId },
         data: {
@@ -121,7 +117,6 @@ export class OrderController {
   /**
    * Get user's purchases (orders where they are the buyer)
    * GET /api/orders/my-purchases?status=in_progress
-   * ✅ UPDATED: Now returns is_new flag for highlighting
    */
   static async getMyPurchases(req: Request, res: Response) {
     try {
@@ -131,11 +126,9 @@ export class OrderController {
 
       console.log('📦 Fetching purchases for user:', userId, 'status:', status);
 
-      // Build status filter
       let statusFilter: any = {};
       if (status && status !== 'all') {
         if (status === 'in_progress') {
-          // In Progress = to_ship, in_transit, delivered (not yet completed)
           statusFilter = { status: { in: ['to_ship', 'in_transit', 'delivered', 'pending'] } };
         } else if (status === 'cancelled') {
           statusFilter = { status: { in: ['cancelled', 'refunded'] } };
@@ -199,6 +192,7 @@ export class OrderController {
         delivered_at: order.delivered_at?.toISOString() || null,
         completed_at: order.completed_at?.toISOString() || null,
         cancelled_at: order.cancelled_at?.toISOString() || null,
+        escrow_release_at: order.escrow_release_at?.toISOString() || null,
         seller_id: order.seller_id,
         seller_name: order.users_orders_seller_idTousers?.display_name || 'Unknown',
         seller_avatar: order.users_orders_seller_idTousers?.avatar_url || null,
@@ -206,16 +200,16 @@ export class OrderController {
         tracking_number: order.tracking_number,
         carrier: order.carrier,
         has_reviewed: order.reviews.length > 0,
-        // ✅ NEW: Flag for highlighting new/unviewed purchases
         is_new: order.buyer_viewed_at === null && ['to_ship', 'in_transit'].includes(order.status),
+        // ✅ NEW: Can confirm receipt if delivered but not completed
+        can_confirm_receipt: order.status === 'delivered',
+        // ✅ NEW: Can report lost if in_transit for 14+ days
+        can_report_lost: order.status === 'in_transit' && 
+          order.shipped_at && 
+          (new Date().getTime() - order.shipped_at.getTime()) > 14 * 24 * 60 * 60 * 1000,
       }));
 
       console.log(`✅ Found ${formattedOrders.length} purchases`);
-      
-      // Log how many are new
-      const newCount = formattedOrders.filter(o => o.is_new).length;
-      console.log(`🆕 New (unviewed) purchases: ${newCount}`);
-
       res.json({ orders: formattedOrders });
     } catch (error: any) {
       console.error('❌ Get purchases error:', error);
@@ -226,7 +220,6 @@ export class OrderController {
   /**
    * Get user's sales (orders where they are the seller)
    * GET /api/orders/my-sales?status=to_ship
-   * ✅ UPDATED: Now returns is_new flag for highlighting
    */
   static async getMySales(req: Request, res: Response) {
     try {
@@ -236,7 +229,6 @@ export class OrderController {
 
       console.log('💰 Fetching sales for user:', userId, 'status:', status);
 
-      // Build status filter
       let statusFilter: any = {};
       if (status && status !== 'all') {
         if (status === 'to_ship') {
@@ -299,6 +291,7 @@ export class OrderController {
         completed_at: order.completed_at?.toISOString() || null,
         cancelled_at: order.cancelled_at?.toISOString() || null,
         auto_cancel_at: order.auto_cancel_at?.toISOString() || null,
+        escrow_release_at: order.escrow_release_at?.toISOString() || null,
         buyer_id: order.buyer_id,
         buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
         buyer_avatar: order.users_orders_buyer_idTousers?.avatar_url || null,
@@ -306,16 +299,14 @@ export class OrderController {
         tracking_number: order.tracking_number,
         carrier: order.carrier,
         shipping_address: order.shipping_address,
-        // ✅ NEW: Flag for highlighting - sales need action until shipped
         is_new: order.status === 'to_ship',
+        // ✅ NEW: Days remaining to ship
+        days_to_ship: order.auto_cancel_at ? 
+          Math.max(0, Math.ceil((order.auto_cancel_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
+          null,
       }));
 
       console.log(`✅ Found ${formattedOrders.length} sales`);
-      
-      // Log how many need shipping
-      const needsShipping = formattedOrders.filter(o => o.is_new).length;
-      console.log(`📦 Sales needing shipment: ${needsShipping}`);
-
       res.json({ orders: formattedOrders });
     } catch (error: any) {
       console.error('❌ Get sales error:', error);
@@ -404,7 +395,7 @@ export class OrderController {
           images: order.listings.images.map((img: any) => img.image_url),
         } : null,
         amount: parseFloat(order.amount.toString()),
-        shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,  // ✅ ADDED
+        shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
         currency: order.currency,
         status: order.status,
@@ -415,9 +406,10 @@ export class OrderController {
         completed_at: order.completed_at?.toISOString() || null,
         cancelled_at: order.cancelled_at?.toISOString() || null,
         auto_cancel_at: order.auto_cancel_at?.toISOString() || null,
+        escrow_release_at: order.escrow_release_at?.toISOString() || null,
         tracking_number: order.tracking_number,
         carrier: order.carrier,
-        shipping_address: isSeller ? order.shipping_address : null, // Only show to seller
+        shipping_address: isSeller ? order.shipping_address : null,
         buyer: {
           id: order.users_orders_buyer_idTousers?.id,
           name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
@@ -442,6 +434,15 @@ export class OrderController {
         has_reviewed: order.reviews.some((r: any) => r.reviewer_id === userId),
         dispute_reason: order.dispute_reason,
         cancel_reason: order.cancel_reason,
+        // ✅ NEW: Buyer-specific actions
+        can_confirm_receipt: isBuyer && order.status === 'delivered',
+        can_report_lost: isBuyer && order.status === 'in_transit' && 
+          order.shipped_at && 
+          (new Date().getTime() - order.shipped_at.getTime()) > 14 * 24 * 60 * 60 * 1000,
+        // ✅ NEW: Days until auto-release
+        days_until_release: order.escrow_release_at ? 
+          Math.max(0, Math.ceil((order.escrow_release_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
+          null,
       };
 
       res.json({ order: formattedOrder });
@@ -454,7 +455,7 @@ export class OrderController {
   /**
    * Mark order as shipped (seller only)
    * PUT /api/orders/:id/ship
-   * ✅ UPDATED: Now creates notification for buyer AND sends shipping email
+   * ✅ UPDATED: Tracking number is now REQUIRED
    */
   static async markAsShipped(req: Request, res: Response) {
     try {
@@ -462,9 +463,23 @@ export class OrderController {
       const orderId = req.params.id;
       const { tracking_number, carrier } = req.body;
 
+      // ✅ REQUIRE tracking number
+      if (!tracking_number || !tracking_number.trim()) {
+        return res.status(400).json({ 
+          error: 'Tracking number is required',
+          message: 'All shipments must include a valid tracking number for buyer protection.'
+        });
+      }
+
+      if (!carrier || !carrier.trim()) {
+        return res.status(400).json({ 
+          error: 'Carrier is required',
+          message: 'Please select the shipping carrier (e.g., Royal Mail, Evri, DPD).'
+        });
+      }
+
       console.log('📦 Marking order as shipped:', orderId);
 
-      // Verify seller owns this order and get buyer email
       const order = await prisma.orders.findFirst({
         where: {
           id: orderId,
@@ -498,14 +513,15 @@ export class OrderController {
         where: { id: orderId },
         data: {
           status: 'in_transit',
-          tracking_number: tracking_number || null,
-          carrier: carrier || null,
+          tracking_number: tracking_number.trim(),
+          carrier: carrier.trim(),
           shipped_at: new Date(),
+          auto_cancel_at: null, // Clear auto-cancel since it's now shipped
           updated_at: new Date(),
         },
       });
 
-      // ✅ Create notification for buyer
+      // Create notification for buyer
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
@@ -515,35 +531,31 @@ export class OrderController {
           user_id: order.buyer_id,
           type: 'shipped',
           title: 'Your item has shipped! 📦',
-          message: tracking_number 
-            ? `"${listingTitle}" is on its way! Tracking: ${tracking_number}`
-            : `"${listingTitle}" is on its way to you!`,
+          message: `"${listingTitle}" is on its way! Tracking: ${tracking_number}`,
           image_url: listingImage,
           related_id: orderId,
         },
       });
 
       console.log('✅ Order marked as shipped:', orderId);
-      console.log('📬 Shipped notification sent to buyer:', order.buyer_id);
 
-      // ✅ Send shipping notification email
+      // Send shipping notification email
       const buyerEmail = order.users_orders_buyer_idTousers?.email;
       if (buyerEmail) {
         try {
           await sendShippingNotification(buyerEmail, {
             buyerName: order.users_orders_buyer_idTousers?.display_name || 'there',
             itemName: listingTitle,
-            trackingNumber: tracking_number || undefined,
-            carrier: carrier || undefined,
+            trackingNumber: tracking_number,
+            carrier: carrier,
             orderId: orderId,
           });
           console.log('📧 Shipping notification email sent to:', buyerEmail);
         } catch (emailError) {
           console.error('⚠️ Failed to send shipping email:', emailError);
-          // Don't fail the request if email fails
         }
       }
-      
+
       res.json({ success: true, order: updatedOrder });
     } catch (error: any) {
       console.error('❌ Mark shipped error:', error);
@@ -552,9 +564,9 @@ export class OrderController {
   }
 
   /**
-   * Mark order as delivered (can be triggered by carrier webhook or manually)
+   * Mark order as delivered
    * PUT /api/orders/:id/deliver
-   * ✅ UPDATED: Now creates notification for buyer
+   * ✅ UPDATED: Now sets escrow_release_at
    */
   static async markAsDelivered(req: Request, res: Response) {
     try {
@@ -589,16 +601,21 @@ export class OrderController {
         return res.status(404).json({ error: 'Order not found or cannot be marked delivered' });
       }
 
+      // ✅ Calculate escrow release date (5 days from now)
+      const escrowReleaseAt = new Date();
+      escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
+
       const updatedOrder = await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'delivered',
           delivered_at: new Date(),
+          escrow_release_at: escrowReleaseAt, // ✅ NEW
           updated_at: new Date(),
         },
       });
 
-      // ✅ Create notification for buyer
+      // Create notification for buyer
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
@@ -608,15 +625,15 @@ export class OrderController {
           user_id: order.buyer_id,
           type: 'delivered',
           title: 'Item delivered! 🎉',
-          message: `"${listingTitle}" has been delivered. Enjoy your purchase!`,
+          message: `"${listingTitle}" has been delivered. You have ${ESCROW_RELEASE_DAYS} days to confirm or report any issues.`,
           image_url: listingImage,
           related_id: orderId,
         },
       });
 
       console.log('✅ Order marked as delivered:', orderId);
-      console.log('📬 Delivered notification sent to buyer:', order.buyer_id);
-      
+      console.log(`📅 Escrow release scheduled for: ${escrowReleaseAt.toISOString()}`);
+
       res.json({ success: true, order: updatedOrder });
     } catch (error: any) {
       console.error('❌ Mark delivered error:', error);
@@ -625,8 +642,247 @@ export class OrderController {
   }
 
   /**
+   * ✅ NEW: Buyer confirms receipt (releases escrow early)
+   * PUT /api/orders/:id/confirm-receipt
+   */
+  static async confirmReceipt(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+      const orderId = req.params.id;
+
+      console.log('✅ Buyer confirming receipt:', orderId);
+
+      const order = await prisma.orders.findFirst({
+        where: {
+          id: orderId,
+          buyer_id: userId,
+          status: 'delivered',
+        },
+        include: {
+          listings: {
+            select: {
+              title: true,
+              images: {
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+          users_orders_seller_idTousers: {
+            select: {
+              id: true,
+              stripe_connect_id: true,
+              display_name: true,
+            },
+          },
+        },
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found or cannot confirm receipt' });
+      }
+
+      const seller = order.users_orders_seller_idTousers;
+      const listingTitle = order.listings?.title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || null;
+
+      // ✅ Transfer funds to seller immediately
+      if (seller.stripe_connect_id && order.seller_payout) {
+        const transferAmount = Math.round(parseFloat(order.seller_payout.toString()) * 100);
+
+        try {
+          const transfer = await stripe.transfers.create({
+            amount: transferAmount,
+            currency: 'gbp',
+            destination: seller.stripe_connect_id,
+            metadata: {
+              order_id: order.id,
+              type: 'buyer_confirmed_receipt',
+              confirmed_at: new Date().toISOString(),
+            },
+          });
+
+          console.log(`💸 Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)}`);
+        } catch (transferError: any) {
+          console.error('⚠️ Transfer failed:', transferError.message);
+          return res.status(500).json({ error: 'Failed to process payment to seller' });
+        }
+      }
+
+      // Update order to completed
+      const now = new Date();
+      await prisma.orders.update({
+        where: { id: orderId },
+        data: {
+          status: 'completed',
+          completed_at: now,
+          escrow_release_at: now, // Mark as released
+          updated_at: now,
+        },
+      });
+
+      // Update seller's total_sales
+      await prisma.users.update({
+        where: { id: seller.id },
+        data: {
+          total_sales: { increment: 1 },
+          updated_at: now,
+        },
+      });
+
+      // Notify seller
+      const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
+
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: seller.id,
+          type: 'payout',
+          title: 'Payment Released! 💰',
+          message: `The buyer confirmed receipt of "${listingTitle}". £${payoutAmount} has been transferred to your account.`,
+          image_url: listingImage,
+          related_id: orderId,
+        },
+      });
+
+      console.log('✅ Receipt confirmed, escrow released for order:', orderId);
+
+      res.json({ 
+        success: true, 
+        message: 'Thank you for confirming receipt. The seller has been paid.' 
+      });
+    } catch (error: any) {
+      console.error('❌ Confirm receipt error:', error);
+      res.status(500).json({ error: 'Failed to confirm receipt' });
+    }
+  }
+
+  /**
+   * ✅ NEW: Buyer reports item as lost
+   * PUT /api/orders/:id/report-lost
+   */
+  static async reportLost(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+      const orderId = req.params.id;
+
+      console.log('📦 Buyer reporting item as lost:', orderId);
+
+      const order = await prisma.orders.findFirst({
+        where: {
+          id: orderId,
+          buyer_id: userId,
+          status: 'in_transit',
+        },
+        include: {
+          listings: {
+            select: {
+              title: true,
+              images: {
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+          users_orders_seller_idTousers: {
+            select: {
+              id: true,
+              display_name: true,
+            },
+          },
+        },
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found or cannot be reported as lost' });
+      }
+
+      // Check if shipped more than 14 days ago
+      if (order.shipped_at) {
+        const daysSinceShipped = (new Date().getTime() - order.shipped_at.getTime()) / (24 * 60 * 60 * 1000);
+        if (daysSinceShipped < 14) {
+          return res.status(400).json({ 
+            error: 'Too early to report as lost',
+            message: `You can report this item as lost after ${Math.ceil(14 - daysSinceShipped)} more days.`
+          });
+        }
+      }
+
+      const listingTitle = order.listings?.title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || null;
+      const now = new Date();
+
+      // ✅ Refund the buyer
+      if (order.stripe_payment_intent_id) {
+        try {
+          const refund = await stripe.refunds.create({
+            payment_intent: order.stripe_payment_intent_id,
+            reason: 'requested_by_customer',
+            metadata: {
+              order_id: order.id,
+              reason: 'reported_lost_in_transit',
+            },
+          });
+          console.log(`💸 Refund created: ${refund.id} for order ${order.id}`);
+        } catch (refundError: any) {
+          console.error('⚠️ Refund failed:', refundError.message);
+          return res.status(500).json({ error: 'Failed to process refund' });
+        }
+      }
+
+      // Update order status
+      await prisma.orders.update({
+        where: { id: orderId },
+        data: {
+          status: 'refunded',
+          reported_lost_at: now,
+          cancel_reason: 'lost_in_transit',
+          updated_at: now,
+        },
+      });
+
+      // Notify buyer
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: order.buyer_id,
+          type: 'refund',
+          title: 'Refund Processed',
+          message: `Your order for "${listingTitle}" has been refunded as it was reported lost in transit.`,
+          image_url: listingImage,
+          related_id: orderId,
+        },
+      });
+
+      // Notify seller
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: order.seller_id,
+          type: 'order_issue',
+          title: 'Item Reported Lost in Transit',
+          message: `"${listingTitle}" was reported as lost by the buyer. The buyer has been refunded. You may claim compensation from the courier.`,
+          image_url: listingImage,
+          related_id: orderId,
+        },
+      });
+
+      console.log('✅ Order reported as lost, buyer refunded:', orderId);
+
+      res.json({ 
+        success: true, 
+        message: 'Your refund has been processed. The seller has been notified to claim from the courier.' 
+      });
+    } catch (error: any) {
+      console.error('❌ Report lost error:', error);
+      res.status(500).json({ error: 'Failed to report item as lost' });
+    }
+  }
+
+  /**
    * Cancel order
    * PUT /api/orders/:id/cancel
+   * ✅ UPDATED: Now actually processes Stripe refund
    */
   static async cancelOrder(req: Request, res: Response) {
     try {
@@ -643,7 +899,19 @@ export class OrderController {
             { buyer_id: userId },
             { seller_id: userId },
           ],
-          status: { in: ['pending', 'to_ship'] }, // Can only cancel before shipping
+          status: { in: ['pending', 'to_ship'] },
+        },
+        include: {
+          listings: {
+            select: {
+              id: true,
+              title: true,
+              images: {
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
         },
       });
 
@@ -652,24 +920,72 @@ export class OrderController {
       }
 
       const isBuyer = order.buyer_id === userId;
-      const cancelReason = isBuyer ? 'buyer_cancelled' : 'seller_cancelled';
+      const cancelReason = reason || (isBuyer ? 'buyer_cancelled' : 'seller_cancelled');
+      const listingTitle = order.listings?.title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || null;
 
-      const updatedOrder = await prisma.orders.update({
+      // ✅ Process refund via Stripe
+      if (order.stripe_payment_intent_id) {
+        try {
+          const refund = await stripe.refunds.create({
+            payment_intent: order.stripe_payment_intent_id,
+            reason: 'requested_by_customer',
+            metadata: {
+              order_id: order.id,
+              reason: cancelReason,
+              cancelled_by: isBuyer ? 'buyer' : 'seller',
+            },
+          });
+          console.log(`💸 Refund created: ${refund.id}`);
+        } catch (refundError: any) {
+          console.error('⚠️ Refund failed:', refundError.message);
+          // Continue with cancellation - we can process refund manually
+        }
+      }
+
+      const now = new Date();
+
+      // Update order
+      await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'cancelled',
-          cancelled_at: new Date(),
-          cancel_reason: reason || cancelReason,
-          updated_at: new Date(),
+          cancelled_at: now,
+          cancel_reason: cancelReason,
+          updated_at: now,
         },
       });
 
-      // TODO: Process refund via Stripe
-      // TODO: Relist item if seller cancelled
-      // TODO: Send notifications
+      // Relist the item
+      if (order.listing_id) {
+        await prisma.listings.update({
+          where: { id: order.listing_id },
+          data: {
+            status: 'active',
+            updated_at: now,
+          },
+        });
+        console.log('📋 Item relisted:', order.listing_id);
+      }
+
+      // Notify the other party
+      const otherPartyId = isBuyer ? order.seller_id : order.buyer_id;
+      const cancelledBy = isBuyer ? 'The buyer' : 'The seller';
+
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: otherPartyId,
+          type: 'order_cancelled',
+          title: 'Order Cancelled',
+          message: `${cancelledBy} cancelled the order for "${listingTitle}". ${isBuyer ? 'Your item has been relisted.' : 'A refund has been processed.'}`,
+          image_url: listingImage,
+          related_id: orderId,
+        },
+      });
 
       console.log('✅ Order cancelled:', orderId);
-      res.json({ success: true, order: updatedOrder });
+      res.json({ success: true, message: 'Order cancelled successfully' });
     } catch (error: any) {
       console.error('❌ Cancel order error:', error);
       res.status(500).json({ error: 'Failed to cancel order' });
@@ -692,7 +1008,24 @@ export class OrderController {
         where: {
           id: orderId,
           buyer_id: userId,
-          status: { in: ['delivered', 'in_transit'] }, // Can dispute after shipped
+          status: { in: ['delivered', 'in_transit'] },
+        },
+        include: {
+          listings: {
+            select: {
+              title: true,
+              images: {
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+          users_orders_seller_idTousers: {
+            select: {
+              id: true,
+              display_name: true,
+            },
+          },
         },
       });
 
@@ -704,19 +1037,33 @@ export class OrderController {
         return res.status(400).json({ error: 'Dispute reason is required' });
       }
 
+      const listingTitle = order.listings?.title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || null;
+      const now = new Date();
+
       const updatedOrder = await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'disputed',
-          disputed_at: new Date(),
+          disputed_at: now,
           dispute_reason: reason,
-          updated_at: new Date(),
+          escrow_release_at: null, // ✅ Clear escrow release - funds held until resolved
+          updated_at: now,
         },
       });
 
-      // TODO: Notify seller
-      // TODO: Notify admin/support
-      // TODO: Hold payment release
+      // Notify seller
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: order.seller_id,
+          type: 'dispute',
+          title: 'Dispute Opened',
+          message: `A dispute has been opened for "${listingTitle}". Reason: ${reason}. Payment is on hold until resolved.`,
+          image_url: listingImage,
+          related_id: orderId,
+        },
+      });
 
       console.log('✅ Dispute opened:', orderId);
       res.json({ success: true, order: updatedOrder });
@@ -727,8 +1074,9 @@ export class OrderController {
   }
 
   /**
-   * Complete order (after escrow period)
+   * Complete order (manual - admin use or after escrow period)
    * PUT /api/orders/:id/complete
+   * ✅ UPDATED: Now actually transfers funds via Stripe
    */
   static async completeOrder(req: Request, res: Response) {
     try {
@@ -741,28 +1089,92 @@ export class OrderController {
           id: orderId,
           status: 'delivered',
         },
+        include: {
+          listings: {
+            select: {
+              title: true,
+              images: {
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+          users_orders_seller_idTousers: {
+            select: {
+              id: true,
+              stripe_connect_id: true,
+              display_name: true,
+            },
+          },
+        },
       });
 
       if (!order) {
         return res.status(404).json({ error: 'Order not found or cannot be completed' });
       }
 
-      // Calculate seller payout if not already set
+      const seller = order.users_orders_seller_idTousers;
       const sellerPayout = order.seller_payout || calculateSellerPayout(parseFloat(order.amount.toString()));
+      const listingTitle = order.listings?.title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || null;
+
+      // ✅ Transfer funds to seller
+      if (seller.stripe_connect_id && sellerPayout) {
+        const transferAmount = Math.round(parseFloat(sellerPayout.toString()) * 100);
+
+        try {
+          const transfer = await stripe.transfers.create({
+            amount: transferAmount,
+            currency: 'gbp',
+            destination: seller.stripe_connect_id,
+            metadata: {
+              order_id: order.id,
+              type: 'order_completed',
+            },
+          });
+
+          console.log(`💸 Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)}`);
+        } catch (transferError: any) {
+          console.error('⚠️ Transfer failed:', transferError.message);
+          return res.status(500).json({ error: 'Failed to transfer funds to seller' });
+        }
+      }
+
+      const now = new Date();
 
       const updatedOrder = await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'completed',
-          completed_at: new Date(),
+          completed_at: now,
           seller_payout: sellerPayout,
-          updated_at: new Date(),
+          updated_at: now,
         },
       });
 
-      // TODO: Release payment to seller via Stripe Connect
-      // TODO: Update seller's balance
-      // TODO: Send notifications
+      // Update seller's total_sales
+      await prisma.users.update({
+        where: { id: seller.id },
+        data: {
+          total_sales: { increment: 1 },
+          updated_at: now,
+        },
+      });
+
+      // Notify seller
+      const payoutAmount = parseFloat(sellerPayout.toString()).toFixed(2);
+
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: seller.id,
+          type: 'payout',
+          title: 'Payment Released! 💰',
+          message: `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
+          image_url: listingImage,
+          related_id: orderId,
+        },
+      });
 
       console.log('✅ Order completed:', orderId);
       res.json({ success: true, order: updatedOrder });

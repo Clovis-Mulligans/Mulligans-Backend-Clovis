@@ -1,5 +1,6 @@
 // src/controllers/shippingController.ts
 // Handles Shippo integration for shipping rates, labels, and tracking
+// ✅ UPDATED: Added escrow release date when order is delivered
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
@@ -11,6 +12,9 @@ const prisma = new PrismaClient();
 const shippo = new Shippo({
   apiKeyHeader: process.env.SHIPPO_API_KEY!,
 });
+
+// ✅ Escrow release period (days after delivery)
+const ESCROW_RELEASE_DAYS = 5;
 
 // ============================================
 // SHIPPING PRICE CONSTANTS
@@ -276,40 +280,45 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    console.log('Creating Shippo transaction for rate:', rateId);
+    console.log('Creating shipping label for order:', orderId, 'with rate:', rateId);
 
-    // Create transaction (purchase the label) using new SDK
+    // Create transaction (purchase the label) using Shippo
     const transaction = await shippo.transactions.create({
       rate: rateId,
       labelFileType: 'PDF',
       async: false,
     });
 
-    console.log('Shippo transaction response:', transaction);
-
+    // Check if transaction was successful
     if (transaction.status !== 'SUCCESS') {
+      console.error('Shippo transaction failed:', transaction.messages);
       return res.status(400).json({
         success: false,
-        error: transaction.messages?.[0]?.text || 'Failed to create shipping label',
+        error: 'Failed to create shipping label',
+        details: transaction.messages,
       });
     }
 
-    // Get rate details to extract carrier
-    const rate = await shippo.rates.get(rateId);
-    const carrier = rate.provider;
+    // Get carrier from rate info
+    const carrier = typeof transaction.rate === 'object' ? transaction.rate?.provider || 'Unknown' : 'Unknown';
 
-    // Update order with shipping details
-    const updatedOrder = await prisma.orders.update({
+    // Update order with tracking info and label URL
+    await prisma.orders.update({
       where: { id: orderId },
       data: {
         tracking_number: transaction.trackingNumber,
         carrier: carrier,
-        shippo_shipment_id: transaction.objectId,
-        shippo_transaction_id: transaction.objectId,
         label_url: transaction.labelUrl,
-        status: 'to_ship',
+        status: 'to_ship', // Ensure status is to_ship after label created
         updated_at: new Date(),
       },
+    });
+
+    console.log('Shipping label created:', {
+      orderId,
+      trackingNumber: transaction.trackingNumber,
+      carrier,
+      labelUrl: transaction.labelUrl,
     });
 
     // Create notification for buyer
@@ -505,12 +514,13 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
 // SHIPPO WEBHOOK HANDLER
 // Receives tracking updates from Shippo
 // POST /webhooks/shippo
+// ✅ UPDATED: Now sets escrow_release_at when delivered
 // ============================================
 export const handleShippoWebhook = async (req: Request, res: Response) => {
   try {
     const event = req.body;
 
-    console.log('Received Shippo webhook:', event);
+    console.log('📬 Received Shippo webhook:', event);
 
     // Handle tracking update events
     if (event.event === 'track_updated') {
@@ -526,6 +536,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
       if (order) {
         let newStatus = order.status;
         let deliveredAt = order.delivered_at;
+        let escrowReleaseAt: Date | null = null;
 
         // Map Shippo status to our order status
         switch (status) {
@@ -535,6 +546,9 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
           case 'DELIVERED':
             newStatus = 'delivered';
             deliveredAt = new Date();
+            // ✅ Calculate escrow release date (5 days from delivery)
+            escrowReleaseAt = new Date();
+            escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
             break;
           case 'RETURNED':
             newStatus = 'returned';
@@ -550,6 +564,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
           data: {
             status: newStatus,
             delivered_at: deliveredAt,
+            escrow_release_at: escrowReleaseAt, // ✅ NEW: Set escrow release date
             updated_at: new Date(),
           },
         });
@@ -562,20 +577,24 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
               user_id: order.buyer_id,
               type: 'order_delivered',
               title: 'Your Order Has Been Delivered! 🎉',
-              message: 'Your item has arrived. Don\'t forget to leave a review!',
+              message: `Your item has arrived. You have ${ESCROW_RELEASE_DAYS} days to confirm receipt or report any issues.`,
               related_id: order.id,
             },
           });
+          
+          console.log(`📅 Escrow release scheduled for order ${order.id}: ${escrowReleaseAt?.toISOString()}`);
         }
 
-        console.log(`Updated order ${order.id} status to ${newStatus}`);
+        console.log(`✅ Updated order ${order.id} status to ${newStatus}`);
+      } else {
+        console.log(`⚠️ No order found for tracking number: ${trackingNumber}`);
       }
     }
 
     // Always respond 200 to acknowledge receipt
     res.status(200).json({ received: true });
   } catch (error) {
-    console.error('Error handling Shippo webhook:', error);
+    console.error('❌ Error handling Shippo webhook:', error);
     // Still return 200 to prevent retries
     res.status(200).json({ received: true, error: 'Processing error' });
   }

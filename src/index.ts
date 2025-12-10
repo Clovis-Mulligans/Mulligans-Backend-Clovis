@@ -6,6 +6,7 @@ import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import cron from 'node-cron';
 import authRoutes from './routes/authRoutes';
 import listingRoutes from './routes/listingRoutes';
 import searchRoutes from './routes/searchRoutes';
@@ -23,10 +24,12 @@ import stripeConnectRoutes from './routes/stripeConnectRoutes';
 import cartRoutes from './routes/cartRoutes';
 import shippingRoutes from './routes/shippingRoutes';
 import sesRoutes from './routes/sesRoutes';
+import { runEscrowJobs } from './services/escrowService';
 
 const app = express();
 const httpServer = createServer(app);
 const PORT = Number(process.env.PORT) || 3001;
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 app.set('trust proxy', 1);
 
@@ -119,7 +122,59 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// ============================================
+// ESCROW CRON JOB
+// Runs daily at 2:00 AM UK time to:
+// - Auto-cancel orders not shipped within 5 days
+// - Auto-release escrow 5 days after delivery
+// - Check for lost-in-transit items (14+ days)
+// ============================================
+cron.schedule('0 2 * * *', async () => {
+  console.log('🕐 Starting daily escrow jobs...');
+  console.log(`📅 ${new Date().toISOString()}`);
+  
+  try {
+    await runEscrowJobs();
+    console.log('✅ Daily escrow jobs completed');
+  } catch (error) {
+    console.error('❌ Escrow jobs failed:', error);
+  }
+}, {
+  timezone: 'Europe/London'
+});
+
+// Also run escrow jobs on server startup (after 30 seconds delay)
+// This catches any missed jobs if server was down
+setTimeout(async () => {
+  console.log('🔄 Running escrow jobs on startup...');
+  try {
+    await runEscrowJobs();
+    console.log('✅ Startup escrow jobs completed');
+  } catch (error) {
+    console.error('❌ Startup escrow jobs failed:', error);
+  }
+}, 30000);
+
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🔒 Security: Helmet + Rate Limiting enabled`);
+  console.log('═══════════════════════════════════════════');
+  console.log(`🚀 Server running on ${BASE_URL}`);
+  console.log('═══════════════════════════════════════════');
+  console.log(`🏥 Health check: ${BASE_URL}/health`);
+  console.log(`🔐 Auth API: ${BASE_URL}/api/auth`);
+  console.log(`📦 Listings API: ${BASE_URL}/api/listings`);
+  console.log(`🔍 Search API: ${BASE_URL}/api/search`);
+  console.log(`💬 Messages API: ${BASE_URL}/api/messages`);
+  console.log(`👤 Users API: ${BASE_URL}/api/users`);
+  console.log(`❤️ Favorites API: ${BASE_URL}/api/favorites`);
+  console.log(`🔔 Notifications API: ${BASE_URL}/api/notifications`);
+  console.log(`📝 Orders API: ${BASE_URL}/api/orders`);
+  console.log(`💳 Stripe API: ${BASE_URL}/api/stripe`);
+  console.log(`⭐ Reviews API: ${BASE_URL}/api/reviews`);
+  console.log(`🛒 Cart API: ${BASE_URL}/api/cart`);
+  console.log(`📮 Shipping API: ${BASE_URL}/api/shipping`);
+  console.log('═══════════════════════════════════════════');
+  console.log('🌐 WebSocket: Enabled');
+  console.log('🔒 Security: Helmet + Rate Limiting enabled');
+  console.log('⏰ Escrow cron job: Daily at 2:00 AM UK time');
+  console.log('═══════════════════════════════════════════');
 });

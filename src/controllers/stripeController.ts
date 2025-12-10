@@ -1,7 +1,7 @@
 // src/controllers/stripeController.ts
 // Updated to handle both single-item and cart checkout webhooks
-// FIXED: Now retrieves full session with shipping details
-// FIXED: Now includes image_url in notifications
+// ✅ ESCROW UPDATE: Removed immediate transfer_data - funds held until escrow releases
+// ✅ ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
@@ -12,6 +12,9 @@ const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
+
+// ✅ Constants for escrow system
+const SHIPPING_DEADLINE_DAYS = 5;
 
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -25,6 +28,7 @@ export class StripeController {
   /**
    * Create Stripe Checkout Session (Single Item - Legacy)
    * POST /api/stripe/create-checkout-session
+   * ✅ ESCROW UPDATE: Funds now held in platform account, not transferred immediately
    */
   static async createCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
@@ -74,6 +78,7 @@ export class StripeController {
       }
 
       // Auto-create Connect account if seller doesn't have one
+      // (Seller still needs Connect account for future payout, just not immediate)
       let sellerConnectId = seller.stripe_connect_id;
 
       if (!sellerConnectId) {
@@ -135,35 +140,43 @@ export class StripeController {
       const totalAmountPence = Math.round(totalPrice * 100);
       const platformFeePence = Math.round(platformFee * 100);
 
+      // ✅ Calculate seller payout (what they'll receive after escrow)
+      const sellerPayout = itemPrice;
+
       console.log('💰 Price breakdown:', {
         itemPrice: itemPrice.toFixed(2),
         platformFee: platformFee.toFixed(2),
         totalPrice: totalPrice.toFixed(2),
-        sellerReceives: itemPrice.toFixed(2),
+        sellerReceives: sellerPayout.toFixed(2),
         sellerConnectId,
+        escrowNote: 'Funds held until delivery confirmed',
       });
 
-      // Create PaymentIntent with Connect transfer
+      // ✅ ESCROW: Create PaymentIntent WITHOUT transfer_data
+      // Funds stay in Mulligans platform account until escrow releases
       const paymentIntent = await stripe.paymentIntents.create({
         amount: totalAmountPence,
         currency: 'gbp',
-        transfer_data: {
-          destination: sellerConnectId,
-        },
-        application_fee_amount: platformFeePence,
+        // ❌ REMOVED: transfer_data - no longer transferring immediately
+        // transfer_data: {
+        //   destination: sellerConnectId,
+        // },
+        // ❌ REMOVED: application_fee_amount - we keep funds, calculate payout later
         metadata: {
           type: 'single_item',
           listing_id: listing.id,
           buyer_id: userId,
           seller_id: listing.seller_id,
-          seller_connect_id: sellerConnectId,
+          seller_connect_id: sellerConnectId || '',
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
+          seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
+          escrow: 'true', // ✅ Flag that this uses escrow
         },
       });
 
-      // Create checkout session for web fallback
+      // ✅ ESCROW: Create checkout session WITHOUT transfer_data
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
@@ -186,21 +199,24 @@ export class StripeController {
         shipping_address_collection: {
           allowed_countries: ['GB'],
         },
-        payment_intent_data: {
-          transfer_data: {
-            destination: sellerConnectId,
-          },
-          application_fee_amount: platformFeePence,
-        },
+        // ❌ REMOVED: payment_intent_data with transfer_data
+        // payment_intent_data: {
+        //   transfer_data: {
+        //     destination: sellerConnectId,
+        //   },
+        //   application_fee_amount: platformFeePence,
+        // },
         metadata: {
           type: 'single_item',
           listing_id: listing.id,
           buyer_id: userId,
           seller_id: listing.seller_id,
-          seller_connect_id: sellerConnectId,
+          seller_connect_id: sellerConnectId || '',
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
+          seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
+          escrow: 'true', // ✅ Flag that this uses escrow
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
@@ -208,7 +224,7 @@ export class StripeController {
 
       console.log('✅ Payment intent created:', paymentIntent.id);
       console.log('✅ Checkout session created:', session.id);
-      console.log('✅ Funds will transfer to:', sellerConnectId);
+      console.log('🔒 Funds will be held in escrow until delivery + 5 days');
 
       res.json({
         clientSecret: paymentIntent.client_secret,
@@ -274,12 +290,12 @@ export class StripeController {
         break;
 
       case 'payment_intent.succeeded':
-        console.log('💰 Payment succeeded');
+        console.log('💰 Payment succeeded - funds held in escrow');
         break;
 
       case 'transfer.created':
         const transfer = event.data.object as Stripe.Transfer;
-        console.log('💸 Transfer created to Connect account:', transfer.destination);
+        console.log('💸 Escrow transfer created to Connect account:', transfer.destination);
         break;
 
       default:
@@ -291,7 +307,7 @@ export class StripeController {
 
   /**
    * Fulfill Single Item Order
-   * UPDATED: Now includes image_url in notifications
+   * ✅ ESCROW UPDATE: Now stores seller_payout, uses 5-day shipping deadline
    */
   private static async fulfillOrder(session: Stripe.Checkout.Session) {
     try {
@@ -360,14 +376,18 @@ export class StripeController {
         }
       }
 
+      // ✅ Get seller payout from metadata (or calculate from item price)
       const itemPrice = parseFloat(metadata.item_price);
-      const sellerPayout = itemPrice;
+      const sellerPayout = metadata.seller_payout 
+        ? parseFloat(metadata.seller_payout) 
+        : itemPrice;
 
-      // Auto-cancel date (7 days)
+      // ✅ ESCROW: Auto-cancel date (5 days, not 7)
       const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + 7);
+      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
       // Create order with shipping address
+      // ✅ ESCROW: seller_payout is stored but NOT transferred yet
       const order = await prisma.orders.create({
         data: {
           id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -375,13 +395,13 @@ export class StripeController {
           buyer_id,
           seller_id,
           amount: parseFloat(metadata.total_price),
-          seller_payout: sellerPayout,
+          seller_payout: sellerPayout, // ✅ Store for later transfer
           currency: 'GBP',
           stripe_payment_intent_id: session.payment_intent as string,
           stripe_payment_method_id: paymentMethodId,
           status: 'to_ship',
           paid_at: new Date(),
-          auto_cancel_at: autoCancelAt,
+          auto_cancel_at: autoCancelAt, // ✅ 5 days to ship
           shipping_address: shippingAddressJson ?? Prisma.JsonNull,
           updated_at: new Date(),
         },
@@ -389,6 +409,8 @@ export class StripeController {
 
       console.log('✅ Order created:', order.id);
       console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
+      console.log(`🔒 Funds held in escrow. Seller payout: £${sellerPayout.toFixed(2)}`);
+      console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
 
       // Update listing
       await prisma.listings.update({
@@ -411,8 +433,8 @@ export class StripeController {
           user_id: buyer_id,
           type: 'order',
           title: 'Payment Successful! 🎉',
-          message: `Your order for "${listingTitle}" has been confirmed. The seller will ship your item soon.`,
-          image_url: listingImage, // ✅ NEW: Include image
+          message: `Your order for "${listingTitle}" has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          image_url: listingImage,
           related_id: order.id,
         },
       });
@@ -425,8 +447,8 @@ export class StripeController {
             user_id: seller_id,
             type: 'payout',
             title: 'Congratulations on your sale! 🎉',
-            message: `"${listingTitle}" sold for £${itemPrice.toFixed(2)}. Add your bank details to withdraw your earnings.`,
-            image_url: listingImage, // ✅ NEW: Include image
+            message: `"${listingTitle}" sold for £${itemPrice.toFixed(2)}. Add your bank details to receive payment after delivery.`,
+            image_url: listingImage,
             related_id: order.id,
           },
         });
@@ -437,14 +459,14 @@ export class StripeController {
             user_id: seller_id,
             type: 'sale',
             title: 'Item Sold! 🎉',
-            message: `"${listingTitle}" sold for £${itemPrice.toFixed(2)}. Please ship within 7 days.`,
-            image_url: listingImage, // ✅ NEW: Include image
+            message: `"${listingTitle}" sold for £${itemPrice.toFixed(2)}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
+            image_url: listingImage,
             related_id: order.id,
           },
         });
       }
 
-      console.log('✅ Order fulfilled successfully');
+      console.log('✅ Order fulfilled successfully (escrow mode)');
     } catch (error) {
       console.error('❌ Error fulfilling order:', error);
       throw error;

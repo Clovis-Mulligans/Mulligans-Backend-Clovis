@@ -1,6 +1,7 @@
 // src/controllers/cartCheckoutController.ts
 // Handles checkout for cart with multiple items (potentially from multiple sellers)
-// UPDATED: Now saves shipping address from Stripe checkout
+// ✅ ESCROW UPDATE: Removed immediate transfers - funds held until escrow releases
+// ✅ ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
 // ✅ FIXED: Now includes image_url in notifications
 // ✅ UPDATED: Sends order confirmation email to buyer
 
@@ -26,6 +27,9 @@ interface AuthenticatedRequest extends Request {
 const PLATFORM_FEE_PERCENT = 0.07; // 7%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
 
+// ✅ Escrow constants
+const SHIPPING_DEADLINE_DAYS = 5;
+
 export class CartCheckoutController {
   /**
    * Create Stripe Checkout Session for Cart
@@ -33,6 +37,7 @@ export class CartCheckoutController {
    * 
    * This creates a single checkout session for all cart items.
    * After payment, separate orders are created for each seller.
+   * ✅ ESCROW: Funds held in platform account until delivery confirmed
    */
   static async createCartCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
@@ -115,7 +120,7 @@ export class CartCheckoutController {
           seller: any;
           items: any[];
           subtotal: number;
-          shippingTotal: number;  // ✅ ADDED
+          shippingTotal: number;
         };
       } = {};
 
@@ -128,25 +133,26 @@ export class CartCheckoutController {
             seller,
             items: [],
             subtotal: 0,
-            shippingTotal: 0,  // ✅ ADDED: Track shipping per seller
+            shippingTotal: 0,
           };
         }
 
         const price = parseFloat(item.listings.price.toString());
-        const shippingCost = parseFloat((item.listings as any).shipping_cost?.toString() || '0');  // ✅ ADDED
+        const shippingCost = parseFloat((item.listings as any).shipping_cost?.toString() || '0');
         
         sellerGroups[sellerId].items.push({
           listing_id: item.listing_id,
           title: item.listings.title,
           price,
-          shipping_cost: shippingCost,  // ✅ ADDED
+          shipping_cost: shippingCost,
           image_url: item.listings.images[0]?.image_url || null,
         });
         sellerGroups[sellerId].subtotal += price;
-        sellerGroups[sellerId].shippingTotal += shippingCost;  // ✅ ADDED
+        sellerGroups[sellerId].shippingTotal += shippingCost;
       }
 
       // Ensure all sellers have Connect accounts (auto-create if needed)
+      // (Sellers still need Connect accounts for future payout after escrow)
       for (const sellerId of Object.keys(sellerGroups)) {
         const seller = sellerGroups[sellerId].seller;
 
@@ -199,7 +205,7 @@ export class CartCheckoutController {
         }
       }
 
-      // Calculate totals - ✅ FIXED: Now includes shipping
+      // Calculate totals
       const itemsTotal = cartItems.reduce(
         (sum, item) => sum + parseFloat(item.listings.price.toString()),
         0
@@ -209,7 +215,7 @@ export class CartCheckoutController {
         0
       );
       const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + PLATFORM_FEE_FIXED;
-      const grandTotal = itemsTotal + shippingTotal + platformFee;  // ✅ FIXED: Include shipping
+      const grandTotal = itemsTotal + shippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);
       const platformFeePence = Math.round(platformFee * 100);
@@ -217,11 +223,12 @@ export class CartCheckoutController {
 
       console.log('💰 Cart checkout price breakdown:', {
         itemsTotal: itemsTotal.toFixed(2),
-        shippingTotal: shippingTotal.toFixed(2),  // ✅ ADDED
+        shippingTotal: shippingTotal.toFixed(2),
         platformFee: platformFee.toFixed(2),
         grandTotal: grandTotal.toFixed(2),
         itemCount: cartItems.length,
         sellerCount: Object.keys(sellerGroups).length,
+        escrowNote: 'Funds held until delivery confirmed',
       });
 
       // Build line items for Stripe Checkout
@@ -255,7 +262,7 @@ export class CartCheckoutController {
         quantity: 1,
       });
 
-      // ✅ ADDED: Add shipping as a line item (if there's any shipping cost)
+      // Add shipping as a line item (if there's any shipping cost)
       if (shippingTotalPence > 0) {
         lineItems.push({
           price_data: {
@@ -271,18 +278,16 @@ export class CartCheckoutController {
       }
 
       // Create seller breakdown for metadata (including images for notifications)
-      // ✅ FIXED: Now includes shipping costs
       const sellerBreakdown = Object.entries(sellerGroups).map(([sellerId, data]) => ({
         seller_id: sellerId,
         seller_connect_id: data.seller.stripe_connect_id,
         subtotal: data.subtotal.toFixed(2),
-        shipping_total: data.shippingTotal.toFixed(2),  // ✅ ADDED
+        shipping_total: data.shippingTotal.toFixed(2),
         listing_ids: data.items.map((item: any) => item.listing_id),
-        // ✅ Include first item's image for notification
         first_image: data.items[0]?.image_url || null,
       }));
 
-      // Create Stripe Checkout Session
+      // ✅ ESCROW: Create Stripe Checkout Session (funds stay in platform account)
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
@@ -294,14 +299,14 @@ export class CartCheckoutController {
           type: 'cart_checkout',
           buyer_id: userId,
           items_total: itemsTotal.toFixed(2),
-          shipping_total: shippingTotal.toFixed(2),  // ✅ ADDED
+          shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           grand_total: grandTotal.toFixed(2),
           item_count: cartItems.length.toString(),
           listing_ids: cartItems.map((item) => item.listing_id).join(','),
           seller_breakdown: JSON.stringify(sellerBreakdown),
-          // ✅ Store first item image for buyer notification
           first_item_image: cartItems[0]?.listings.images[0]?.image_url || '',
+          escrow: 'true', // ✅ Flag that this uses escrow
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
@@ -310,6 +315,7 @@ export class CartCheckoutController {
       console.log('✅ Cart checkout session created:', session.id);
       console.log('📦 Listings:', cartItems.map((item) => item.listing_id));
       console.log('👥 Sellers:', Object.keys(sellerGroups));
+      console.log('🔒 Funds will be held in escrow until delivery + 5 days');
 
       res.json({
         sessionId: session.id,
@@ -317,7 +323,7 @@ export class CartCheckoutController {
         summary: {
           itemCount: cartItems.length,
           itemsTotal: itemsTotal.toFixed(2),
-          shippingTotal: shippingTotal.toFixed(2),  // ✅ ADDED
+          shippingTotal: shippingTotal.toFixed(2),
           platformFee: platformFee.toFixed(2),
           grandTotal: grandTotal.toFixed(2),
         },
@@ -334,8 +340,7 @@ export class CartCheckoutController {
   /**
    * Fulfill Cart Order (called from webhook)
    * Creates separate orders for each seller
-   * ✅ UPDATED: Now includes image_url in notifications
-   * ✅ UPDATED: Sends order confirmation email to buyer
+   * ✅ ESCROW UPDATE: No longer transfers immediately - funds held in escrow
    */
   static async fulfillCartOrder(session: Stripe.Checkout.Session) {
     try {
@@ -345,12 +350,11 @@ export class CartCheckoutController {
       const buyerId = metadata.buyer_id;
       const listingIds = metadata.listing_ids.split(',');
       const sellerBreakdown = JSON.parse(metadata.seller_breakdown);
-      const firstItemImage = metadata.first_item_image || null; // ✅ For buyer notification
+      const firstItemImage = metadata.first_item_image || null;
       const grandTotal = metadata.grand_total;
       const shippingTotal = metadata.shipping_total || '0';
 
       // Get shipping address from session
-      // Note: In newer Stripe API versions, shipping is in collected_information.shipping_details
       const collectedInfo = (session as any).collected_information;
       const shippingDetails = collectedInfo?.shipping_details || (session as any).shipping_details;
       const shippingAddress = shippingDetails?.address;
@@ -383,7 +387,7 @@ export class CartCheckoutController {
         return;
       }
 
-      // ✅ Get buyer info for email
+      // Get buyer info for email
       const buyer = await prisma.users.findUnique({
         where: { id: buyerId },
         select: {
@@ -392,16 +396,16 @@ export class CartCheckoutController {
         },
       });
 
-      // Auto-cancel date (7 days from now)
+      // ✅ ESCROW: Auto-cancel date (5 days, not 7)
       const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + 7);
+      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
       // Create orders for each seller
       const createdOrders: any[] = [];
-      const orderItems: { name: string; price: string }[] = []; // ✅ For email
+      const orderItems: { name: string; price: string }[] = [];
 
       for (const sellerData of sellerBreakdown) {
-        const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, first_image } = sellerData;  // ✅ Added shipping_total
+        const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, first_image } = sellerData;
 
         for (const listingId of listing_ids) {
           // Get listing price, shipping cost and image
@@ -409,7 +413,7 @@ export class CartCheckoutController {
             where: { id: listingId },
             select: { 
               price: true, 
-              shipping_cost: true,  // ✅ ADDED
+              shipping_cost: true,
               title: true,
               images: {
                 take: 1,
@@ -421,16 +425,16 @@ export class CartCheckoutController {
           if (!listing) continue;
 
           const itemPrice = parseFloat(listing.price.toString());
-          const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());  // ✅ ADDED
+          const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());
           const listingImage = listing.images[0]?.image_url || null;
 
-          // ✅ Add to email items list
+          // Add to email items list
           orderItems.push({
             name: listing.title,
             price: `£${itemPrice.toFixed(2)}`,
           });
 
-          // Create order with shipping address and shipping cost
+          // ✅ ESCROW: Create order - seller_payout stored but NOT transferred yet
           const order = await prisma.orders.create({
             data: {
               id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -438,14 +442,13 @@ export class CartCheckoutController {
               buyer_id: buyerId,
               seller_id: seller_id,
               amount: itemPrice,
-              shipping_cost: itemShippingCost,  // ✅ ADDED: Store shipping cost on order
-              seller_payout: itemPrice + itemShippingCost,  // ✅ FIXED: Seller gets item + shipping
+              shipping_cost: itemShippingCost,
+              seller_payout: itemPrice + itemShippingCost, // Stored for later transfer
               currency: 'GBP',
               stripe_payment_intent_id: session.payment_intent as string,
               status: 'to_ship',
               paid_at: new Date(),
-              auto_cancel_at: autoCancelAt,
-              // Save shipping address as JSON (use Prisma.JsonNull for null values)
+              auto_cancel_at: autoCancelAt, // ✅ 5 days to ship
               shipping_address: shippingAddressJson ?? Prisma.JsonNull,
               updated_at: new Date(),
             },
@@ -454,6 +457,7 @@ export class CartCheckoutController {
           createdOrders.push({ ...order, image_url: listingImage, title: listing.title });
           console.log('✅ Order created:', order.id, 'for listing:', listingId);
           console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
+          console.log(`🔒 Seller payout stored: £${(itemPrice + itemShippingCost).toFixed(2)} (held in escrow)`);
 
           // Update listing status to sold
           await prisma.listings.update({
@@ -462,41 +466,29 @@ export class CartCheckoutController {
           });
         }
 
-        // Create transfer to seller's Connect account
-        // ✅ FIXED: Transfer includes item subtotal + shipping (seller gets both)
+        // ✅ ESCROW: REMOVED immediate transfer to seller
+        // Previously this code transferred funds immediately:
+        // const transfer = await stripe.transfers.create({
+        //   amount: transferAmount,
+        //   currency: 'gbp',
+        //   destination: seller_connect_id,
+        //   ...
+        // });
+        // 
+        // Now funds are held in platform account until escrow releases
+        // (handled by escrowService.ts autoReleaseEscrow job)
+
         const sellerSubtotal = parseFloat(subtotal);
         const sellerShipping = parseFloat(shipping_total || '0');
-        const transferAmount = Math.round((sellerSubtotal + sellerShipping) * 100);
-
-        console.log('💰 Seller transfer breakdown:', {
+        console.log('💰 Seller payout scheduled (after escrow):', {
           seller_id,
           subtotal: sellerSubtotal.toFixed(2),
           shipping: sellerShipping.toFixed(2),
-          totalTransfer: ((sellerSubtotal + sellerShipping)).toFixed(2),
+          totalPayout: (sellerSubtotal + sellerShipping).toFixed(2),
+          releaseCondition: 'After delivery + 5 days OR buyer confirms receipt',
         });
 
-        try {
-          const transfer = await stripe.transfers.create({
-            amount: transferAmount,
-            currency: 'gbp',
-            destination: seller_connect_id,
-            transfer_group: session.id,
-            metadata: {
-              session_id: session.id,
-              seller_id: seller_id,
-              listing_ids: listing_ids.join(','),
-              subtotal: subtotal,
-              shipping: shipping_total || '0',
-            },
-          });
-
-          console.log('💸 Transfer created:', transfer.id, 'to:', seller_connect_id, 'amount:', transferAmount);
-        } catch (transferError: any) {
-          console.error('❌ Transfer failed for seller:', seller_id, transferError.message);
-          // Don't fail the whole order - the money is in our account and can be transferred manually
-        }
-
-        // ✅ Get first listing image for this seller's notification
+        // Get first listing image for this seller's notification
         const sellerFirstImage = first_image || createdOrders.find(o => o.image_url)?.image_url || null;
 
         // Notify seller
@@ -508,29 +500,27 @@ export class CartCheckoutController {
         const needsVerification = sellerUser?.stripe_connect_status !== 'active';
 
         if (needsVerification) {
-          // ✅ Include image_url in notification
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: seller_id,
               type: 'payout',
               title: 'Congratulations on your sale! 🎉',
-              message: `You sold ${listing_ids.length} item(s) for £${subtotal}. Add your bank details to withdraw your earnings.`,
-              image_url: sellerFirstImage, // ✅ NEW
+              message: `You sold ${listing_ids.length} item(s) for £${subtotal}. Add your bank details to receive payment after delivery.`,
+              image_url: sellerFirstImage,
               related_id: createdOrders[0]?.id,
             },
           });
           console.log('📬 Seller notification created with image:', sellerFirstImage ? 'YES' : 'NO');
         } else {
-          // ✅ Include image_url in notification
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: seller_id,
               type: 'sale',
               title: 'Item Sold! 🎉',
-              message: `You sold ${listing_ids.length} item(s) for £${subtotal}. Please ship within 7 days.`,
-              image_url: sellerFirstImage, // ✅ NEW
+              message: `You sold ${listing_ids.length} item(s) for £${subtotal}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
+              image_url: sellerFirstImage,
               related_id: createdOrders[0]?.id,
             },
           });
@@ -546,24 +536,24 @@ export class CartCheckoutController {
         },
       });
 
-      // ✅ Get first item image for buyer notification
+      // Get first item image for buyer notification
       const buyerNotificationImage = firstItemImage || createdOrders[0]?.image_url || null;
 
-      // ✅ Notify buyer with image
+      // Notify buyer with image
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: buyerId,
           type: 'order',
           title: 'Payment Successful! 🎉',
-          message: `Your order of ${listingIds.length} item(s) has been confirmed. Sellers will ship your items soon.`,
-          image_url: buyerNotificationImage, // ✅ NEW
+          message: `Your order of ${listingIds.length} item(s) has been confirmed. Sellers will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          image_url: buyerNotificationImage,
           related_id: createdOrders[0]?.id,
         },
       });
       console.log('📬 Buyer notification created with image:', buyerNotificationImage ? 'YES' : 'NO');
 
-      // ✅ Send order confirmation email to buyer
+      // Send order confirmation email to buyer
       if (buyer?.email) {
         try {
           // Format shipping address for email
@@ -591,8 +581,9 @@ export class CartCheckoutController {
         }
       }
 
-      console.log('✅ Cart order fulfilled successfully');
+      console.log('✅ Cart order fulfilled successfully (escrow mode)');
       console.log('📦 Orders created:', createdOrders.length);
+      console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
     } catch (error) {
       console.error('❌ Error fulfilling cart order:', error);
       throw error;
