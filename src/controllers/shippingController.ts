@@ -53,10 +53,10 @@ export const PARCEL_SIZES = {
     name: 'Extra Large',
     description: 'Full bag, travel bag',
     price: 14.99,
-    length: '140',
-    width: '40',
-    height: '40',
-    weight: '15',
+    length: '120',  // Max allowed by most UK carriers
+    width: '35',
+    height: '35',
+    weight: '10',   // Reduced for better carrier compatibility
   },
 };
 
