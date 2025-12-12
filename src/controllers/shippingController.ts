@@ -1,6 +1,7 @@
 // src/controllers/shippingController.ts
 // Handles Shippo integration for shipping rates, labels, and tracking
 // ✅ UPDATED: Added escrow release date when order is delivered
+// ✅ FIXED: Corrected Shippo API key format
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
@@ -8,9 +9,10 @@ import { Shippo } from 'shippo';
 
 const prisma = new PrismaClient();
 
-// Initialize Shippo with new SDK syntax
+// ✅ FIXED: Initialize Shippo with correct API key format
+// The SDK expects "ShippoToken <your_api_key>" format
 const shippo = new Shippo({
-  apiKeyHeader: process.env.SHIPPO_API_KEY!,
+  apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
 });
 
 // ✅ Escrow release period (days after delivery)
@@ -141,9 +143,9 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     const parcelSize = order.listings?.parcel_size || 'medium';
     const parcelConfig = PARCEL_SIZES[parcelSize as keyof typeof PARCEL_SIZES] || PARCEL_SIZES.medium;
 
-    // Get seller's postcode for sender address
+    // Get seller's address info
     const seller = order.users_orders_seller_idTousers;
-    const sellerPostcode = seller.postcode_area || 'SW1A 1AA'; // Default if not set
+    const sellerPostcode = seller?.postcode_area || 'SW1A 1AA'; // Default if not set
 
     // Get buyer's shipping address
     const shippingAddress = order.shipping_address as any;
@@ -155,12 +157,16 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       });
     }
 
-    console.log('Getting Shippo rates for order:', orderId);
+    // ✅ Enhanced logging for debugging
+    console.log('📦 Getting Shippo rates for order:', orderId);
+    console.log('📍 Seller postcode:', sellerPostcode);
+    console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
+    console.log('📦 Parcel size:', parcelSize, parcelConfig);
 
     // Create shipment to get rates using new SDK
     const shipment = await shippo.shipments.create({
       addressFrom: {
-        name: seller.display_name || 'Seller',
+        name: seller?.display_name || 'Seller',
         street1: 'Sender Address', // Will be entered by seller when creating label
         city: 'London',
         zip: sellerPostcode,
@@ -168,11 +174,11 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       },
       addressTo: {
         name: shippingAddress.name || 'Buyer',
-        street1: shippingAddress.line1 || shippingAddress.street1,
+        street1: shippingAddress.line1 || shippingAddress.street1 || '',
         street2: shippingAddress.line2 || shippingAddress.street2 || '',
-        city: shippingAddress.city,
+        city: shippingAddress.city || '',
         state: shippingAddress.county || shippingAddress.state || '',
-        zip: shippingAddress.postcode || shippingAddress.postal_code,
+        zip: shippingAddress.postcode || shippingAddress.postal_code || '',
         country: shippingAddress.country || 'GB',
       },
       parcels: [{
@@ -185,6 +191,9 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       }],
       async: false,
     });
+
+    console.log('✅ Shippo shipment created:', shipment.objectId);
+    console.log('📋 Rates returned:', shipment.rates?.length || 0);
 
     // Format rates for response
     const rates = shipment.rates?.map((rate: any) => ({
@@ -215,7 +224,9 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       },
     });
   } catch (error: any) {
-    console.error('Error getting shipping rates:', error);
+    // ✅ Enhanced error logging
+    console.error('❌ Error getting shipping rates:', error);
+    console.error('❌ Error details:', JSON.stringify(error, null, 2));
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to get shipping rates',
@@ -280,7 +291,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    console.log('Creating shipping label for order:', orderId, 'with rate:', rateId);
+    console.log('🏷️ Creating shipping label for order:', orderId, 'with rate:', rateId);
 
     // Create transaction (purchase the label) using Shippo
     const transaction = await shippo.transactions.create({
@@ -289,9 +300,11 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       async: false,
     });
 
+    console.log('📋 Transaction result:', transaction.status, transaction.objectId);
+
     // Check if transaction was successful
     if (transaction.status !== 'SUCCESS') {
-      console.error('Shippo transaction failed:', transaction.messages);
+      console.error('❌ Shippo transaction failed:', transaction.messages);
       return res.status(400).json({
         success: false,
         error: 'Failed to create shipping label',
@@ -314,7 +327,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       },
     });
 
-    console.log('Shipping label created:', {
+    console.log('✅ Shipping label created:', {
       orderId,
       trackingNumber: transaction.trackingNumber,
       carrier,
@@ -344,7 +357,8 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       },
     });
   } catch (error: any) {
-    console.error('Error creating shipping label:', error);
+    console.error('❌ Error creating shipping label:', error);
+    console.error('❌ Error details:', JSON.stringify(error, null, 2));
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to create shipping label',
@@ -415,7 +429,7 @@ export const getTrackingInfo = async (req: AuthenticatedRequest, res: Response) 
       },
     });
   } catch (error: any) {
-    console.error('Error getting tracking info:', error);
+    console.error('❌ Error getting tracking info:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to get tracking information',
@@ -502,7 +516,7 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
       },
     });
   } catch (error: any) {
-    console.error('Error marking order as shipped:', error);
+    console.error('❌ Error marking order as shipped:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to mark order as shipped',
