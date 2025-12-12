@@ -53,10 +53,10 @@ export const PARCEL_SIZES = {
     name: 'Extra Large',
     description: 'Full bag, travel bag',
     price: 14.99,
-    length: '120',  // Max allowed by most UK carriers
-    width: '35',
-    height: '35',
-    weight: '10',   // Reduced for better carrier compatibility
+    length: '115',  // Reduced for girth calculation
+    width: '30',    // Reduced for girth calculation
+    height: '30',   // Length + 2*(W+H) = 115 + 120 = 235cm < 245cm max
+    weight: '8',    // Reduced for better carrier compatibility
   },
 };
 
@@ -246,15 +246,40 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     });
 
     console.log('✅ Shippo shipment created:', shipment.objectId);
-    console.log('📋 Rates returned:', shipment.rates?.length || 0);
+    console.log('📋 Total rates returned:', shipment.rates?.length || 0);
     
     // Log any messages from Shippo (helps debug why no rates)
     if (shipment.messages && shipment.messages.length > 0) {
       console.log('⚠️ Shippo messages:', JSON.stringify(shipment.messages, null, 2));
     }
 
+    // ✅ Filter to only include TRACKED services
+    // This is essential for escrow system and buyer protection
+    const trackedRates = shipment.rates?.filter((rate: any) => {
+      // Check if service includes tracking
+      const serviceName = (rate.servicelevel?.name || '').toLowerCase();
+      const serviceToken = (rate.servicelevel?.token || '').toLowerCase();
+      
+      // Exclude untracked/economy services
+      const untrackedKeywords = ['untracked', 'economy', 'standard letter', 'postable'];
+      const isUntracked = untrackedKeywords.some(keyword => 
+        serviceName.includes(keyword) || serviceToken.includes(keyword)
+      );
+      
+      // Include services that explicitly mention tracking or are premium services
+      const trackedKeywords = ['tracked', 'signed', 'express', 'next day', 'courier', 'priority', 'parcel'];
+      const isTracked = trackedKeywords.some(keyword => 
+        serviceName.includes(keyword) || serviceToken.includes(keyword)
+      );
+      
+      // Default to including if not explicitly untracked (most parcel services have tracking)
+      return !isUntracked && (isTracked || rate.estimatedDays !== undefined);
+    }) || [];
+
+    console.log('📋 Tracked rates available:', trackedRates.length);
+
     // Format rates for response
-    const rates = shipment.rates?.map((rate: any) => ({
+    const rates = trackedRates.map((rate: any) => ({
       id: rate.objectId,
       carrier: rate.provider,
       service: rate.servicelevel?.name || rate.servicelevelName,
