@@ -154,8 +154,9 @@ export class ListingController {
         specifications,
         location,
         is_negotiable,
-        parcel_size,      // ✅ ADDED: Shipping parcel size
-        shipping_cost,    // ✅ ADDED: Seller's shipping cost
+        parcel_size,      // ✅ Shipping parcel size
+        shipping_cost,    // ✅ Seller's shipping cost
+        quantity,         // ✅ ADDED: Quantity available
       } = req.body;
 
       // Verify user exists (optional safety check)
@@ -200,8 +201,9 @@ export class ListingController {
           specifications: specifications || null,
           location: location || 'UK',
           is_negotiable: is_negotiable || false,
-          parcel_size: parcel_size || null,                    // ✅ ADDED
-          shipping_cost: shipping_cost ? parseFloat(shipping_cost) : null,  // ✅ ADDED
+          parcel_size: parcel_size || null,
+          shipping_cost: shipping_cost ? parseFloat(shipping_cost) : null,
+          quantity: quantity ? parseInt(quantity) : 1,  // ✅ ADDED: Default to 1
           seller_id: userId,
           status: 'active',
           created_at: new Date(),
@@ -209,7 +211,7 @@ export class ListingController {
         },
       });
 
-      console.log('✅ Listing created:', listing.id, 'with shipping:', parcel_size, '£' + shipping_cost);
+      console.log('✅ Listing created:', listing.id, 'with shipping:', parcel_size, '£' + shipping_cost, 'quantity:', quantity || 1);
 
       // ✅ Save specifications to listing_attributes for filtering
       if (specifications && typeof specifications === 'object') {
@@ -749,8 +751,9 @@ export class ListingController {
         location,
         is_negotiable,
         status,
-        parcel_size,      // ✅ ADDED
-        shipping_cost,    // ✅ ADDED
+        parcel_size,
+        shipping_cost,
+        quantity,         // ✅ ADDED
       } = req.body;
 
       // Verify listing exists and belongs to user
@@ -779,38 +782,39 @@ export class ListingController {
       }
 
       // Update the listing - ONLY update fields that are provided
-const updateData: any = {
-  updated_at: new Date(),
-};
+      const updateData: any = {
+        updated_at: new Date(),
+      };
 
-// Only add fields to update if they're provided in the request
-if (title !== undefined) updateData.title = title;
-if (description !== undefined) updateData.description = description;
-if (price !== undefined) updateData.price = parseFloat(price);
-if (category !== undefined) updateData.category = category;
-if (subcategory !== undefined) updateData.subcategory = subcategory || null;
-if (brand !== undefined) updateData.brand = brand || null;
-if (model !== undefined) updateData.model = model || null;
-if (condition_overall !== undefined || finalConditionOverall !== undefined) {
-  updateData.condition_overall = finalConditionOverall || condition_overall || null;
-}
-if (condition_head !== undefined) updateData.condition_head = condition_head || null;
-if (condition_shaft !== undefined) updateData.condition_shaft = condition_shaft || null;
-if (condition_grip !== undefined) updateData.condition_grip = condition_grip || null;
-if (ball_condition_type !== undefined) updateData.ball_condition_type = ball_condition_type || null;
-if (specifications !== undefined) updateData.specifications = specifications || null;
-if (location !== undefined) updateData.location = location || null;
-if (is_negotiable !== undefined) updateData.is_negotiable = is_negotiable;
-if (status !== undefined) updateData.status = status;
-if (parcel_size !== undefined) updateData.parcel_size = parcel_size || null;  // ✅ ADDED
-if (shipping_cost !== undefined) updateData.shipping_cost = shipping_cost ? parseFloat(shipping_cost) : null;  // ✅ ADDED
+      // Only add fields to update if they're provided in the request
+      if (title !== undefined) updateData.title = title;
+      if (description !== undefined) updateData.description = description;
+      if (price !== undefined) updateData.price = parseFloat(price);
+      if (category !== undefined) updateData.category = category;
+      if (subcategory !== undefined) updateData.subcategory = subcategory || null;
+      if (brand !== undefined) updateData.brand = brand || null;
+      if (model !== undefined) updateData.model = model || null;
+      if (condition_overall !== undefined || finalConditionOverall !== undefined) {
+        updateData.condition_overall = finalConditionOverall || condition_overall || null;
+      }
+      if (condition_head !== undefined) updateData.condition_head = condition_head || null;
+      if (condition_shaft !== undefined) updateData.condition_shaft = condition_shaft || null;
+      if (condition_grip !== undefined) updateData.condition_grip = condition_grip || null;
+      if (ball_condition_type !== undefined) updateData.ball_condition_type = ball_condition_type || null;
+      if (specifications !== undefined) updateData.specifications = specifications || null;
+      if (location !== undefined) updateData.location = location || null;
+      if (is_negotiable !== undefined) updateData.is_negotiable = is_negotiable;
+      if (status !== undefined) updateData.status = status;
+      if (parcel_size !== undefined) updateData.parcel_size = parcel_size || null;
+      if (shipping_cost !== undefined) updateData.shipping_cost = shipping_cost ? parseFloat(shipping_cost) : null;
+      if (quantity !== undefined) updateData.quantity = parseInt(quantity) || 1;  // ✅ ADDED
 
-console.log('📝 Updating listing with fields:', Object.keys(updateData));
+      console.log('📝 Updating listing with fields:', Object.keys(updateData));
 
-const updatedListing = await prisma.listings.update({
-  where: { id },
-  data: updateData,
-});
+      const updatedListing = await prisma.listings.update({
+        where: { id },
+        data: updateData,
+      });
 
       // ✅ Update listing_attributes
       if (specifications && typeof specifications === 'object') {
