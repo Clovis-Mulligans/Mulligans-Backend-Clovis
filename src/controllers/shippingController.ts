@@ -163,20 +163,73 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
     console.log('📦 Parcel size:', parcelSize, parcelConfig);
 
+    // Determine city based on postcode prefix for rate estimation
+    const getEstimatedCity = (postcode: string): string => {
+      if (!postcode) return 'London';
+      const prefix = postcode.toUpperCase().replace(/[0-9]/g, '').trim();
+      const cityMap: { [key: string]: string } = {
+        'RH': 'Reigate', 'GU': 'Guildford', 'KT': 'Kingston',
+        'CR': 'Croydon', 'SM': 'Sutton', 'TW': 'Twickenham',
+        'BR': 'Bromley', 'DA': 'Dartford', 'ME': 'Maidstone',
+        'TN': 'Tunbridge Wells', 'CT': 'Canterbury', 'BN': 'Brighton',
+        'PO': 'Portsmouth', 'SO': 'Southampton', 'BH': 'Bournemouth',
+        'SP': 'Salisbury', 'BA': 'Bath', 'BS': 'Bristol',
+        'GL': 'Gloucester', 'OX': 'Oxford', 'HP': 'Hemel Hempstead',
+        'SL': 'Slough', 'RG': 'Reading', 'MK': 'Milton Keynes',
+        'NN': 'Northampton', 'CV': 'Coventry', 'B': 'Birmingham',
+        'WS': 'Walsall', 'WV': 'Wolverhampton', 'DY': 'Dudley',
+        'ST': 'Stoke-on-Trent', 'DE': 'Derby', 'NG': 'Nottingham',
+        'LE': 'Leicester', 'PE': 'Peterborough', 'CB': 'Cambridge',
+        'IP': 'Ipswich', 'NR': 'Norwich', 'CO': 'Colchester',
+        'CM': 'Chelmsford', 'SS': 'Southend', 'RM': 'Romford',
+        'IG': 'Ilford', 'EN': 'Enfield', 'AL': 'St Albans',
+        'WD': 'Watford', 'HA': 'Harrow', 'UB': 'Uxbridge',
+        'LU': 'Luton', 'SG': 'Stevenage', 'HU': 'Hull',
+        'YO': 'York', 'LS': 'Leeds', 'BD': 'Bradford',
+        'HX': 'Halifax', 'HD': 'Huddersfield', 'WF': 'Wakefield',
+        'S': 'Sheffield', 'DN': 'Doncaster', 'LN': 'Lincoln',
+        'M': 'Manchester', 'OL': 'Oldham', 'BL': 'Bolton',
+        'WN': 'Wigan', 'WA': 'Warrington', 'L': 'Liverpool',
+        'CH': 'Chester', 'CW': 'Crewe', 'SK': 'Stockport',
+        'PR': 'Preston', 'BB': 'Blackburn', 'FY': 'Blackpool',
+        'LA': 'Lancaster', 'CA': 'Carlisle', 'NE': 'Newcastle',
+        'SR': 'Sunderland', 'DH': 'Durham', 'TS': 'Middlesbrough',
+        'DL': 'Darlington', 'EH': 'Edinburgh', 'G': 'Glasgow',
+        'PA': 'Paisley', 'KA': 'Kilmarnock', 'ML': 'Motherwell',
+        'FK': 'Falkirk', 'KY': 'Kirkcaldy', 'DD': 'Dundee',
+        'AB': 'Aberdeen', 'PH': 'Perth', 'IV': 'Inverness',
+        'CF': 'Cardiff', 'NP': 'Newport', 'SA': 'Swansea',
+        'LL': 'Llandudno', 'SY': 'Shrewsbury', 'HR': 'Hereford',
+        'WR': 'Worcester', 'DT': 'Dorchester', 'EX': 'Exeter',
+        'PL': 'Plymouth', 'TQ': 'Torquay', 'TR': 'Truro',
+        'TA': 'Taunton',
+      };
+      // Check for London postcodes
+      if (['E', 'EC', 'N', 'NW', 'SE', 'SW', 'W', 'WC'].includes(prefix)) {
+        return 'London';
+      }
+      return cityMap[prefix] || 'London';
+    };
+
+    const estimatedCity = getEstimatedCity(sellerPostcode);
+    console.log('📍 Estimated city for seller:', estimatedCity);
+
     // Create shipment to get rates using new SDK
+    // Note: For rate calculation, we use a placeholder street address
+    // The actual seller address will be collected when creating the label
     const shipment = await shippo.shipments.create({
       addressFrom: {
         name: seller?.display_name || 'Seller',
-        street1: 'Sender Address', // Will be entered by seller when creating label
-        city: 'London',
+        street1: '1 High Street', // Placeholder for rate calculation
+        city: estimatedCity,
         zip: sellerPostcode,
         country: 'GB',
       },
       addressTo: {
         name: shippingAddress.name || 'Buyer',
-        street1: shippingAddress.line1 || shippingAddress.street1 || '',
+        street1: shippingAddress.line1 || shippingAddress.street1 || '1 Main Street',
         street2: shippingAddress.line2 || shippingAddress.street2 || '',
-        city: shippingAddress.city || '',
+        city: shippingAddress.city || 'London',
         state: shippingAddress.county || shippingAddress.state || '',
         zip: shippingAddress.postcode || shippingAddress.postal_code || '',
         country: shippingAddress.country || 'GB',
@@ -194,6 +247,11 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
 
     console.log('✅ Shippo shipment created:', shipment.objectId);
     console.log('📋 Rates returned:', shipment.rates?.length || 0);
+    
+    // Log any messages from Shippo (helps debug why no rates)
+    if (shipment.messages && shipment.messages.length > 0) {
+      console.log('⚠️ Shippo messages:', JSON.stringify(shipment.messages, null, 2));
+    }
 
     // Format rates for response
     const rates = shipment.rates?.map((rate: any) => ({
