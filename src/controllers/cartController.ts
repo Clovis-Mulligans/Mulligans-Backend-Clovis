@@ -121,8 +121,9 @@ export const CartController = {
         
         // ✅ Calculate line total based on quantity
         const lineTotal = price * quantity;
-        // ✅ Shipping per item (could be changed to per-order logic later)
-        const lineShipping = shippingCost * quantity;
+        // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
+        // ceil(qty / 5) × base_shipping = e.g., 1-5 items = 1x, 6-10 = 2x, etc.
+        const lineShipping = Math.ceil(quantity / 5) * shippingCost;
         
         sellerGroups[sellerId].items.push({
           id: item.id,
@@ -142,7 +143,9 @@ export const CartController = {
         });
         
         sellerGroups[sellerId].subtotal += lineTotal;
-        sellerGroups[sellerId].shipping_cost += lineShipping;
+        // ✅ SHIPPING: Take MAX shipping per seller (not sum)
+        // Multiple listings from same seller = MAX shipping cost
+        sellerGroups[sellerId].shipping_cost = Math.max(sellerGroups[sellerId].shipping_cost, lineShipping);
       }
 
       // Convert to array

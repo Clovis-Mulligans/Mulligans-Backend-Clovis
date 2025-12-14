@@ -163,6 +163,9 @@ export class CartCheckoutController {
         const price = parseFloat(item.listings.price.toString());
         const shippingCost = parseFloat((item.listings as any).shipping_cost?.toString() || '0');
         
+        // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
+        const listingShipping = Math.ceil(quantity / 5) * shippingCost;
+        
         sellerGroups[sellerId].items.push({
           listing_id: item.listing_id,
           title: item.listings.title,
@@ -172,7 +175,8 @@ export class CartCheckoutController {
           image_url: item.listings.images[0]?.image_url || null,
         });
         sellerGroups[sellerId].subtotal += price * quantity;  // ✅ Multiply by quantity
-        sellerGroups[sellerId].shippingTotal += shippingCost * quantity;  // ✅ Multiply by quantity
+        // ✅ SHIPPING: Take MAX shipping per seller (not sum)
+        sellerGroups[sellerId].shippingTotal = Math.max(sellerGroups[sellerId].shippingTotal, listingShipping);
         sellerGroups[sellerId].totalQuantity += quantity;  // ✅ NEW
       }
 
@@ -235,8 +239,9 @@ export class CartCheckoutController {
         (sum, item) => sum + parseFloat(item.listings.price.toString()) * (item.quantity || 1),
         0
       );
-      const shippingTotal = cartItems.reduce(
-        (sum, item) => sum + parseFloat((item.listings as any).shipping_cost?.toString() || '0') * (item.quantity || 1),
+      // ✅ SHIPPING: Sum each seller's MAX shipping (already calculated with ceil(qty/5) logic)
+      const shippingTotal = Object.values(sellerGroups).reduce(
+        (sum, group) => sum + group.shippingTotal,
         0
       );
       const totalQuantity = cartItems.reduce(
@@ -482,6 +487,9 @@ export class CartCheckoutController {
             const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());
             const listingImage = listing.images[0]?.image_url || null;
             const currentStock = listing.quantity;
+            
+            // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
+            const orderShipping = Math.ceil(orderQuantity / 5) * itemShippingCost;
 
             // ✅ Validate stock one more time
             if (currentStock < orderQuantity) {
@@ -510,8 +518,8 @@ export class CartCheckoutController {
                 seller_id: seller_id,
                 amount: itemPrice * orderQuantity,  // ✅ Total for quantity
                 quantity: orderQuantity,  // ✅ NEW: Store quantity
-                shipping_cost: itemShippingCost * orderQuantity,  // ✅ Total shipping for quantity
-                seller_payout: (itemPrice + itemShippingCost) * orderQuantity, // ✅ Total payout for quantity
+                shipping_cost: orderShipping,  // ✅ Uses ceil(qty/5) formula
+                seller_payout: (itemPrice * orderQuantity) + orderShipping, // ✅ Total payout
                 currency: 'GBP',
                 stripe_payment_intent_id: session.payment_intent as string,
                 status: 'to_ship',
@@ -525,7 +533,7 @@ export class CartCheckoutController {
             createdOrders.push({ ...order, image_url: listingImage, title: listing.title, quantity: orderQuantity });
             console.log(`✅ Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})`);
             console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
-            console.log(`🔒 Seller payout stored: £${((itemPrice + itemShippingCost) * orderQuantity).toFixed(2)} (held in escrow)`);
+            console.log(`🔒 Seller payout stored: £${((itemPrice * orderQuantity) + orderShipping).toFixed(2)} (held in escrow)`);
 
             // ✅ QUANTITY: Update listing stock and status
             await tx.listings.update({
