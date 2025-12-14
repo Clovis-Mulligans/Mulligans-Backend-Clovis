@@ -78,7 +78,6 @@ model listings {
   price               Decimal              @db.Decimal(10, 2)
   original_price      Decimal?             @db.Decimal(10, 2)
   currency            String               @default("GBP")
-  quantity            Int                  @default(1)
   status              String               @default("active")
   location            String?
   is_featured         Boolean              @default(false)
@@ -96,6 +95,7 @@ model listings {
   specifications      Json?
   parcel_size         String?
   shipping_cost       Decimal?             @db.Decimal(10, 2)
+  quantity            Int                  @default(1)
   cart_items          cart_items[]
   conversations       conversations[]
   favorites           favorites[]
@@ -154,7 +154,6 @@ model orders {
   completed_at                  DateTime?
   updated_at                    DateTime
   auto_cancel_at                DateTime?
-  buyer_viewed_at               DateTime?
   cancel_reason                 String?
   cancelled_at                  DateTime?
   carrier                       String?
@@ -165,8 +164,10 @@ model orders {
   shipping_cost                 Decimal?          @db.Decimal(10, 2)
   shippo_shipment_id            String?
   shippo_transaction_id         String?
+  buyer_viewed_at               DateTime?
   escrow_release_at             DateTime?
   reported_lost_at              DateTime?
+  quantity                      Int               @default(1)
   users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
   listings                      listings?         @relation(fields: [listing_id], references: [id])
   users_orders_seller_idTousers users             @relation("orders_seller_idTousers", fields: [seller_id], references: [id])
@@ -247,11 +248,11 @@ model notifications {
   type            String
   title           String
   message         String
-  image_url       String?
   related_id      String?
   related_user_id String?
   is_read         Boolean  @default(false)
   created_at      DateTime @default(now())
+  image_url       String?
   users           users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
@@ -315,6 +316,7 @@ model cart_items {
   listing_id String
   added_at   DateTime @default(now())
   expires_at DateTime
+  quantity   Int      @default(1)
   listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
   users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -328,10 +330,10 @@ model cart_items {
 model email_suppressions {
   id             String   @id @default(uuid())
   email          String   @unique
-  reason         String // 'bounce' or 'complaint'
-  bounce_type    String? // 'Permanent', 'Transient'
-  bounce_subtype String? // 'General', 'NoEmail', etc.
-  source         String? // The SNS message ID or diagnostic info
+  reason         String
+  bounce_type    String?
+  bounce_subtype String?
+  source         String?
   created_at     DateTime @default(now())
 
   @@index([email])

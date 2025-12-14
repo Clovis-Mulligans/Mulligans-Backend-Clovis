@@ -2,6 +2,7 @@
 // Updated to handle both single-item and cart checkout webhooks
 // ✅ ESCROW UPDATE: Removed immediate transfer_data - funds held until escrow releases
 // ✅ ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
+// ✅ QUANTITY UPDATE: Now reduces stock instead of marking sold immediately
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
@@ -29,17 +30,19 @@ export class StripeController {
    * Create Stripe Checkout Session (Single Item - Legacy)
    * POST /api/stripe/create-checkout-session
    * ✅ ESCROW UPDATE: Funds now held in platform account, not transferred immediately
+   * ✅ QUANTITY UPDATE: Now includes quantity in metadata
    */
   static async createCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id } = req.body;
+      const { listing_id, quantity = 1 } = req.body;  // ✅ Accept quantity
       const userId = req.user?.id || req.user?.sub;
+      const orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
       if (!userId) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('🛒 Creating checkout session for listing:', listing_id);
+      console.log('🛒 Creating checkout session for listing:', listing_id, 'quantity:', orderQuantity);
 
       // Get listing details
       const listing = await prisma.listings.findUnique({
@@ -55,6 +58,15 @@ export class StripeController {
 
       if (listing.status !== 'active') {
         return res.status(400).json({ error: 'This item is no longer available' });
+      }
+
+      // ✅ Check stock availability
+      if (listing.quantity < orderQuantity) {
+        return res.status(400).json({ 
+          error: 'Not enough stock available',
+          available: listing.quantity,
+          requested: orderQuantity
+        });
       }
 
       if (listing.seller_id === userId) {
@@ -130,8 +142,9 @@ export class StripeController {
         }
       }
 
-      // Calculate prices
-      const itemPrice = parseFloat(listing.price.toString());
+      // ✅ Calculate prices with quantity
+      const unitPrice = parseFloat(listing.price.toString());
+      const itemPrice = unitPrice * orderQuantity;  // ✅ Total for all items
       const platformFeePercent = 0.07;
       const platformFeeFixed = 0.99;
       const platformFee = (itemPrice * platformFeePercent) + platformFeeFixed;
@@ -144,6 +157,8 @@ export class StripeController {
       const sellerPayout = itemPrice;
 
       console.log('💰 Price breakdown:', {
+        unitPrice: unitPrice.toFixed(2),
+        quantity: orderQuantity,
         itemPrice: itemPrice.toFixed(2),
         platformFee: platformFee.toFixed(2),
         totalPrice: totalPrice.toFixed(2),
@@ -157,22 +172,19 @@ export class StripeController {
       const paymentIntent = await stripe.paymentIntents.create({
         amount: totalAmountPence,
         currency: 'gbp',
-        // ❌ REMOVED: transfer_data - no longer transferring immediately
-        // transfer_data: {
-        //   destination: sellerConnectId,
-        // },
-        // ❌ REMOVED: application_fee_amount - we keep funds, calculate payout later
         metadata: {
           type: 'single_item',
           listing_id: listing.id,
           buyer_id: userId,
           seller_id: listing.seller_id,
           seller_connect_id: sellerConnectId || '',
+          quantity: orderQuantity.toString(),  // ✅ Include quantity
+          unit_price: unitPrice.toFixed(2),    // ✅ Price per item
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
-          escrow: 'true', // ✅ Flag that this uses escrow
+          escrow: 'true',
         },
       });
 
@@ -186,12 +198,24 @@ export class StripeController {
               currency: 'gbp',
               product_data: {
                 name: listing.title,
-                description: `Sold by ${seller.display_name}`,
+                description: `Sold by ${seller.display_name}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}`,
                 images: listing.images && listing.images.length > 0
                   ? [listing.images[0].image_url]
                   : undefined,
               },
-              unit_amount: totalAmountPence,
+              unit_amount: Math.round(unitPrice * 100),  // ✅ Unit price in pence
+            },
+            quantity: orderQuantity,  // ✅ Use actual quantity
+          },
+          // ✅ Add platform fee as separate line item
+          {
+            price_data: {
+              currency: 'gbp',
+              product_data: {
+                name: 'Buyer Protection',
+                description: 'Secure payment & purchase protection',
+              },
+              unit_amount: platformFeePence,
             },
             quantity: 1,
           },
@@ -199,24 +223,19 @@ export class StripeController {
         shipping_address_collection: {
           allowed_countries: ['GB'],
         },
-        // ❌ REMOVED: payment_intent_data with transfer_data
-        // payment_intent_data: {
-        //   transfer_data: {
-        //     destination: sellerConnectId,
-        //   },
-        //   application_fee_amount: platformFeePence,
-        // },
         metadata: {
           type: 'single_item',
           listing_id: listing.id,
           buyer_id: userId,
           seller_id: listing.seller_id,
           seller_connect_id: sellerConnectId || '',
+          quantity: orderQuantity.toString(),  // ✅ Include quantity
+          unit_price: unitPrice.toFixed(2),
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
-          escrow: 'true', // ✅ Flag that this uses escrow
+          escrow: 'true',
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
@@ -308,6 +327,7 @@ export class StripeController {
   /**
    * Fulfill Single Item Order
    * ✅ ESCROW UPDATE: Now stores seller_payout, uses 5-day shipping deadline
+   * ✅ QUANTITY UPDATE: Reduces stock, only marks sold when qty = 0
    */
   private static async fulfillOrder(session: Stripe.Checkout.Session) {
     try {
@@ -317,10 +337,17 @@ export class StripeController {
       const listing_id = metadata.listing_id;
       const buyer_id = metadata.buyer_id;
       const seller_id = metadata.seller_id;
+      
+      // ✅ Get quantity from metadata (defaults to 1 for backward compatibility)
+      const orderQuantity = parseInt(metadata.quantity || '1');
 
-      // Check if order already exists
+      // Check if order already exists (prevent duplicate processing)
       const existingOrder = await prisma.orders.findFirst({
-        where: { listing_id, buyer_id },
+        where: { 
+          listing_id, 
+          buyer_id,
+          stripe_payment_intent_id: session.payment_intent as string
+        },
       });
 
       if (existingOrder) {
@@ -328,7 +355,7 @@ export class StripeController {
         return;
       }
 
-      // ✅ Get listing with image for notifications
+      // ✅ Get listing with current stock level
       const listing = await prisma.listings.findUnique({
         where: { id: listing_id },
         include: {
@@ -339,11 +366,23 @@ export class StripeController {
         },
       });
 
-      const listingImage = listing?.images?.[0]?.image_url || null;
-      const listingTitle = listing?.title || 'your item';
+      if (!listing) {
+        console.error('❌ Listing not found:', listing_id);
+        return;
+      }
+
+      const listingImage = listing.images?.[0]?.image_url || null;
+      const listingTitle = listing.title || 'your item';
+      const currentStock = listing.quantity;
+
+      // ✅ Validate stock (should have been checked at checkout, but double-check)
+      if (currentStock < orderQuantity) {
+        console.error(`❌ Insufficient stock! Requested: ${orderQuantity}, Available: ${currentStock}`);
+        // In production, you might want to trigger a refund here
+        return;
+      }
 
       // Get shipping address from session
-      // Note: In newer Stripe API versions, shipping is in collected_information.shipping_details
       const collectedInfo = (session as any).collected_information;
       const shippingDetails = collectedInfo?.shipping_details || (session as any).shipping_details;
       const shippingAddress = shippingDetails?.address;
@@ -382,41 +421,66 @@ export class StripeController {
         ? parseFloat(metadata.seller_payout) 
         : itemPrice;
 
-      // ✅ ESCROW: Auto-cancel date (5 days, not 7)
+      // ✅ ESCROW: Auto-cancel date (5 days)
       const autoCancelAt = new Date();
       autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
-      // Create order with shipping address
-      // ✅ ESCROW: seller_payout is stored but NOT transferred yet
-      const order = await prisma.orders.create({
-        data: {
-          id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          listing_id,
-          buyer_id,
-          seller_id,
-          amount: parseFloat(metadata.total_price),
-          seller_payout: sellerPayout, // ✅ Store for later transfer
-          currency: 'GBP',
-          stripe_payment_intent_id: session.payment_intent as string,
-          stripe_payment_method_id: paymentMethodId,
-          status: 'to_ship',
-          paid_at: new Date(),
-          auto_cancel_at: autoCancelAt, // ✅ 5 days to ship
-          shipping_address: shippingAddressJson ?? Prisma.JsonNull,
-          updated_at: new Date(),
-        },
+      // ✅ Calculate new stock level
+      const newStock = currentStock - orderQuantity;
+      const shouldMarkSold = newStock <= 0;
+
+      console.log(`📊 Stock update: ${currentStock} - ${orderQuantity} = ${newStock} (Mark sold: ${shouldMarkSold})`);
+
+      // ✅ Use transaction to ensure atomicity
+      const order = await prisma.$transaction(async (tx) => {
+        // Create order with quantity
+        const createdOrder = await tx.orders.create({
+          data: {
+            id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            listing_id,
+            buyer_id,
+            seller_id,
+            amount: parseFloat(metadata.total_price),
+            quantity: orderQuantity,  // ✅ Store quantity in order
+            seller_payout: sellerPayout,
+            currency: 'GBP',
+            stripe_payment_intent_id: session.payment_intent as string,
+            stripe_payment_method_id: paymentMethodId,
+            status: 'to_ship',
+            paid_at: new Date(),
+            auto_cancel_at: autoCancelAt,
+            shipping_address: shippingAddressJson ?? Prisma.JsonNull,
+            updated_at: new Date(),
+          },
+        });
+
+        // ✅ Update listing stock and status
+        await tx.listings.update({
+          where: { id: listing_id },
+          data: { 
+            quantity: Math.max(0, newStock),
+            status: shouldMarkSold ? 'sold' : 'active',
+            updated_at: new Date() 
+          },
+        });
+
+        // ✅ Remove from buyer's cart (if was in cart)
+        await tx.cart_items.deleteMany({
+          where: {
+            user_id: buyer_id,
+            listing_id: listing_id
+          }
+        });
+
+        return createdOrder;
       });
 
       console.log('✅ Order created:', order.id);
+      console.log(`📦 Quantity: ${orderQuantity}`);
+      console.log(`📊 New stock: ${newStock}${shouldMarkSold ? ' (listing marked as SOLD)' : ''}`);
       console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
       console.log(`🔒 Funds held in escrow. Seller payout: £${sellerPayout.toFixed(2)}`);
       console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
-
-      // Update listing
-      await prisma.listings.update({
-        where: { id: listing_id },
-        data: { status: 'sold', updated_at: new Date() },
-      });
 
       // Check if seller needs bank verification
       const sellerUser = await prisma.users.findUnique({
@@ -426,20 +490,22 @@ export class StripeController {
 
       const needsVerification = sellerUser?.stripe_connect_status !== 'active';
 
-      // ✅ Notify buyer - WITH IMAGE
+      // ✅ Notify buyer - WITH IMAGE and quantity
+      const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: buyer_id,
           type: 'order',
           title: 'Payment Successful! 🎉',
-          message: `Your order for "${listingTitle}" has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          message: `Your order for "${listingTitle}"${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
           image_url: listingImage,
           related_id: order.id,
         },
       });
 
       // ✅ Notify seller - WITH IMAGE (different message if needs verification)
+      const totalSaleValue = itemPrice.toFixed(2);
       if (needsVerification) {
         await prisma.notifications.create({
           data: {
@@ -447,7 +513,7 @@ export class StripeController {
             user_id: seller_id,
             type: 'payout',
             title: 'Congratulations on your sale! 🎉',
-            message: `"${listingTitle}" sold for £${itemPrice.toFixed(2)}. Add your bank details to receive payment after delivery.`,
+            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. Add your bank details to receive payment after delivery.`,
             image_url: listingImage,
             related_id: order.id,
           },
@@ -459,14 +525,14 @@ export class StripeController {
             user_id: seller_id,
             type: 'sale',
             title: 'Item Sold! 🎉',
-            message: `"${listingTitle}" sold for £${itemPrice.toFixed(2)}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
+            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
             image_url: listingImage,
             related_id: order.id,
           },
         });
       }
 
-      console.log('✅ Order fulfilled successfully (escrow mode)');
+      console.log('✅ Order fulfilled successfully (escrow mode with quantity support)');
     } catch (error) {
       console.error('❌ Error fulfilling order:', error);
       throw error;

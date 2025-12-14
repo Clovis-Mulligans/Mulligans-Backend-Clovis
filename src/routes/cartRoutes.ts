@@ -26,6 +26,9 @@ router.post('/validate', CartController.validateCart);
 // Add item to cart
 router.post('/add', CartController.addToCart);
 
+// Update cart item quantity
+router.put('/quantity/:listing_id', CartController.updateCartItemQuantity);
+
 // Remove item from cart
 router.delete('/:listing_id', CartController.removeFromCart);
 
