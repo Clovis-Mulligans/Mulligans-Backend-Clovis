@@ -1,7 +1,7 @@
 // src/controllers/orderController.ts
 // ✅ UPDATED: Escrow system implementation
 // - Shipping deadline: 5 days
-// - Escrow release: 5 days after delivery
+// - Escrow release: 3 days after delivery
 // - Tracking number required
 // - Confirm receipt / Report lost endpoints
 
@@ -19,7 +19,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // CONSTANTS
 // ============================================
 const SHIPPING_DEADLINE_DAYS = 5;
-const ESCROW_RELEASE_DAYS = 5;
+const ESCROW_RELEASE_DAYS = 3;
 
 // Fee calculation - matches your pricing structure
 const calculateSellerPayout = (totalAmount: number): number => {
