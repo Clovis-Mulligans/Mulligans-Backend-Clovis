@@ -8,6 +8,7 @@ import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { CartCheckoutController } from './cartCheckoutController';
+import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -530,6 +531,18 @@ export class StripeController {
             related_id: order.id,
           },
         });
+      }
+
+      // ✅ PUSH NOTIFICATION - New sale to seller
+      try {
+        await sendPushNotification(
+          seller_id,
+          '🎉 You made a sale!',
+          `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          { type: 'sale', order_id: order.id }
+        );
+      } catch (pushErr) {
+        console.error('Push notification failed:', pushErr);
       }
 
       console.log('✅ Order fulfilled successfully (escrow mode with quantity support)');

@@ -9,6 +9,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
 import { sendShippingNotification } from '../services/emailService';
+import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -539,6 +540,18 @@ export class OrderController {
 
       console.log('✅ Order marked as shipped:', orderId);
 
+      // ✅ PUSH NOTIFICATION - Item shipped
+      try {
+        await sendPushNotification(
+          order.buyer_id,
+          '📦 Your item has shipped!',
+          `"${listingTitle}" is on its way! Tracking: ${tracking_number}`,
+          { type: 'order_update', order_id: orderId, is_buyer: true }
+        );
+      } catch (pushErr) {
+        console.error('Push notification failed:', pushErr);
+      }
+
       // Send shipping notification email
       const buyerEmail = order.users_orders_buyer_idTousers?.email;
       if (buyerEmail) {
@@ -633,6 +646,18 @@ export class OrderController {
 
       console.log('✅ Order marked as delivered:', orderId);
       console.log(`📅 Escrow release scheduled for: ${escrowReleaseAt.toISOString()}`);
+
+      // ✅ PUSH NOTIFICATION - Item delivered
+      try {
+        await sendPushNotification(
+          order.buyer_id,
+          '🎉 Your item has been delivered!',
+          `"${listingTitle}" has arrived. Confirm receipt within ${ESCROW_RELEASE_DAYS} days.`,
+          { type: 'order_update', order_id: orderId, is_buyer: true }
+        );
+      } catch (pushErr) {
+        console.error('Push notification failed:', pushErr);
+      }
 
       res.json({ success: true, order: updatedOrder });
     } catch (error: any) {

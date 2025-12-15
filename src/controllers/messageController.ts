@@ -5,6 +5,7 @@
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
 
@@ -339,10 +340,12 @@ export class MessageController {
         data: { last_message_at: new Date() },
       });
 
+      // Get sender name for notifications
+      const senderName = sender?.display_name || 'Someone';
+      const listingTitle = conversation.listings?.title || 'an item';
+
       // ✅ CREATE NOTIFICATION FOR RECIPIENT
       try {
-        const senderName = sender?.display_name || 'Someone';
-        const listingTitle = conversation.listings?.title || 'an item';
         const listingImage = conversation.listings?.images?.[0]?.image_url || null;
 
         await prisma.notifications.create({
@@ -364,6 +367,18 @@ export class MessageController {
       } catch (notifError) {
         // Don't fail the message send if notification creation fails
         console.error('Failed to create notification:', notifError);
+      }
+
+      // ✅ SEND PUSH NOTIFICATION
+      try {
+        await sendPushNotification(
+          receiverId,
+          `💬 ${senderName}`,
+          content.length > 50 ? content.substring(0, 50) + '...' : content,
+          { type: 'message', conversation_id: conversationId }
+        );
+      } catch (pushErr) {
+        console.error('Push notification failed:', pushErr);
       }
 
       res.status(201).json({ message });
