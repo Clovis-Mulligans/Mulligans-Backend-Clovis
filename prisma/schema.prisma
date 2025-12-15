@@ -238,7 +238,8 @@ model users {
   listings                                     listings[]
   messages_messages_receiver_idTousers         messages[]        @relation("messages_receiver_idTousers")
   messages_messages_sender_idTousers           messages[]        @relation("messages_sender_idTousers")
-  notifications                                notifications[]
+  notifications_received                       notifications[] @relation("notifications_user_idTousers")
+  notifications_triggered                      notifications[] @relation("notifications_related_user_idTousers")
   orders_orders_buyer_idTousers                orders[]          @relation("orders_buyer_idTousers")
   orders_orders_seller_idTousers               orders[]          @relation("orders_seller_idTousers")
   reviews_reviews_reviewed_user_idTousers      reviews[]         @relation("reviews_reviewed_user_idTousers")
@@ -257,11 +258,17 @@ model notifications {
   is_read         Boolean  @default(false)
   created_at      DateTime @default(now())
   image_url       String?
-  users           users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  
+  // The user who RECEIVES the notification
+  user            users    @relation("notifications_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
+  
+  // The user who TRIGGERED the notification (for favorites, likes, messages, etc.)
+  related_user    users?   @relation("notifications_related_user_idTousers", fields: [related_user_id], references: [id], onDelete: SetNull)
 
   @@index([user_id])
   @@index([is_read])
   @@index([created_at])
+  @@index([related_user_id])
 }
 
 model Feedback {

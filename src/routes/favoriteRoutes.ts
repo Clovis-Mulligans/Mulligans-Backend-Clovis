@@ -77,8 +77,14 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
       }
     });
 
-    // Create notification for the listing owner (only if not favoriting own listing)
+   // Create notification for the listing owner (only if not favoriting own listing)
     if (listing.seller_id !== userId) {
+      // Get the listing's first image for the notification
+      const listingImage = await prisma.images.findFirst({
+        where: { listing_id: listing_id },
+        orderBy: { display_order: 'asc' }
+      });
+
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -87,7 +93,8 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
           title: 'New Favourite',
           message: `${currentUser?.display_name || 'Someone'} favourited your listing: ${listing.title}`,
           related_id: listing_id,
-          related_user_id: userId
+          related_user_id: userId,
+          image_url: listingImage?.image_url || null
         }
       });
     }

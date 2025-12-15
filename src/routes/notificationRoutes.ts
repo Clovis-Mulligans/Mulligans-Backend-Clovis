@@ -9,18 +9,41 @@ const prisma = new PrismaClient();
 router.get('/', authenticateToken, async (req: any, res) => {
   try {
     const userId = req.user.sub || req.user.id;
-
+    
     const notifications = await prisma.notifications.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'desc' },
-      take: 50 // Limit to 50 most recent
+      take: 50,
+      include: {
+        // Get the user who triggered the notification
+        related_user: {
+          select: {
+            avatar_url: true,
+            display_name: true,
+          }
+        }
+      }
     });
 
-    const unread_count = notifications.filter(n => !n.is_read).length;
+    // Transform for frontend
+    const transformedNotifications = notifications.map(n => ({
+      id: n.id,
+      type: n.type,
+      title: n.title,
+      message: n.message,
+      image_url: n.image_url,
+      related_user_avatar: n.related_user?.avatar_url || null,
+      related_user_name: n.related_user?.display_name || null,
+      created_at: n.created_at,
+      is_read: n.is_read,
+      related_id: n.related_id,
+    }));
 
-    res.json({ 
-      notifications,
-      unread_count 
+    const unread_count = transformedNotifications.filter(n => !n.is_read).length;
+
+    res.json({
+      notifications: transformedNotifications,
+      unread_count
     });
   } catch (error) {
     console.error('Failed to get notifications:', error);
@@ -32,12 +55,10 @@ router.get('/', authenticateToken, async (req: any, res) => {
 router.patch('/:id/read', authenticateToken, async (req: any, res) => {
   try {
     const notificationId = req.params.id;
-
     const notification = await prisma.notifications.update({
       where: { id: notificationId },
       data: { is_read: true }
     });
-
     res.json(notification);
   } catch (error) {
     console.error('Failed to mark notification as read:', error);
@@ -49,15 +70,13 @@ router.patch('/:id/read', authenticateToken, async (req: any, res) => {
 router.patch('/read-all', authenticateToken, async (req: any, res) => {
   try {
     const userId = req.user.sub || req.user.id;
-
     await prisma.notifications.updateMany({
-      where: { 
+      where: {
         user_id: userId,
-        is_read: false 
+        is_read: false
       },
       data: { is_read: true }
     });
-
     res.json({ success: true });
   } catch (error) {
     console.error('Failed to mark all as read:', error);
