@@ -228,6 +228,8 @@ model users {
   shipping_strikes                             Int               @default(0)
   buyer_cancellation_count   Int  @default(0)
   seller_cancellation_count  Int  @default(0)
+  push_token                                   String?
+  push_token_platform                          String?   @db.VarChar(10)
   cart_items                                   cart_items[]
   conversations_conversations_buyer_idTousers  conversations[]   @relation("conversations_buyer_idTousers")
   conversations_conversations_seller_idTousers conversations[]   @relation("conversations_seller_idTousers")
@@ -342,3 +344,4 @@ model email_suppressions {
   @@index([reason])
   @@map("email_suppressions")
 }
+
