@@ -882,16 +882,30 @@ export class OrderController {
   /**
    * Cancel order
    * PUT /api/orders/:id/cancel
-   * ✅ UPDATED: Now actually processes Stripe refund
+   * 
+   * ✅ UPDATED:
+   * - Blocks cancellation if label_url exists (shipping label created)
+   * - Requires a reason from the request
+   * - Tracks cancellation count for buyer/seller
+   * - Creates automatic 1-star review on 2nd+ cancellation
    */
   static async cancelOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user?.id;
       const orderId = req.params.id;
-      const { reason } = req.body;
+      const { reason, reasonText } = req.body;
 
-      console.log('❌ Cancelling order:', orderId);
+      console.log('❌ Cancel order request:', { orderId, reason, reasonText });
 
+      // Validate reason is provided
+      if (!reason) {
+        return res.status(400).json({ 
+          error: 'Cancellation reason is required',
+          message: 'Please select a reason for cancellation.'
+        });
+      }
+
+      // Find the order with user cancellation counts
       const order = await prisma.orders.findFirst({
         where: {
           id: orderId,
@@ -912,6 +926,20 @@ export class OrderController {
               },
             },
           },
+          users_orders_buyer_idTousers: {
+            select: {
+              id: true,
+              display_name: true,
+              buyer_cancellation_count: true,
+            },
+          },
+          users_orders_seller_idTousers: {
+            select: {
+              id: true,
+              display_name: true,
+              seller_cancellation_count: true,
+            },
+          },
         },
       });
 
@@ -919,12 +947,35 @@ export class OrderController {
         return res.status(404).json({ error: 'Order not found or cannot be cancelled' });
       }
 
-      const isBuyer = order.buyer_id === userId;
-      const cancelReason = reason || (isBuyer ? 'buyer_cancelled' : 'seller_cancelled');
-      const listingTitle = order.listings?.title || 'Your item';
-      const listingImage = order.listings?.images?.[0]?.image_url || null;
+      // ✅ Check if shipping label has been created - block cancellation
+      if (order.label_url) {
+        return res.status(400).json({ 
+          error: 'Cannot cancel order',
+          message: 'This order cannot be cancelled because a shipping label has already been purchased. Please contact support if you need assistance.'
+        });
+      }
 
-      // ✅ Process refund via Stripe
+      const isBuyer = order.buyer_id === userId;
+      
+      const cancellingUser = isBuyer 
+        ? order.users_orders_buyer_idTousers 
+        : order.users_orders_seller_idTousers;
+      
+      const otherUser = isBuyer 
+        ? order.users_orders_seller_idTousers 
+        : order.users_orders_buyer_idTousers;
+
+      const cancellationCount = isBuyer 
+        ? (cancellingUser as any)?.buyer_cancellation_count || 0
+        : (cancellingUser as any)?.seller_cancellation_count || 0;
+
+      const listingTitle = order.listings?.title || 'Item';
+      const listingImage = order.listings?.images?.[0]?.image_url || null;
+      const fullCancelReason = reasonText || reason;
+
+      console.log(`📊 Cancellation by ${isBuyer ? 'buyer' : 'seller'}, previous count: ${cancellationCount}`);
+
+      // Process refund via Stripe
       if (order.stripe_payment_intent_id) {
         try {
           const refund = await stripe.refunds.create({
@@ -932,7 +983,7 @@ export class OrderController {
             reason: 'requested_by_customer',
             metadata: {
               order_id: order.id,
-              reason: cancelReason,
+              reason: fullCancelReason,
               cancelled_by: isBuyer ? 'buyer' : 'seller',
             },
           });
@@ -945,13 +996,13 @@ export class OrderController {
 
       const now = new Date();
 
-      // Update order
+      // Update order to cancelled
       await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'cancelled',
           cancelled_at: now,
-          cancel_reason: cancelReason,
+          cancel_reason: fullCancelReason,
           updated_at: now,
         },
       });
@@ -968,27 +1019,131 @@ export class OrderController {
         console.log('📋 Item relisted:', order.listing_id);
       }
 
+      // Increment user's cancellation count
+      if (isBuyer) {
+        await prisma.users.update({
+          where: { id: userId },
+          data: {
+            buyer_cancellation_count: { increment: 1 },
+            updated_at: now,
+          },
+        });
+      } else {
+        await prisma.users.update({
+          where: { id: userId },
+          data: {
+            seller_cancellation_count: { increment: 1 },
+            updated_at: now,
+          },
+        });
+      }
+
+      // Create automatic 1-star review if 2nd+ cancellation
+      if (cancellationCount >= 1) {
+        console.log('⚠️ Creating automatic 1-star review for repeated cancellation');
+        
+        try {
+          await prisma.reviews.create({
+            data: {
+              id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              order_id: orderId,
+              reviewer_id: otherUser?.id || 'system',
+              reviewed_user_id: userId,
+              rating: 1,
+              review_text: `Order cancelled by ${isBuyer ? 'buyer' : 'seller'}. Reason: ${fullCancelReason}`,
+              review_type: 'cancellation',
+              is_public: true,
+              created_at: now,
+            },
+          });
+
+          // Recalculate user's average rating
+          const allReviews = await prisma.reviews.findMany({
+            where: { reviewed_user_id: userId },
+            select: { rating: true },
+          });
+
+          if (allReviews.length > 0) {
+            const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+            await prisma.users.update({
+              where: { id: userId },
+              data: {
+                rating: Math.round(avgRating * 100) / 100,
+                updated_at: now,
+              },
+            });
+          }
+        } catch (reviewError: any) {
+          console.error('⚠️ Failed to create cancellation review:', reviewError.message);
+          // Don't fail the cancellation if review creation fails
+        }
+      }
+
       // Notify the other party
-      const otherPartyId = isBuyer ? order.seller_id : order.buyer_id;
       const cancelledBy = isBuyer ? 'The buyer' : 'The seller';
+      const notificationMessage = isBuyer
+        ? `${cancelledBy} cancelled the order for "${listingTitle}". Your item has been relisted. Reason: ${fullCancelReason}`
+        : `${cancelledBy} cancelled the order for "${listingTitle}". A refund has been processed. Reason: ${fullCancelReason}`;
 
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          user_id: otherPartyId,
+          user_id: otherUser?.id || '',
           type: 'order_cancelled',
           title: 'Order Cancelled',
-          message: `${cancelledBy} cancelled the order for "${listingTitle}". ${isBuyer ? 'Your item has been relisted.' : 'A refund has been processed.'}`,
+          message: notificationMessage,
           image_url: listingImage,
           related_id: orderId,
         },
       });
 
       console.log('✅ Order cancelled:', orderId);
-      res.json({ success: true, message: 'Order cancelled successfully' });
+      
+      res.json({ 
+        success: true, 
+        message: 'Order cancelled successfully',
+        reviewCreated: cancellationCount >= 1,
+        newCancellationCount: cancellationCount + 1,
+      });
     } catch (error: any) {
       console.error('❌ Cancel order error:', error);
       res.status(500).json({ error: 'Failed to cancel order' });
+    }
+  }
+
+  /**
+   * Get user's cancellation counts
+   * GET /api/orders/cancellation-counts
+   * 
+   * Returns the current user's cancellation counts for display in the modal
+   */
+  static async getCancellationCounts(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const user = await prisma.users.findUnique({
+        where: { id: userId },
+        select: {
+          buyer_cancellation_count: true,
+          seller_cancellation_count: true,
+        },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      res.json({
+        buyer_cancellation_count: (user as any).buyer_cancellation_count || 0,
+        seller_cancellation_count: (user as any).seller_cancellation_count || 0,
+      });
+    } catch (error: any) {
+      console.error('❌ Get cancellation counts error:', error);
+      res.status(500).json({ error: 'Failed to get cancellation counts' });
     }
   }
 
