@@ -1,13 +1,8 @@
 // src/utils/email.ts
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
+import sgMail from '@sendgrid/mail';
 
-const sesClient = new SESClient({
-  region: process.env.AWS_REGION || 'eu-west-2',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+// Initialize SendGrid with API key
+sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
 interface SendEmailParams {
   to: string | string[];
@@ -18,13 +13,13 @@ interface SendEmailParams {
 }
 
 /**
- * Send email via AWS SES
+ * Send email via SendGrid
  */
 export async function sendEmail(params: SendEmailParams): Promise<void> {
   const { to, subject, text, html, from } = params;
 
   // Default sender - Mulligans
-  const fromAddress = from || 'Mulligans <info@mulligans.uk.com>';
+  const fromAddress = from || 'Mulligans <noreply@mulligans.uk.com>';
 
   // Convert 'to' to array if it's a single email
   const recipients = Array.isArray(to) ? to : [to];
@@ -33,57 +28,38 @@ export async function sendEmail(params: SendEmailParams): Promise<void> {
   console.log('📬 Subject:', subject);
 
   try {
-    const command = new SendEmailCommand({
-      Source: fromAddress,
-      Destination: {
-        ToAddresses: recipients,
-      },
-      Message: {
-        Subject: {
-          Data: subject,
-          Charset: 'UTF-8',
-        },
-        Body: {
-          Text: {
-            Data: text,
-            Charset: 'UTF-8',
-          },
-          ...(html && {
-            Html: {
-              Data: html,
-              Charset: 'UTF-8',
-            },
-          }),
-        },
-      },
-    });
+    const msg = {
+      to: recipients,
+      from: fromAddress,
+      subject: subject,
+      text: text,
+      ...(html && { html: html }),
+    };
 
-    const result = await sesClient.send(command);
-    console.log('✅ Email sent successfully:', result.MessageId);
+    const result = await sgMail.send(msg);
+    console.log('✅ Email sent successfully:', result[0].statusCode);
   } catch (error: any) {
     console.error('❌ Error sending email:', error);
-    
+
     // Provide helpful error messages
-    if (error.name === 'MessageRejected') {
-      throw new Error('Email was rejected. Check that your AWS SES is verified.');
+    if (error.response) {
+      console.error('SendGrid error body:', error.response.body);
     }
-    if (error.name === 'MailFromDomainNotVerifiedException') {
-      throw new Error('Sender email domain is not verified in AWS SES.');
-    }
-    
+
     throw new Error(`Failed to send email: ${error.message}`);
   }
 }
 
 /**
- * Send email from a template (optional - for future use)
+ * Send email to multiple recipients individually
  */
-export async function sendTemplateEmail(
-  to: string | string[],
-  templateName: string,
-  templateData: Record<string, any>
+export async function sendEmailToMultiple(
+  recipients: string[],
+  subject: string,
+  text: string,
+  html?: string
 ): Promise<void> {
-  // This is a placeholder for when you want to use SES templates
-  // You can implement this later if needed
-  console.log('Template email feature coming soon');
+  for (const recipient of recipients) {
+    await sendEmail({ to: recipient, subject, text, html });
+  }
 }

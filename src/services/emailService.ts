@@ -1,8 +1,12 @@
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
+// src/services/emailService.ts
+import sgMail from '@sendgrid/mail';
 import fs from 'fs';
 import path from 'path';
 
-const sesClient = new SESClient({ region: process.env.AWS_REGION || 'eu-west-2' });
+// Initialize SendGrid with API key
+sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+
+const FROM_ADDRESS = 'Mulligans <noreply@mulligans.uk.com>';
 
 function loadTemplate(templateName: string, variables: Record<string, string>): string {
   const templatePath = path.join(__dirname, '../email-templates', `${templateName}.html`);
@@ -19,47 +23,69 @@ function loadTemplate(templateName: string, variables: Record<string, string>): 
 export async function sendWelcomeEmail(userEmail: string, userName: string): Promise<void> {
   const html = loadTemplate('welcome-email', { userName });
   
-  const command = new SendEmailCommand({
-    Source: 'Mulligans <noreply@mulligans.uk.com>',
-    Destination: { ToAddresses: [userEmail] },
-    Message: {
-      Subject: { Data: 'Welcome to Mulligans!' },
-      Body: { Html: { Data: html } }
-    }
-  });
+  const msg = {
+    to: userEmail,
+    from: FROM_ADDRESS,
+    subject: 'Welcome to Mulligans!',
+    html: html,
+  };
   
-  await sesClient.send(command);
+  await sgMail.send(msg);
   console.log(`Welcome email sent to ${userEmail}`);
 }
 
 export async function sendOrderConfirmation(buyerEmail: string, data: Record<string, string>): Promise<void> {
   const html = loadTemplate('order-confirmation', data);
   
-  const command = new SendEmailCommand({
-    Source: 'Mulligans <noreply@mulligans.uk.com>',
-    Destination: { ToAddresses: [buyerEmail] },
-    Message: {
-      Subject: { Data: `Order Confirmed - #${data.orderNumber}` },
-      Body: { Html: { Data: html } }
-    }
-  });
+  const msg = {
+    to: buyerEmail,
+    from: FROM_ADDRESS,
+    subject: `Order Confirmed - #${data.orderNumber}`,
+    html: html,
+  };
   
-  await sesClient.send(command);
+  await sgMail.send(msg);
   console.log(`Order confirmation sent to ${buyerEmail}`);
 }
 
 export async function sendShippingNotification(buyerEmail: string, data: Record<string, string>): Promise<void> {
   const html = loadTemplate('shipping-notification', data);
   
-  const command = new SendEmailCommand({
-    Source: 'Mulligans <noreply@mulligans.uk.com>',
-    Destination: { ToAddresses: [buyerEmail] },
-    Message: {
-      Subject: { Data: `Your Order Has Shipped - #${data.orderNumber}` },
-      Body: { Html: { Data: html } }
-    }
-  });
+  const msg = {
+    to: buyerEmail,
+    from: FROM_ADDRESS,
+    subject: `Your Order Has Shipped - #${data.orderNumber}`,
+    html: html,
+  };
   
-  await sesClient.send(command);
+  await sgMail.send(msg);
   console.log(`Shipping notification sent to ${buyerEmail}`);
+}
+
+export async function sendVerificationEmail(userEmail: string, code: string): Promise<void> {
+  const html = loadTemplate('verification-email', { code });
+  
+  const msg = {
+    to: userEmail,
+    from: FROM_ADDRESS,
+    subject: 'Verify Your Email - Mulligans',
+    html: html,
+  };
+  
+  await sgMail.send(msg);
+  console.log(`Verification email sent to ${userEmail}`);
+}
+
+export async function sendPasswordResetEmail(userEmail: string, code: string): Promise<void> {
+  const html = loadTemplate('password-reset', { code });
+  
+  const msg = {
+    to: userEmail,
+    from: FROM_ADDRESS,
+    subject: 'Reset Your Password - Mulligans',
+    html: html,
+  };
+  
+  await sgMail.send(msg);
+  console.log(`Password reset email sent to ${userEmail}`);
 }
