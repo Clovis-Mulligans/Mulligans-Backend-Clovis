@@ -245,6 +245,10 @@ model users {
   reviews_reviews_reviewed_user_idTousers      reviews[]         @relation("reviews_reviewed_user_idTousers")
   reviews_reviews_reviewer_idTousers           reviews[]         @relation("reviews_reviewer_idTousers")
   support_tickets                              support_tickets[]
+  verification_code             String?
+  verification_code_expires     DateTime?
+  password_reset_code           String?
+  password_reset_code_expires   DateTime?
 }
 
 model notifications {

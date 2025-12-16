@@ -8,14 +8,14 @@ import {
   InitiateAuthCommand,
   AuthFlowType,
   ConfirmSignUpCommand,
-  ResendConfirmationCodeCommand,
+  AdminConfirmSignUpCommand,
   ForgotPasswordCommand,
   ConfirmForgotPasswordCommand,
   ChangePasswordCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
-import { sendWelcomeEmail } from '../services/emailService';
+import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from '../services/emailService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -24,10 +24,15 @@ const cognitoClient = new CognitoIdentityProviderClient({
   region: process.env.AWS_REGION || 'eu-west-2',
 });
 
+// Generate 6-digit code
+function generateVerificationCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
 // Rate limiter: 5 login attempts per 15 minutes per IP
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   message: 'Too many login attempts, please try again in 15 minutes',
   standardHeaders: true,
   legacyHeaders: false,
@@ -35,7 +40,7 @@ const loginLimiter = rateLimit({
 
 // Rate limiter: 3 signups per hour per IP
 const signupLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 3,
   message: 'Too many accounts created from this IP. Please try again later.',
   standardHeaders: true,
@@ -51,7 +56,7 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
 
     console.log('📝 Registering user:', email);
 
-    // Create user in Cognito
+    // Create user in Cognito (but skip their email verification)
     const signUpCommand = new SignUpCommand({
       ClientId: process.env.COGNITO_CLIENT_ID!,
       Username: email,
@@ -69,7 +74,10 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
     }
 
     console.log('✅ Cognito user created:', cognitoResponse.UserSub);
-    console.log('📧 Verification email sent to:', email);
+
+    // Generate our own verification code
+    const verificationCode = generateVerificationCode();
+    const codeExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     // Check if user already exists in database
     const existingUser = await prisma.users.findFirst({
@@ -77,20 +85,19 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
     });
 
     let user;
-    
+
     if (existingUser) {
-      // User exists but might be from failed previous signup
-      // Update with new Cognito ID
       console.log('⚠️ User already exists in database, updating Cognito ID');
       user = await prisma.users.update({
         where: { id: existingUser.id },
         data: {
           cognito_id: cognitoResponse.UserSub,
+          verification_code: verificationCode,
+          verification_code_expires: codeExpires,
           updated_at: new Date(),
         },
       });
     } else {
-      // Create new user in database
       user = await prisma.users.create({
         data: {
           id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -98,6 +105,8 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
           email,
           display_name: display_name,
           phone: phone_number || null,
+          verification_code: verificationCode,
+          verification_code_expires: codeExpires,
           created_at: new Date(),
           updated_at: new Date(),
         },
@@ -106,7 +115,15 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
 
     console.log('✅ Database user created:', user.id);
 
-    // ✅ DON'T auto-login - require email verification first
+    // Send verification email via SendGrid
+    try {
+      await sendVerificationEmail(email, verificationCode);
+      console.log('📧 Verification email sent via SendGrid to:', email);
+    } catch (emailError) {
+      console.error('❌ Failed to send verification email:', emailError);
+      // Don't fail registration if email fails - user can request resend
+    }
+
     res.status(201).json({
       message: 'Registration successful! Please check your email for a verification code.',
       email: email,
@@ -115,15 +132,14 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('❌ Registration error:', error);
-    
-    // Handle common Cognito errors
+
     if (error.name === 'UsernameExistsException') {
       return res.status(400).json({ error: 'An account with this email already exists' });
     }
     if (error.name === 'InvalidPasswordException') {
       return res.status(400).json({ error: 'Password must be at least 8 characters with uppercase, lowercase, and numbers' });
     }
-    
+
     res.status(400).json({
       error: error.message || 'Registration failed',
     });
@@ -131,7 +147,7 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
 });
 
 /**
- * ✅ NEW: Verify email with code from email
+ * Verify email with code
  */
 router.post('/verify-email', async (req: Request, res: Response) => {
   try {
@@ -143,18 +159,7 @@ router.post('/verify-email', async (req: Request, res: Response) => {
 
     console.log('🔐 Verifying email:', email);
 
-    // Confirm signup in Cognito
-    const command = new ConfirmSignUpCommand({
-      ClientId: process.env.COGNITO_CLIENT_ID!,
-      Username: email,
-      ConfirmationCode: code.trim(),
-    });
-
-    await cognitoClient.send(command);
-
-    console.log('✅ Email verified successfully:', email);
-
-    // Get user from database
+    // Find user and check code
     const user = await prisma.users.findFirst({
       where: { email },
     });
@@ -163,16 +168,52 @@ router.post('/verify-email', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-// Send welcome email
+    // Check if code matches and hasn't expired
+    if (user.verification_code !== code.trim()) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check and try again.' });
+    }
+
+    if (user.verification_code_expires && new Date() > user.verification_code_expires) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+
+    // Confirm user in Cognito (admin confirm to bypass their email check)
     try {
-      await sendWelcomeEmail(email, user?.display_name || 'there');
+      const confirmCommand = new AdminConfirmSignUpCommand({
+        UserPoolId: process.env.COGNITO_USER_POOL_ID!,
+        Username: email,
+      });
+      await cognitoClient.send(confirmCommand);
+      console.log('✅ Cognito user confirmed');
+    } catch (cognitoError: any) {
+      // User might already be confirmed
+      if (cognitoError.name !== 'NotAuthorizedException') {
+        console.error('⚠️ Cognito confirm error:', cognitoError);
+      }
+    }
+
+    // Clear verification code and mark as verified
+    await prisma.users.update({
+      where: { id: user.id },
+      data: {
+        verification_code: null,
+        verification_code_expires: null,
+        is_verified: true,
+        updated_at: new Date(),
+      },
+    });
+
+    console.log('✅ Email verified successfully:', email);
+
+    // Send welcome email
+    try {
+      await sendWelcomeEmail(email, user.display_name || 'there');
       console.log('📧 Welcome email sent to:', email);
     } catch (emailError) {
       console.error('⚠️ Failed to send welcome email:', emailError);
-      // Don't fail the verification if email fails
     }
 
-    // Now that email is verified, create JWT token and auto-login
+    // Create JWT token
     const token = jwt.sign(
       {
         userId: user.id,
@@ -185,7 +226,6 @@ router.post('/verify-email', async (req: Request, res: Response) => {
       { expiresIn: '7d' }
     );
 
-    // Return token and user data
     res.json({
       message: 'Email verified successfully!',
       accessToken: token,
@@ -199,18 +239,6 @@ router.post('/verify-email', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('❌ Verification error:', error);
-
-    // Handle common verification errors
-    if (error.name === 'CodeMismatchException') {
-      return res.status(400).json({ error: 'Invalid verification code. Please check and try again.' });
-    }
-    if (error.name === 'ExpiredCodeException') {
-      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
-    }
-    if (error.name === 'NotAuthorizedException') {
-      return res.status(400).json({ error: 'User is already verified or does not exist.' });
-    }
-
     res.status(400).json({
       error: error.message || 'Verification failed',
     });
@@ -218,7 +246,7 @@ router.post('/verify-email', async (req: Request, res: Response) => {
 });
 
 /**
- * ✅ NEW: Resend verification code
+ * Resend verification code
  */
 router.post('/resend-verification', async (req: Request, res: Response) => {
   try {
@@ -230,14 +258,32 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
 
     console.log('📧 Resending verification code to:', email);
 
-    // Resend confirmation code via Cognito
-    const command = new ResendConfirmationCodeCommand({
-      ClientId: process.env.COGNITO_CLIENT_ID!,
-      Username: email,
+    // Find user
+    const user = await prisma.users.findFirst({
+      where: { email },
     });
 
-    await cognitoClient.send(command);
+    if (!user) {
+      // Don't reveal if user exists
+      return res.json({ message: 'If an account exists, a verification code has been sent.' });
+    }
 
+    // Generate new code
+    const verificationCode = generateVerificationCode();
+    const codeExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    // Update user with new code
+    await prisma.users.update({
+      where: { id: user.id },
+      data: {
+        verification_code: verificationCode,
+        verification_code_expires: codeExpires,
+        updated_at: new Date(),
+      },
+    });
+
+    // Send email via SendGrid
+    await sendVerificationEmail(email, verificationCode);
     console.log('✅ Verification code resent to:', email);
 
     res.json({
@@ -245,14 +291,6 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('❌ Resend error:', error);
-
-    if (error.name === 'LimitExceededException') {
-      return res.status(429).json({ error: 'Too many requests. Please wait a few minutes before trying again.' });
-    }
-    if (error.name === 'InvalidParameterException') {
-      return res.status(400).json({ error: 'User is already verified.' });
-    }
-
     res.status(400).json({
       error: error.message || 'Failed to resend code',
     });
@@ -260,7 +298,7 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
 });
 
 /**
- * ✅ NEW: Forgot Password - Request reset code
+ * Forgot Password - Request reset code
  */
 router.post('/forgot-password', async (req: Request, res: Response) => {
   try {
@@ -272,14 +310,32 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
     console.log('🔐 Forgot password request for:', email);
 
-    // Send forgot password code via Cognito
-    const command = new ForgotPasswordCommand({
-      ClientId: process.env.COGNITO_CLIENT_ID!,
-      Username: email,
+    // Find user
+    const user = await prisma.users.findFirst({
+      where: { email },
     });
 
-    await cognitoClient.send(command);
+    if (!user) {
+      // Don't reveal if user exists (security)
+      return res.json({ message: 'If an account exists with this email, a reset code has been sent.' });
+    }
 
+    // Generate reset code
+    const resetCode = generateVerificationCode();
+    const codeExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    // Store reset code
+    await prisma.users.update({
+      where: { id: user.id },
+      data: {
+        password_reset_code: resetCode,
+        password_reset_code_expires: codeExpires,
+        updated_at: new Date(),
+      },
+    });
+
+    // Send reset email via SendGrid
+    await sendPasswordResetEmail(email, resetCode);
     console.log('✅ Password reset code sent to:', email);
 
     res.json({
@@ -287,17 +343,6 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('❌ Forgot password error:', error);
-
-    if (error.name === 'UserNotFoundException') {
-      // Don't reveal if user exists or not (security)
-      return res.json({
-        message: 'If an account exists with this email, a reset code has been sent.',
-      });
-    }
-    if (error.name === 'LimitExceededException') {
-      return res.status(429).json({ error: 'Too many requests. Please wait a few minutes before trying again.' });
-    }
-
     res.status(400).json({
       error: error.message || 'Failed to send reset code',
     });
@@ -305,7 +350,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 });
 
 /**
- * ✅ NEW: Reset Password - Confirm with code and set new password
+ * Reset Password - Confirm with code and set new password
  */
 router.post('/reset-password', async (req: Request, res: Response) => {
   try {
@@ -317,15 +362,56 @@ router.post('/reset-password', async (req: Request, res: Response) => {
 
     console.log('🔐 Resetting password for:', email);
 
-    // Confirm password reset in Cognito
-    const command = new ConfirmForgotPasswordCommand({
-      ClientId: process.env.COGNITO_CLIENT_ID!,
-      Username: email,
-      ConfirmationCode: code.trim(),
-      Password: password,
+    // Find user and verify code
+    const user = await prisma.users.findFirst({
+      where: { email },
     });
 
-    await cognitoClient.send(command);
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid reset code.' });
+    }
+
+    if (user.password_reset_code !== code.trim()) {
+      return res.status(400).json({ error: 'Invalid reset code. Please check and try again.' });
+    }
+
+    if (user.password_reset_code_expires && new Date() > user.password_reset_code_expires) {
+      return res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
+    }
+
+    // Use Cognito's forgot password flow to actually change the password
+    // First trigger Cognito's forgot password
+    const forgotCommand = new ForgotPasswordCommand({
+      ClientId: process.env.COGNITO_CLIENT_ID!,
+      Username: email,
+    });
+    await cognitoClient.send(forgotCommand);
+
+    // Wait a moment for Cognito to process
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Now we need to use AdminSetUserPassword instead since we can't intercept Cognito's code
+    // Actually, let's use a different approach - AdminSetUserPassword
+    const { AdminSetUserPasswordCommand } = await import('@aws-sdk/client-cognito-identity-provider');
+    
+    const setPasswordCommand = new AdminSetUserPasswordCommand({
+      UserPoolId: process.env.COGNITO_USER_POOL_ID!,
+      Username: email,
+      Password: password,
+      Permanent: true,
+    });
+    
+    await cognitoClient.send(setPasswordCommand);
+
+    // Clear reset code
+    await prisma.users.update({
+      where: { id: user.id },
+      data: {
+        password_reset_code: null,
+        password_reset_code_expires: null,
+        updated_at: new Date(),
+      },
+    });
 
     console.log('✅ Password reset successful for:', email);
 
@@ -335,12 +421,6 @@ router.post('/reset-password', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('❌ Reset password error:', error);
 
-    if (error.name === 'CodeMismatchException') {
-      return res.status(400).json({ error: 'Invalid reset code. Please check and try again.' });
-    }
-    if (error.name === 'ExpiredCodeException') {
-      return res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
-    }
     if (error.name === 'InvalidPasswordException') {
       return res.status(400).json({ error: 'Password must be at least 8 characters with uppercase, lowercase, numbers, and special characters' });
     }
@@ -352,7 +432,7 @@ router.post('/reset-password', async (req: Request, res: Response) => {
 });
 
 /**
- * ✅ NEW: Change Password - For logged-in users
+ * Change Password - For logged-in users
  */
 router.post('/change-password', authenticateToken, async (req: any, res: Response) => {
   try {
@@ -363,7 +443,6 @@ router.post('/change-password', authenticateToken, async (req: any, res: Respons
       return res.status(400).json({ error: 'Current password and new password are required' });
     }
 
-    // Get user from database
     const user = await prisma.users.findUnique({
       where: { id: userId },
     });
@@ -374,7 +453,7 @@ router.post('/change-password', authenticateToken, async (req: any, res: Respons
 
     console.log('🔐 Changing password for:', user.email);
 
-    // First, authenticate with current password
+    // Authenticate with current password
     const authCommand = new InitiateAuthCommand({
       ClientId: process.env.COGNITO_CLIENT_ID!,
       AuthFlow: AuthFlowType.USER_PASSWORD_AUTH,
@@ -390,7 +469,7 @@ router.post('/change-password', authenticateToken, async (req: any, res: Respons
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
-    // Now change the password
+    // Change the password
     const changeCommand = new ChangePasswordCommand({
       PreviousPassword: currentPassword,
       ProposedPassword: newPassword,
@@ -429,7 +508,6 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 
     console.log('🔑 Login attempt for:', email);
 
-    // Get user from database
     const user = await prisma.users.findFirst({
       where: { email },
     });
@@ -438,7 +516,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Authenticate with Cognito (to verify password)
+    // Authenticate with Cognito
     const authCommand = new InitiateAuthCommand({
       ClientId: process.env.COGNITO_CLIENT_ID!,
       AuthFlow: AuthFlowType.USER_PASSWORD_AUTH,
@@ -456,7 +534,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 
     console.log('✅ Login successful:', email);
 
-    // Create OUR OWN JWT token (not Cognito's)
+    // Create JWT token
     const token = jwt.sign(
       {
         userId: user.id,
@@ -469,7 +547,6 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       { expiresIn: '7d' }
     );
 
-    // Return our custom JWT token
     res.json({
       accessToken: token,
       idToken: token,
@@ -483,9 +560,8 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('❌ Login error:', error);
 
-    // ✅ Handle email not verified error
     if (error.name === 'UserNotConfirmedException') {
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Please verify your email before logging in',
         requires_verification: true,
         email: req.body.email,
