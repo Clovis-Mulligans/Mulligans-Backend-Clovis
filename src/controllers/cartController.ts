@@ -43,13 +43,14 @@ export const CartController = {
               images: {
                 take: 1
               },
-              users: {
+             users: {
                 select: {
                   id: true,
                   display_name: true,
                   avatar_url: true,
                   postcode_area: true,
-                  rating: true
+                  rating: true,
+                  is_verified: true
                 }
               }
             }
@@ -109,6 +110,7 @@ export const CartController = {
             seller_avatar: seller.avatar_url,
             seller_postcode: seller.postcode_area,
             seller_rating: seller.rating,
+            seller_is_verified: seller.is_verified || false,
             items: [],
             subtotal: 0,
             shipping_cost: 0

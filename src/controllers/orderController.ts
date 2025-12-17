@@ -159,11 +159,13 @@ export class OrderController {
               },
             },
           },
-          users_orders_seller_idTousers: {
+         users_orders_seller_idTousers: {
             select: {
               id: true,
               display_name: true,
               avatar_url: true,
+              rating: true,
+              is_verified: true,
             },
           },
           reviews: {
@@ -195,8 +197,10 @@ export class OrderController {
         cancelled_at: order.cancelled_at?.toISOString() || null,
         escrow_release_at: order.escrow_release_at?.toISOString() || null,
         seller_id: order.seller_id,
-        seller_name: order.users_orders_seller_idTousers?.display_name || 'Unknown',
+       seller_name: order.users_orders_seller_idTousers?.display_name || 'Unknown',
         seller_avatar: order.users_orders_seller_idTousers?.avatar_url || null,
+        seller_rating: order.users_orders_seller_idTousers?.rating || null,
+        seller_is_verified: order.users_orders_seller_idTousers?.is_verified || false,
         status: order.status,
         tracking_number: order.tracking_number,
         carrier: order.carrier,
@@ -362,6 +366,8 @@ export class OrderController {
               display_name: true,
               avatar_url: true,
               location: true,
+              rating: true,
+              is_verified: true,
             },
           },
           reviews: {
@@ -417,11 +423,15 @@ export class OrderController {
           avatar: order.users_orders_buyer_idTousers?.avatar_url,
           location: order.users_orders_buyer_idTousers?.location,
         },
-        seller: {
+       seller: {
           id: order.users_orders_seller_idTousers?.id,
           name: order.users_orders_seller_idTousers?.display_name || 'Unknown',
+          display_name: order.users_orders_seller_idTousers?.display_name || 'Unknown',
           avatar: order.users_orders_seller_idTousers?.avatar_url,
+          avatar_url: order.users_orders_seller_idTousers?.avatar_url,
           location: order.users_orders_seller_idTousers?.location,
+          rating: order.users_orders_seller_idTousers?.rating || 0,
+          is_verified: order.users_orders_seller_idTousers?.is_verified || false,
         },
         is_buyer: isBuyer,
         is_seller: isSeller,
