@@ -678,7 +678,7 @@ export class ListingController {
         return;
       }
 
-      // Get seller info
+     // Get seller info
       const seller = await prisma.users.findUnique({
         where: { id: listing.seller_id },
         select: {
@@ -686,6 +686,7 @@ export class ListingController {
           display_name: true,
           rating: true,
           avatar_url: true,
+          is_verified: true,
         },
       });
 
