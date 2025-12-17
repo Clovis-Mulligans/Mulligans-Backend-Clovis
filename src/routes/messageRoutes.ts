@@ -310,12 +310,13 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
         console.log('   Other user ID:', other_user_id);
 
         // Fetch other user details
-        const other_user = await prisma.users.findUnique({
+       const other_user = await prisma.users.findUnique({
           where: { id: other_user_id },
           select: {
             id: true,
             display_name: true,
-            avatar_url: true
+            avatar_url: true,
+            is_verified: true
           }
         });
 
@@ -364,6 +365,7 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
           other_user_id: other_user?.id || null,
           other_user_name: other_user?.display_name || 'Unknown User',
           other_user_avatar: other_user?.avatar_url || null,
+          other_user_is_verified: other_user?.is_verified || false,
           last_message: lastMessage?.content || 'No messages yet',
           last_message_time: lastMessage?.created_at?.toISOString() || conv.created_at.toISOString(),
           last_message_timestamp: lastMessage?.created_at || conv.created_at,
