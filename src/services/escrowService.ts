@@ -6,6 +6,7 @@
 
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
+import { sendEscrowReleased } from './emailService';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -282,7 +283,7 @@ export async function autoReleaseEscrow(): Promise<void> {
         const listingTitle = order.listings?.title || 'Your item';
         const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
-        await prisma.notifications.create({
+       await prisma.notifications.create({
           data: {
             id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             user_id: seller.id,
@@ -293,6 +294,31 @@ export async function autoReleaseEscrow(): Promise<void> {
             related_id: order.id,
           },
         });
+
+        // ✅ Send escrow released EMAIL to seller
+        const sellerEmailRecord = await prisma.users.findUnique({
+          where: { id: seller.id },
+          select: { email: true },
+        });
+        
+        if (sellerEmailRecord?.email) {
+          try {
+            const salePrice = parseFloat(order.amount.toString()).toFixed(2);
+            const fees = (parseFloat(order.amount.toString()) - parseFloat(order.seller_payout?.toString() || '0')).toFixed(2);
+            
+            await sendEscrowReleased(sellerEmailRecord.email, {
+              itemTitle: listingTitle,
+              orderNumber: order.id,
+              salePrice: salePrice,
+              fees: fees,
+              payoutAmount: payoutAmount,
+            });
+            console.log('📧 Escrow released email sent to seller:', sellerEmailRecord.email);
+          } catch (emailError) {
+            console.error('⚠️ Failed to send escrow released email:', emailError);
+          }
+        }
+
 
         console.log(`✅ Escrow released for order ${order.id}`);
       } catch (orderError: any) {

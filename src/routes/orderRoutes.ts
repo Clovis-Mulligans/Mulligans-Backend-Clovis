@@ -11,6 +11,8 @@ const router = Router();
 // ✅ Get order counts for badges (MUST be before /:id route!)
 router.get('/counts', authenticateToken, OrderController.getOrderCounts);
 
+router.get('/cancellation-counts', authenticateToken, OrderController.getCancellationCounts);
+
 // Get user's purchases (orders they bought)
 router.get('/my-purchases', authenticateToken, OrderController.getMyPurchases);
 

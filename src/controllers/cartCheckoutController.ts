@@ -9,7 +9,7 @@
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { PrismaClient, Prisma } from '@prisma/client';
-import { sendOrderConfirmation } from '../services/emailService';
+import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -626,9 +626,30 @@ export class CartCheckoutController {
               related_id: createdOrders[0]?.id,
             },
           });
-          console.log('📬 Seller notification created with image:', sellerFirstImage ? 'YES' : 'NO');
+          // ✅ Send sale notification EMAIL to seller
+        const sellerEmailRecord = await prisma.users.findUnique({
+          where: { id: seller_id },
+          select: { email: true },
+        });
+        
+        if (sellerEmailRecord?.email) {
+          try {
+            const shippingAddr = shippingAddressJson 
+              ? `${shippingAddressJson.name}<br>${shippingAddressJson.line1}${shippingAddressJson.line2 ? '<br>' + shippingAddressJson.line2 : ''}<br>${shippingAddressJson.city}<br>${shippingAddressJson.postal_code}`
+              : 'See app for details';
+            
+            await sendSaleNotification(sellerEmailRecord.email, {
+              itemTitle: listing_ids.length === 1 ? createdOrders[0]?.title : `${listing_ids.length} items`,
+              salePrice: subtotal,
+              orderNumber: createdOrders[0]?.id || 'N/A',
+              buyerName: buyer?.display_name || 'Buyer',
+              shippingAddress: shippingAddr,
+            });
+            console.log('📧 Sale notification email sent to seller:', sellerEmailRecord.email);
+          } catch (emailError) {
+            console.error('⚠️ Failed to send sale notification email:', emailError);
+          }
         }
-      }
 
       // Get first item image for buyer notification
       const buyerNotificationImage = firstItemImage || createdOrders[0]?.image_url || null;

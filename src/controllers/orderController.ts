@@ -8,7 +8,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
-import { sendShippingNotification } from '../services/emailService';
+import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
@@ -647,16 +647,28 @@ export class OrderController {
       console.log('✅ Order marked as delivered:', orderId);
       console.log(`📅 Escrow release scheduled for: ${escrowReleaseAt.toISOString()}`);
 
-      // ✅ PUSH NOTIFICATION - Item delivered
-      try {
-        await sendPushNotification(
-          order.buyer_id,
-          '🎉 Your item has been delivered!',
-          `"${listingTitle}" has arrived. Confirm receipt within ${ESCROW_RELEASE_DAYS} days.`,
-          { type: 'order_update', order_id: orderId, is_buyer: true }
-        );
-      } catch (pushErr) {
-        console.error('Push notification failed:', pushErr);
+      // ✅ Send delivery confirmation EMAIL to buyer
+      const buyerEmailRecord = await prisma.users.findUnique({
+        where: { id: order.buyer_id },
+        select: { email: true, display_name: true },
+      });
+      
+      if (buyerEmailRecord?.email) {
+        try {
+          await sendDeliveryConfirmation(buyerEmailRecord.email, {
+            itemTitle: listingTitle,
+            orderNumber: orderId,
+            deliveryDate: new Date().toLocaleDateString('en-GB', { 
+              weekday: 'long', 
+              year: 'numeric', 
+              month: 'long', 
+              day: 'numeric' 
+            }),
+          });
+          console.log('📧 Delivery confirmation email sent to:', buyerEmailRecord.email);
+        } catch (emailError) {
+          console.error('⚠️ Failed to send delivery confirmation email:', emailError);
+        }
       }
 
       res.json({ success: true, order: updatedOrder });
@@ -1355,6 +1367,30 @@ export class OrderController {
           related_id: orderId,
         },
       });
+
+      // ✅ Send escrow released EMAIL to seller
+      const sellerEmailRecord = await prisma.users.findUnique({
+        where: { id: seller.id },
+        select: { email: true },
+      });
+      
+      if (sellerEmailRecord?.email) {
+        try {
+          const salePrice = parseFloat(order.amount.toString()).toFixed(2);
+          const fees = (parseFloat(order.amount.toString()) - parseFloat(order.seller_payout?.toString() || '0')).toFixed(2);
+          
+          await sendEscrowReleased(sellerEmailRecord.email, {
+            itemTitle: listingTitle,
+            orderNumber: orderId,
+            salePrice: salePrice,
+            fees: fees,
+            payoutAmount: payoutAmount,
+          });
+          console.log('📧 Escrow released email sent to seller:', sellerEmailRecord.email);
+        } catch (emailError) {
+          console.error('⚠️ Failed to send escrow released email:', emailError);
+        }
+      }
 
       console.log('✅ Order completed:', orderId);
       res.json({ success: true, order: updatedOrder });
