@@ -628,15 +628,16 @@ export class ListingController {
       // Get seller info separately for each listing
       const listingsWithSellers = await Promise.all(
         listings.map(async (listing) => {
-          const seller = await prisma.users.findUnique({
+          const users = await prisma.users.findUnique({
             where: { id: listing.seller_id },
             select: {
               id: true,
               display_name: true,
               rating: true,
+              is_verified: true,
             },
           });
-          return { ...listing, seller };
+          return { ...listing, users };
         })
       );
 
