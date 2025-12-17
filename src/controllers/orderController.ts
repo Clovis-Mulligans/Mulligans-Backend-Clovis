@@ -362,6 +362,8 @@ export class OrderController {
               display_name: true,
               avatar_url: true,
               location: true,
+              rating: true,
+              is_verified: true,
             },
           },
           users_orders_seller_idTousers: {
@@ -421,11 +423,15 @@ export class OrderController {
         tracking_number: order.tracking_number,
         carrier: order.carrier,
         shipping_address: isSeller ? order.shipping_address : null,
-        buyer: {
+       buyer: {
           id: order.users_orders_buyer_idTousers?.id,
           name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
+          display_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
           avatar: order.users_orders_buyer_idTousers?.avatar_url,
+          avatar_url: order.users_orders_buyer_idTousers?.avatar_url,
           location: order.users_orders_buyer_idTousers?.location,
+          rating: order.users_orders_buyer_idTousers?.rating || 0,
+          is_verified: order.users_orders_buyer_idTousers?.is_verified || false,
         },
        seller: {
           id: order.users_orders_seller_idTousers?.id,
