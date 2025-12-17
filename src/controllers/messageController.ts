@@ -152,11 +152,12 @@ export class MessageController {
                 },
               },
             },
-            users_conversations_buyer_idTousers: {
+           users_conversations_buyer_idTousers: {
               select: {
                 id: true,
                 display_name: true,
                 avatar_url: true,
+                is_verified: true,
               },
             },
             users_conversations_seller_idTousers: {
@@ -164,6 +165,7 @@ export class MessageController {
                 id: true,
                 display_name: true,
                 avatar_url: true,
+                is_verified: true,
               },
             },
             messages: {
