@@ -1,12 +1,11 @@
 // src/services/emailService.ts
-import sgMail from '@sendgrid/mail';
+import { Resend } from 'resend';
 import fs from 'fs';
 import path from 'path';
 
-// Initialize SendGrid with API key
-sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const FROM_ADDRESS = 'Mulligans <noreply@mulligans.uk.com>';
+const FROM_ADDRESS = 'Mulligans <noreply@mail.mulligans.uk.com>';
 
 function loadTemplate(templateName: string, variables: Record<string, string>): string {
   const templatePath = path.join(__dirname, '../email-templates', `${templateName}.html`);
@@ -23,69 +22,89 @@ function loadTemplate(templateName: string, variables: Record<string, string>): 
 export async function sendWelcomeEmail(userEmail: string, userName: string): Promise<void> {
   const html = loadTemplate('welcome-email', { userName });
   
-  const msg = {
-    to: userEmail,
+  const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
+    to: userEmail,
     subject: 'Welcome to Mulligans!',
     html: html,
-  };
+  });
   
-  await sgMail.send(msg);
-  console.log(`Welcome email sent to ${userEmail}`);
+  if (error) {
+    console.error('❌ Failed to send welcome email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Welcome email sent to ${userEmail}`);
 }
 
 export async function sendOrderConfirmation(buyerEmail: string, data: Record<string, string>): Promise<void> {
   const html = loadTemplate('order-confirmation', data);
   
-  const msg = {
-    to: buyerEmail,
+  const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
+    to: buyerEmail,
     subject: `Order Confirmed - #${data.orderNumber}`,
     html: html,
-  };
+  });
   
-  await sgMail.send(msg);
-  console.log(`Order confirmation sent to ${buyerEmail}`);
+  if (error) {
+    console.error('❌ Failed to send order confirmation:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Order confirmation sent to ${buyerEmail}`);
 }
 
 export async function sendShippingNotification(buyerEmail: string, data: Record<string, string>): Promise<void> {
   const html = loadTemplate('shipping-notification', data);
   
-  const msg = {
-    to: buyerEmail,
+  const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
+    to: buyerEmail,
     subject: `Your Order Has Shipped - #${data.orderNumber}`,
     html: html,
-  };
+  });
   
-  await sgMail.send(msg);
-  console.log(`Shipping notification sent to ${buyerEmail}`);
+  if (error) {
+    console.error('❌ Failed to send shipping notification:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Shipping notification sent to ${buyerEmail}`);
 }
 
 export async function sendVerificationEmail(userEmail: string, code: string): Promise<void> {
   const html = loadTemplate('verification-email', { code });
   
-  const msg = {
-    to: userEmail,
+  const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
+    to: userEmail,
     subject: 'Verify Your Email - Mulligans',
     html: html,
-  };
+  });
   
-  await sgMail.send(msg);
-  console.log(`Verification email sent to ${userEmail}`);
+  if (error) {
+    console.error('❌ Failed to send verification email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Verification email sent to ${userEmail}`);
 }
 
 export async function sendPasswordResetEmail(userEmail: string, code: string): Promise<void> {
   const html = loadTemplate('password-reset', { code });
   
-  const msg = {
-    to: userEmail,
+  const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
+    to: userEmail,
     subject: 'Reset Your Password - Mulligans',
     html: html,
-  };
+  });
   
-  await sgMail.send(msg);
-  console.log(`Password reset email sent to ${userEmail}`);
+  if (error) {
+    console.error('❌ Failed to send password reset email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Password reset email sent to ${userEmail}`);
 }
