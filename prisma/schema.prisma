@@ -206,6 +206,7 @@ model users {
   bio                                          String?
   avatar_url                                   String?
   is_verified                                  Boolean           @default(false)
+  verified_at                                  DateTime?
   rating                                       Decimal           @default(0.00) @db.Decimal(3, 2)
   total_sales                                  Int               @default(0)
   total_purchases                              Int               @default(0)

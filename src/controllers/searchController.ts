@@ -541,12 +541,13 @@ export class SearchController {
               orderBy: { display_order: 'asc' },
               take: 1,
             },
-            users: {
+           users: {
               select: {
                 id: true,
                 email: true,
                 display_name: true,
                 rating: true,
+                is_verified: true,
               },
             },
             listing_attributes: true,
@@ -556,11 +557,18 @@ export class SearchController {
         prisma.listings.count({ where }),
       ]);
 
-      console.log('📦 Found listings:', listings.length);
+     console.log('📦 Found listings:', listings.length);
       console.log('📊 Total count:', total);
 
+      // ✅ Sort verified sellers to top (within current sort order)
+      const sortedListings = [...listings].sort((a, b) => {
+        const aVerified = a.users?.is_verified ? 1 : 0;
+        const bVerified = b.users?.is_verified ? 1 : 0;
+        return bVerified - aVerified; // Verified first
+      });
+
       res.json({
-        listings,
+        listings: sortedListings,
         pagination: {
           total,
           page: Number(page),
