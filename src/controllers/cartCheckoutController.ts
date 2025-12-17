@@ -614,7 +614,7 @@ export class CartCheckoutController {
             },
           });
           console.log('📬 Seller notification created with image:', sellerFirstImage ? 'YES' : 'NO');
-        } else {
+       } else {
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -626,7 +626,10 @@ export class CartCheckoutController {
               related_id: createdOrders[0]?.id,
             },
           });
-          // ✅ Send sale notification EMAIL to seller
+          console.log('📬 Seller notification created with image:', sellerFirstImage ? 'YES' : 'NO');
+        }
+
+        // ✅ Send sale notification EMAIL to seller
         const sellerEmailRecord = await prisma.users.findUnique({
           where: { id: seller_id },
           select: { email: true },
@@ -650,6 +653,9 @@ export class CartCheckoutController {
             console.error('⚠️ Failed to send sale notification email:', emailError);
           }
         }
+      }
+
+      // Get first item image for buyer notification
 
       // Get first item image for buyer notification
       const buyerNotificationImage = firstItemImage || createdOrders[0]?.image_url || null;
@@ -701,8 +707,8 @@ export class CartCheckoutController {
       }
 
       console.log('✅ Cart order fulfilled successfully (escrow mode with quantity support)');
-      console.log(`📦 Orders created: ${createdOrders.length}, Total items: ${totalItems}`);
-      console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
+     console.log(`📦 Orders created: ${createdOrders.length}, Total items: ${totalItems}`);
+console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
     } catch (error) {
       console.error('❌ Error fulfilling cart order:', error);
       throw error;
