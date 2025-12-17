@@ -141,7 +141,7 @@ router.get('/conversations/:id', authenticateToken, async (req: any, res) => {
       where: { id: other_user_id }
     });
 
-    res.json({
+   res.json({
       id: conversation.id,
       listing_id: conversation.listing_id,
       listing_title: listing?.title,
@@ -149,7 +149,8 @@ router.get('/conversations/:id', authenticateToken, async (req: any, res) => {
       listing_image: listing?.images?.[0]?.image_url,
       other_user_name: other_user?.display_name,
       other_user_id: other_user?.id,
-      other_user_avatar: other_user?.avatar_url  // ✅ Added avatar
+      other_user_avatar: other_user?.avatar_url,
+      other_user_is_verified: other_user?.is_verified || false
     });
   } catch (error) {
     console.error('Failed to get conversation:', error);
