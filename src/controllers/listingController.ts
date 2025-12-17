@@ -50,6 +50,14 @@ export class ListingController {
             orderBy: { display_order: 'asc' },
             take: 1,
           },
+          users: {
+            select: {
+              id: true,
+              display_name: true,
+              rating: true,
+              is_verified: true,
+            },
+          },
         },
         orderBy: { created_at: 'desc' },
         take: 20,
