@@ -39,6 +39,7 @@ export class UserController {
           clothing_size: true,
           shoe_size: true,
           glove_size: true,
+          is_verified: true,
         },
       });
 
