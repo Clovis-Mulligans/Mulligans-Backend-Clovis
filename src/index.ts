@@ -25,6 +25,7 @@ import cartRoutes from './routes/cartRoutes';
 import shippingRoutes from './routes/shippingRoutes';
 import sesRoutes from './routes/sesRoutes';
 import { runEscrowJobs } from './services/escrowService';
+import { updateVerificationStatus } from './services/verificationService';
 
 const app = express();
 const httpServer = createServer(app);
@@ -130,14 +131,21 @@ app.use((req, res) => {
 // - Check for lost-in-transit items (14+ days)
 // ============================================
 cron.schedule('0 2 * * *', async () => {
-  console.log('🕐 Starting daily escrow jobs...');
+  console.log('🕐 Starting daily jobs...');
   console.log(`📅 ${new Date().toISOString()}`);
   
   try {
     await runEscrowJobs();
-    console.log('✅ Daily escrow jobs completed');
+    console.log('✅ Escrow jobs completed');
   } catch (error) {
     console.error('❌ Escrow jobs failed:', error);
+  }
+
+  try {
+    await updateVerificationStatus();
+    console.log('✅ Verification check completed');
+  } catch (error) {
+    console.error('❌ Verification check failed:', error);
   }
 }, {
   timezone: 'Europe/London'

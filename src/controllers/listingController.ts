@@ -405,6 +405,7 @@ export class ListingController {
         seller_id,
         // Golf-specific filters
         brand,
+        model,
         dexterity,
         shaftFlex,
         shaftMaterial,
@@ -431,7 +432,7 @@ export class ListingController {
         slopeAdjust,
       } = req.query;
 
-      console.log('🔍 Search params:', { category, subcategory, q, brand, dexterity, shaftFlex });
+      console.log('🔍 Search params:', { category, subcategory, q, brand, model, dexterity, shaftFlex });
 
       const where: any = {
         status: 'active',
@@ -467,6 +468,15 @@ export class ListingController {
           console.log('⚠️ Brand had duplicates, cleaned to:', cleanBrand);
         }
         where.brand = { contains: cleanBrand, mode: 'insensitive' };
+      }
+
+      // Model filter - ✅ NEW: Filter by model
+      if (model) {
+        let cleanModel = model as string;
+        if (cleanModel.includes(',')) {
+          cleanModel = cleanModel.split(',')[0].trim();
+        }
+        where.model = { contains: cleanModel, mode: 'insensitive' };
       }
 
       console.log('📋 WHERE clause:', JSON.stringify(where, null, 2));
