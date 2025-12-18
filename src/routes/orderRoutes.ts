@@ -1,6 +1,5 @@
 // src/routes/orderRoutes.ts
-// ✅ UPDATED: Added /viewed endpoint for marking orders as seen by buyer
-// ✅ ESCROW: Added /confirm-receipt and /report-lost endpoints
+// ✅ UPDATED: Added seller dashboard endpoints for pending orders and recent sales
 
 import { Router } from 'express';
 import { OrderController } from '../controllers/orderController';
@@ -12,6 +11,10 @@ const router = Router();
 router.get('/counts', authenticateToken, OrderController.getOrderCounts);
 
 router.get('/cancellation-counts', authenticateToken, OrderController.getCancellationCounts);
+
+// ✅ NEW: Seller dashboard endpoints
+router.get('/seller/pending', authenticateToken, OrderController.getSellerPendingOrders);
+router.get('/seller/recent-sales', authenticateToken, OrderController.getSellerRecentSales);
 
 // Get user's purchases (orders they bought)
 router.get('/my-purchases', authenticateToken, OrderController.getMyPurchases);

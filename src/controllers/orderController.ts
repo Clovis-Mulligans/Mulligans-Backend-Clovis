@@ -1419,4 +1419,158 @@ export class OrderController {
       res.status(500).json({ error: 'Failed to complete order' });
     }
   }
+
+  /**
+   * Get seller's pending orders (orders awaiting shipment)
+   * GET /orders/seller/pending
+   */
+  static async getSellerPendingOrders(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      console.log('📦 GET /orders/seller/pending - User ID:', userId);
+
+      const orders = await prisma.orders.findMany({
+        where: {
+          seller_id: userId,
+          status: { in: ['to_ship', 'paid'] },
+        },
+        include: {
+          listings: {
+            select: {
+              id: true,
+              title: true,
+              images: {
+                select: { image_url: true },
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+          users_orders_buyer_idTousers: {
+            select: {
+              id: true,
+              display_name: true,
+              avatar_url: true,
+            },
+          },
+        },
+        orderBy: {
+          auto_cancel_at: 'asc',
+        },
+      });
+
+      const now = new Date();
+
+      const formattedOrders = orders.map((order) => {
+        let daysRemaining = 5;
+        if (order.auto_cancel_at) {
+          const msRemaining = order.auto_cancel_at.getTime() - now.getTime();
+          daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+        } else if (order.paid_at) {
+          const deadline = new Date(order.paid_at);
+          deadline.setDate(deadline.getDate() + 5);
+          const msRemaining = deadline.getTime() - now.getTime();
+          daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+        }
+
+        return {
+          id: order.id,
+          listing_id: order.listing_id,
+          listing_title: order.listings?.title || 'Item no longer available',
+          listing_image: order.listings?.images?.[0]?.image_url || null,
+          buyer_id: order.buyer_id,
+          buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
+          buyer_avatar: order.users_orders_buyer_idTousers?.avatar_url || null,
+          amount: parseFloat(order.amount.toString()),
+          seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
+          shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : null,
+          shipping_address: order.shipping_address,
+          created_at: order.created_at.toISOString(),
+          paid_at: order.paid_at?.toISOString() || null,
+          auto_cancel_at: order.auto_cancel_at?.toISOString() || null,
+          days_remaining: Math.max(0, daysRemaining),
+          is_urgent: daysRemaining <= 1,
+          is_overdue: daysRemaining <= 0,
+          status: order.status,
+        };
+      });
+
+      console.log(`✅ Found ${formattedOrders.length} pending orders`);
+      res.json({ orders: formattedOrders });
+    } catch (error: any) {
+      console.error('❌ Get seller pending orders error:', error);
+      res.status(500).json({ error: 'Failed to get pending orders' });
+    }
+  }
+
+  /**
+   * Get seller's recent sales (completed orders)
+   * GET /orders/seller/recent-sales
+   */
+  static async getSellerRecentSales(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+      const limit = parseInt(req.query.limit as string) || 10;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      console.log('💰 GET /orders/seller/recent-sales - User ID:', userId);
+
+      const orders = await prisma.orders.findMany({
+        where: {
+          seller_id: userId,
+          status: 'completed',
+        },
+        include: {
+          listings: {
+            select: {
+              id: true,
+              title: true,
+              images: {
+                select: { image_url: true },
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+          users_orders_buyer_idTousers: {
+            select: {
+              id: true,
+              display_name: true,
+            },
+          },
+        },
+        orderBy: {
+          completed_at: 'desc',
+        },
+        take: limit,
+      });
+
+      const formattedSales = orders.map((order) => ({
+        id: order.id,
+        listing_id: order.listing_id,
+        listing_title: order.listings?.title || 'Item no longer available',
+        listing_image: order.listings?.images?.[0]?.image_url || null,
+        buyer_id: order.buyer_id,
+        buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
+        amount: parseFloat(order.amount.toString()),
+        seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
+        sold_at: order.completed_at?.toISOString() || order.paid_at?.toISOString() || order.created_at.toISOString(),
+        status: order.status,
+      }));
+
+      console.log(`✅ Found ${formattedSales.length} recent sales`);
+      res.json({ sales: formattedSales });
+    } catch (error: any) {
+      console.error('❌ Get seller recent sales error:', error);
+      res.status(500).json({ error: 'Failed to get recent sales' });
+    }
+  }
 }

@@ -1,5 +1,5 @@
 // src/routes/userRoutes.ts
-// UPDATED: Fixed /me endpoint to use getCurrentUser and updateCurrentUser methods
+// UPDATED: Added seller-stats endpoint for seller dashboard
 import express from 'express';
 import { UserController } from '../controllers/userController';
 import { authenticateToken } from '../middleware/auth';
@@ -13,8 +13,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Protected routes - MUST COME FIRST
 router.get('/my-listings', authenticateToken, UserController.getMyListings);
-router.get('/me', authenticateToken, UserController.getCurrentUser);  // ✅ FIXED!
-router.put('/me', authenticateToken, UserController.updateCurrentUser);  // ✅ FIXED!
+router.get('/me', authenticateToken, UserController.getCurrentUser);
+router.put('/me', authenticateToken, UserController.updateCurrentUser);
 router.delete('/account', authenticateToken, UserController.deleteUser);
 
 // Push notification token routes
@@ -27,6 +27,7 @@ router.post('/:userId/avatar', authenticateToken, upload.single('avatar'), UserC
 router.put('/:userId', authenticateToken, UserController.updateUser);
 
 // Public routes (no auth required) - COME LAST
+router.get('/:userId/seller-stats', UserController.getSellerStats);  // ✅ NEW - Seller dashboard stats
 router.get('/:userId/stats', UserController.getUserStats);
 router.get('/:userId/listings', UserController.getUserListings);
 router.get('/:userId', UserController.getUser);

@@ -845,4 +845,197 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
       res.status(500).json({ error: 'Failed to delete account' });
     }
   }
+
+  /**
+   * Get seller dashboard stats
+   * GET /users/:userId/seller-stats
+   * Returns comprehensive stats for the seller dashboard
+   */
+  static async getSellerStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { userId } = req.params;
+
+      console.log('📊 GET /users/:userId/seller-stats - User ID:', userId);
+
+      // Verify user exists
+      const user = await prisma.users.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          rating: true,
+          total_sales: true,
+          created_at: true,
+          stripe_connect_id: true,
+        },
+      });
+
+      if (!user) {
+        console.log('❌ User not found');
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
+
+      // Date calculations
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekStart = new Date(todayStart);
+      weekStart.setDate(weekStart.getDate() - 7);
+      const monthStart = new Date(todayStart);
+      monthStart.setDate(monthStart.getDate() - 30);
+
+      // Get earnings data from completed orders
+      const [todayOrders, weekOrders, monthOrders] = await Promise.all([
+        prisma.orders.aggregate({
+          where: {
+            seller_id: userId,
+            status: 'completed',
+            completed_at: { gte: todayStart },
+          },
+          _sum: { seller_payout: true },
+          _count: true,
+        }),
+        prisma.orders.aggregate({
+          where: {
+            seller_id: userId,
+            status: 'completed',
+            completed_at: { gte: weekStart },
+          },
+          _sum: { seller_payout: true },
+        }),
+        prisma.orders.aggregate({
+          where: {
+            seller_id: userId,
+            status: 'completed',
+            completed_at: { gte: monthStart },
+          },
+          _sum: { seller_payout: true },
+        }),
+      ]);
+
+      // Get pending balance (orders delivered but not yet completed - in escrow)
+      const pendingOrders = await prisma.orders.aggregate({
+        where: {
+          seller_id: userId,
+          status: 'delivered',
+        },
+        _sum: { seller_payout: true },
+      });
+
+      // Get orders to ship count
+      const ordersToShip = await prisma.orders.count({
+        where: {
+          seller_id: userId,
+          status: { in: ['to_ship', 'paid'] },
+        },
+      });
+
+      // Get orders in transit count
+      const ordersInTransit = await prisma.orders.count({
+        where: {
+          seller_id: userId,
+          status: 'in_transit',
+        },
+      });
+
+      // Get delivered orders awaiting completion
+      const ordersDelivered = await prisma.orders.count({
+        where: {
+          seller_id: userId,
+          status: 'delivered',
+        },
+      });
+
+      // Get active listings count
+      const activeListings = await prisma.listings.count({
+        where: {
+          seller_id: userId,
+          status: 'active',
+        },
+      });
+
+      // Get total views across all active listings
+      const listingsWithViews = await prisma.listings.aggregate({
+        where: {
+          seller_id: userId,
+          status: 'active',
+        },
+        _sum: { views: true },
+      });
+
+      // Get total favorites across all active listings
+      const totalFavorites = await prisma.favorites.count({
+        where: {
+          listings: {
+            seller_id: userId,
+            status: 'active',
+          },
+        },
+      });
+
+      // Get review stats
+      const reviewStats = await prisma.reviews.aggregate({
+        where: {
+          reviewed_user_id: userId,
+          review_type: 'seller',
+        },
+        _avg: { rating: true },
+        _count: true,
+      });
+
+      // Calculate response rate (default to 100% for now)
+      const responseRate = 100;
+
+      // Calculate average shipping time for completed orders
+      const shippedOrders = await prisma.orders.findMany({
+        where: {
+          seller_id: userId,
+          status: 'completed',
+          shipped_at: { not: null },
+          paid_at: { not: null },
+        },
+        select: {
+          paid_at: true,
+          shipped_at: true,
+        },
+        take: 50,
+      });
+
+      let avgShippingTime = 0;
+      if (shippedOrders.length > 0) {
+        const totalDays = shippedOrders.reduce((acc, order) => {
+          if (order.paid_at && order.shipped_at) {
+            const days = (order.shipped_at.getTime() - order.paid_at.getTime()) / (1000 * 60 * 60 * 24);
+            return acc + days;
+          }
+          return acc;
+        }, 0);
+        avgShippingTime = totalDays / shippedOrders.length;
+      }
+
+      const stats = {
+        todayEarnings: Number(todayOrders._sum.seller_payout) || 0,
+        weekEarnings: Number(weekOrders._sum.seller_payout) || 0,
+        monthEarnings: Number(monthOrders._sum.seller_payout) || 0,
+        availableBalance: 0,
+        pendingBalance: Number(pendingOrders._sum.seller_payout) || 0,
+        ordersToShip,
+        ordersInTransit,
+        ordersDelivered,
+        activeListings,
+        totalViews: Number(listingsWithViews._sum.views) || 0,
+        totalFavorites,
+        totalSales: user.total_sales || 0,
+        rating: Number(reviewStats._avg.rating) || Number(user.rating) || 0,
+        reviewCount: reviewStats._count || 0,
+        responseRate,
+        avgShippingTime: Math.round(avgShippingTime * 10) / 10,
+      };
+
+      console.log('✅ Seller stats returned:', stats);
+      res.json(stats);
+    } catch (error) {
+      console.error('❌ Get seller stats error:', error);
+      res.status(500).json({ error: 'Failed to get seller stats' });
+    }
+  }
 }
