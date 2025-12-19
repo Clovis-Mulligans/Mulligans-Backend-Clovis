@@ -520,6 +520,10 @@ export class CartCheckoutController {
                 quantity: orderQuantity,  // ✅ NEW: Store quantity
                 shipping_cost: orderShipping,  // ✅ Uses ceil(qty/5) formula
                 seller_payout: (itemPrice * orderQuantity) + orderShipping, // ✅ Total payout
+                // ✅ NEW: Listing snapshot fields (preserved even if listing deleted)
+                listing_title: listing.title,
+                listing_image: listingImage,
+                listing_price: itemPrice,
                 currency: 'GBP',
                 stripe_payment_intent_id: session.payment_intent as string,
                 status: 'to_ship',
@@ -532,6 +536,7 @@ export class CartCheckoutController {
 
             createdOrders.push({ ...order, image_url: listingImage, title: listing.title, quantity: orderQuantity });
             console.log(`✅ Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})`);
+            console.log('📸 Listing snapshot saved:', listing.title, '@ £' + itemPrice);
             console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
             console.log(`🔒 Seller payout stored: £${((itemPrice * orderQuantity) + orderShipping).toFixed(2)} (held in escrow)`);
 

@@ -442,6 +442,8 @@ export class NativePaymentController {
 
     const newStock = listing.quantity - orderQuantity;
     const shouldMarkSold = newStock <= 0;
+    const listingImage = listing.images?.[0]?.image_url || null;
+    const itemPrice = parseFloat(listing.price.toString());
 
     const order = await prisma.$transaction(async (tx) => {
       // Create order
@@ -455,6 +457,10 @@ export class NativePaymentController {
           quantity: orderQuantity,
           shipping_cost: parseFloat(metadata.shipping_cost || '0'),
           seller_payout: parseFloat(metadata.seller_payout),
+          // ✅ NEW: Listing snapshot fields (preserved even if listing deleted)
+          listing_title: listing.title,
+          listing_image: listingImage,
+          listing_price: itemPrice,
           currency: 'GBP',
           stripe_payment_intent_id: paymentIntent.id,
           status: 'to_ship',
@@ -464,6 +470,8 @@ export class NativePaymentController {
           updated_at: new Date(),
         },
       });
+
+      console.log('📸 Listing snapshot saved:', listing.title, '@ £' + itemPrice);
 
       // Update stock
       await tx.listings.update({
@@ -484,7 +492,6 @@ export class NativePaymentController {
     });
 
     // Create notifications
-    const listingImage = listing.images?.[0]?.image_url || null;
     const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
 
     await prisma.notifications.create({
@@ -548,6 +555,7 @@ export class NativePaymentController {
         const itemTotal = unitPrice * itemData.quantity;
         const orderShipping = Math.ceil(itemData.quantity / 5) * shippingCost;
         const sellerPayout = itemTotal + orderShipping;
+        const listingImage = listing.images?.[0]?.image_url || null;
 
         const newStock = listing.quantity - itemData.quantity;
         const shouldMarkSold = newStock <= 0;
@@ -562,6 +570,10 @@ export class NativePaymentController {
             quantity: itemData.quantity,
             shipping_cost: orderShipping,
             seller_payout: sellerPayout,
+            // ✅ NEW: Listing snapshot fields (preserved even if listing deleted)
+            listing_title: listing.title,
+            listing_image: listingImage,
+            listing_price: unitPrice,
             currency: 'GBP',
             stripe_payment_intent_id: paymentIntent.id,
             status: 'to_ship',
@@ -572,6 +584,7 @@ export class NativePaymentController {
           },
         });
 
+        console.log('📸 Listing snapshot saved:', listing.title, '@ £' + unitPrice);
         orders.push({ ...order, listing });
 
         // Update stock

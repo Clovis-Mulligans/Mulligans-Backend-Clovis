@@ -168,6 +168,9 @@ model orders {
   escrow_release_at             DateTime?
   reported_lost_at              DateTime?
   quantity                      Int               @default(1)
+  listing_title                 String?
+  listing_image                 String?
+  listing_price                 Decimal?          @db.Decimal(10, 2)
   users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
   listings                      listings?         @relation(fields: [listing_id], references: [id])
   users_orders_seller_idTousers users             @relation("orders_seller_idTousers", fields: [seller_id], references: [id])

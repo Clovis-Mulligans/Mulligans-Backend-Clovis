@@ -186,8 +186,8 @@ export class OrderController {
       const formattedOrders = orders.map((order) => ({
         id: order.id,
         listing_id: order.listing_id,
-        listing_title: order.listings?.title || 'Item no longer available',
-        listing_image: order.listings?.images?.[0]?.image_url || '',
+        listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
+        listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || '',
         amount: parseFloat(order.amount.toString()),
         created_at: order.created_at.toISOString(),
         paid_at: order.paid_at?.toISOString() || null,
@@ -287,8 +287,8 @@ export class OrderController {
       const formattedOrders = orders.map((order) => ({
         id: order.id,
         listing_id: order.listing_id,
-        listing_title: order.listings?.title || 'Item no longer available',
-        listing_image: order.listings?.images?.[0]?.image_url || '',
+        listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
+        listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || '',
         amount: parseFloat(order.amount.toString()),
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
         created_at: order.created_at.toISOString(),
@@ -1249,8 +1249,8 @@ export class OrderController {
         return res.status(400).json({ error: 'Dispute reason is required' });
       }
 
-      const listingTitle = order.listings?.title || 'Your item';
-      const listingImage = order.listings?.images?.[0]?.image_url || null;
+      const listingTitle = order.listings?.title || (order as any).listing_title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || (order as any).listing_image || null;
       const now = new Date();
 
       const updatedOrder = await prisma.orders.update({
@@ -1327,8 +1327,8 @@ export class OrderController {
 
       const seller = order.users_orders_seller_idTousers;
       const sellerPayout = order.seller_payout || calculateSellerPayout(parseFloat(order.amount.toString()));
-      const listingTitle = order.listings?.title || 'Your item';
-      const listingImage = order.listings?.images?.[0]?.image_url || null;
+      const listingTitle = order.listings?.title || (order as any).listing_title || 'Your item';
+      const listingImage = order.listings?.images?.[0]?.image_url || (order as any).listing_image || null;
 
       // ✅ Transfer funds to seller
       if (seller.stripe_connect_id && sellerPayout) {
@@ -1481,8 +1481,8 @@ export class OrderController {
         return {
           id: order.id,
           listing_id: order.listing_id,
-          listing_title: order.listings?.title || 'Item no longer available',
-          listing_image: order.listings?.images?.[0]?.image_url || null,
+          listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
+          listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || null,
           buyer_id: order.buyer_id,
           buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
           buyer_avatar: order.users_orders_buyer_idTousers?.avatar_url || null,
@@ -1556,8 +1556,8 @@ export class OrderController {
       const formattedSales = orders.map((order) => ({
         id: order.id,
         listing_id: order.listing_id,
-        listing_title: order.listings?.title || 'Item no longer available',
-        listing_image: order.listings?.images?.[0]?.image_url || null,
+        listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
+        listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || null,
         buyer_id: order.buyer_id,
         buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
         amount: parseFloat(order.amount.toString()),
