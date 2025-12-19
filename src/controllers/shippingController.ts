@@ -254,26 +254,50 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     }
 
     // ✅ Filter to only include TRACKED services
-    // This is essential for escrow system and buyer protection
+    // This is CRITICAL for escrow system and buyer protection - no untracked allowed!
     const trackedRates = shipment.rates?.filter((rate: any) => {
       // Check if service includes tracking
       const serviceName = (rate.servicelevel?.name || '').toLowerCase();
       const serviceToken = (rate.servicelevel?.token || '').toLowerCase();
+      const provider = (rate.provider || '').toLowerCase();
       
-      // Exclude untracked/economy services
-      const untrackedKeywords = ['untracked', 'economy', 'standard letter', 'postable'];
+      // ❌ STRICTLY EXCLUDE untracked/economy services - these cannot be used
+      const untrackedKeywords = [
+        'untracked', 'economy', 'standard letter', 'postable', 
+        'large letter', '2nd class letter', 'media mail', 'book post',
+        'printed papers', 'royal mail 24', 'royal mail 48' // RM 24/48 basic can be untracked
+      ];
       const isUntracked = untrackedKeywords.some(keyword => 
         serviceName.includes(keyword) || serviceToken.includes(keyword)
       );
       
-      // Include services that explicitly mention tracking or are premium services
-      const trackedKeywords = ['tracked', 'signed', 'express', 'next day', 'courier', 'priority', 'parcel'];
+      if (isUntracked) {
+        console.log(`❌ Excluding untracked service: ${serviceName} (${serviceToken})`);
+        return false;
+      }
+      
+      // ✅ EXPLICITLY include services that guarantee tracking
+      const trackedKeywords = [
+        'tracked', 'signed', 'express', 'next day', 'courier', 'priority', 
+        'parcel', 'guaranteed', 'special delivery', 'recorded', 'parcelforce',
+        'dpd', 'evri', 'yodel', 'ups', 'fedex', 'dhl', 'hermes'
+      ];
       const isTracked = trackedKeywords.some(keyword => 
-        serviceName.includes(keyword) || serviceToken.includes(keyword)
+        serviceName.includes(keyword) || serviceToken.includes(keyword) || provider.includes(keyword)
       );
       
-      // Default to including if not explicitly untracked (most parcel services have tracking)
-      return !isUntracked && (isTracked || rate.estimatedDays !== undefined);
+      // For parcel-sized items, most services have tracking - include if not explicitly untracked
+      // and has delivery estimate (indicates real parcel service vs letter service)
+      const hasDeliveryEstimate = rate.estimatedDays !== undefined && rate.estimatedDays !== null;
+      const isProbablyTracked = hasDeliveryEstimate && parseFloat(rate.amount) >= 2.50; // Very cheap = likely untracked
+      
+      if (isTracked || isProbablyTracked) {
+        console.log(`✅ Including tracked service: ${serviceName} - £${rate.amount}`);
+        return true;
+      }
+      
+      console.log(`⚠️ Excluding uncertain service: ${serviceName} (${serviceToken})`);
+      return false;
     }) || [];
 
     console.log('📋 Tracked rates available:', trackedRates.length);
