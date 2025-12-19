@@ -223,7 +223,7 @@ router.post('/verify-email', async (req: Request, res: Response) => {
         display_name: user.display_name,
       },
       process.env.JWT_SECRET!,
-      { expiresIn: '7d' }
+      { expiresIn: '60d' }
     );
 
     res.json({
@@ -544,7 +544,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
         display_name: user.display_name,
       },
       process.env.JWT_SECRET!,
-      { expiresIn: '7d' }
+      { expiresIn: '60d' }
     );
 
     res.json({
