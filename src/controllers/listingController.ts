@@ -410,11 +410,11 @@ export class ListingController {
         page = '1',
         limit = '20',
         category,
-        subcategory,  // ✅ ADDED
+        subcategory,
         condition,
         minPrice,
         maxPrice,
-        q,  // ✅ Changed from 'search' to match frontend
+        q,
         seller_id,
         // Golf-specific filters
         brand,
@@ -453,7 +453,7 @@ export class ListingController {
 
       // Basic filters
       if (category) where.category = category;
-      if (subcategory) where.subcategory = subcategory;  // ✅ FIXED
+      if (subcategory) where.subcategory = subcategory;
       if (condition) where.condition_overall = { gte: parseInt(condition as string) };
       if (seller_id) where.seller_id = seller_id;
 
@@ -472,9 +472,8 @@ export class ListingController {
         ];
       }
 
-      // Brand filter - ✅ BULLETPROOF: Handle comma-separated duplicates
+      // Brand filter
       if (brand) {
-        // Clean up brand param - might come as "Titleist,Titleist" if duplicated
         let cleanBrand = brand as string;
         if (cleanBrand.includes(',')) {
           cleanBrand = cleanBrand.split(',')[0].trim();
@@ -483,7 +482,7 @@ export class ListingController {
         where.brand = { contains: cleanBrand, mode: 'insensitive' };
       }
 
-      // Model filter - ✅ NEW: Filter by model
+      // Model filter
       if (model) {
         let cleanModel = model as string;
         if (cleanModel.includes(',')) {
@@ -523,7 +522,6 @@ export class ListingController {
       // Iron set makeup (special handling - can be comma-separated)
       if (setMakeup) {
         const irons = (setMakeup as string).split(',');
-        // We need listings that have ALL these irons
         irons.forEach(iron => {
           attributeFilters.push({ key: 'setMakeup', value: iron.trim() });
         });
@@ -533,9 +531,7 @@ export class ListingController {
       if (gender) {
         attributeFilters.push({ key: 'gender', value: gender as string });
       }
-      if (size) {
-        attributeFilters.push({ key: 'size', value: size as string });
-      }
+      // ✅ SIZE VARIANT: Size handled specially below - NOT in attributeFilters
       if (waist) {
         attributeFilters.push({ key: 'waist', value: waist as string });
       }
@@ -547,9 +543,7 @@ export class ListingController {
       }
 
       // Shoe filters
-      if (shoeSize) {
-        attributeFilters.push({ key: 'shoeSize', value: shoeSize as string });
-      }
+      // ✅ SIZE VARIANT: shoeSize handled specially below - NOT in attributeFilters
       if (spikes) {
         attributeFilters.push({ key: 'spikes', value: spikes as string });
       }
@@ -576,13 +570,94 @@ export class ListingController {
 
       console.log('🔧 Attribute filters:', attributeFilters);
 
+      // ✅ SIZE VARIANT: Handle size/shoeSize filtering specially
+      // This matches BOTH single-size listings AND "Various" listings with that size in stock
+      let sizeMatchingListingIds: Set<string> | null = null;
+      
+      if (size || shoeSize) {
+        const sizeKey = shoeSize ? 'shoeSize' : 'size';
+        const sizeValue = (shoeSize || size) as string;
+        
+        console.log(`📏 Size variant filter: ${sizeKey} = ${sizeValue}`);
+        
+        // Get listings with exact size match
+        const exactSizeMatches = await prisma.listing_attributes.findMany({
+          where: {
+            key: sizeKey,
+            value: sizeValue,
+          },
+          select: { listing_id: true },
+        });
+        
+        console.log(`📏 Exact size matches: ${exactSizeMatches.length}`);
+        
+        // Get listings with "Various" size
+        const variousMatches = await prisma.listing_attributes.findMany({
+          where: {
+            key: sizeKey,
+            value: 'Various',
+          },
+          select: { listing_id: true },
+        });
+        
+        console.log(`📏 Various size listings found: ${variousMatches.length}`);
+        
+        // For "Various" listings, check if they have stock for this size
+        const variousListingIds = variousMatches.map(m => m.listing_id);
+        let variousWithStock: string[] = [];
+        
+        if (variousListingIds.length > 0) {
+          // Get the listings to check their specifications
+          const variousListings = await prisma.listings.findMany({
+            where: {
+              id: { in: variousListingIds },
+              status: 'active',
+            },
+            select: { id: true, specifications: true },
+          });
+          
+          variousWithStock = variousListings
+            .filter(listing => {
+              const specs = listing.specifications as any;
+              if (!specs?.sizeQuantities) return false;
+              const qty = parseInt(specs.sizeQuantities[sizeValue]) || 0;
+              return qty > 0;
+            })
+            .map(listing => listing.id);
+          
+          console.log(`📏 Various listings with ${sizeValue} in stock: ${variousWithStock.length}`);
+        }
+        
+        // Combine exact matches + various with stock
+        sizeMatchingListingIds = new Set([
+          ...exactSizeMatches.map(m => m.listing_id),
+          ...variousWithStock,
+        ]);
+        
+        console.log(`📏 Total size matches: ${sizeMatchingListingIds.size}`);
+      }
+
+      // ✅ SIZE VARIANT: Apply size filter to WHERE clause
+      if (sizeMatchingListingIds !== null) {
+        if (sizeMatchingListingIds.size > 0) {
+          where.id = { in: Array.from(sizeMatchingListingIds) };
+        } else {
+          // No size matches found - return empty
+          console.log('📏 No size matches found, returning empty');
+          res.json({
+            listings: [],
+            pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 },
+          });
+          return;
+        }
+      }
+
       // If we have attribute filters, we need to join with listing_attributes
       let listings;
       let total;
 
       if (attributeFilters.length > 0) {
         // Get listing IDs that match ALL attribute filters
-        // For each filter, find listings that have that attribute
         const listingIdSets = await Promise.all(
           attributeFilters.map(async (filter) => {
             const attrs = await prisma.listing_attributes.findMany({
@@ -611,19 +686,25 @@ export class ListingController {
 
         console.log(`✅ Found ${matchingListingIds.size} listings matching attribute filters`);
 
-        // Add listing ID filter to WHERE clause
-        if (matchingListingIds.size > 0) {
+        // If we already have size filter applied, intersect with attribute matches
+        if (where.id?.in) {
+          const sizeIds = new Set(where.id.in);
+          const intersectedIds = [...matchingListingIds].filter(id => sizeIds.has(id));
+          if (intersectedIds.length === 0) {
+            res.json({
+              listings: [],
+              pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 },
+            });
+            return;
+          }
+          where.id = { in: intersectedIds };
+        } else if (matchingListingIds.size > 0) {
           where.id = { in: Array.from(matchingListingIds) };
         } else {
           // No matches, return empty
           res.json({
             listings: [],
-            pagination: {
-              total: 0,
-              page: Number(page),
-              limit: Number(limit),
-              pages: 0,
-            },
+            pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 },
           });
           return;
         }
@@ -679,7 +760,7 @@ export class ListingController {
     }
   }
 
- /**
+  /**
    * Get single listing by ID
    * UPDATED: Now includes favorite_count from favorites table
    */
@@ -701,7 +782,7 @@ export class ListingController {
         return;
       }
 
-     // Get seller info
+      // Get seller info
       const seller = await prisma.users.findUnique({
         where: { id: listing.seller_id },
         select: {
@@ -786,7 +867,7 @@ export class ListingController {
         status,
         parcel_size,
         shipping_cost,
-        quantity,         // ✅ ADDED
+        quantity,
       } = req.body;
 
       // Verify listing exists and belongs to user
@@ -804,7 +885,7 @@ export class ListingController {
         return;
       }
 
-      // ✅ Calculate average condition for clubs
+      // Calculate average condition for clubs
       let finalConditionOverall = condition_overall;
       
       if (category === 'Clubs' && condition_head && condition_shaft && condition_grip) {
@@ -819,7 +900,6 @@ export class ListingController {
         updated_at: new Date(),
       };
 
-      // Only add fields to update if they're provided in the request
       if (title !== undefined) updateData.title = title;
       if (description !== undefined) updateData.description = description;
       if (price !== undefined) updateData.price = parseFloat(price);
@@ -854,7 +934,7 @@ export class ListingController {
         data: updateData,
       });
 
-      // ✅ Update listing_attributes
+      // Update listing_attributes
       if (specifications && typeof specifications === 'object') {
         // Delete existing attributes
         await prisma.listing_attributes.deleteMany({
@@ -865,7 +945,6 @@ export class ListingController {
         const attributeRecords: any[] = [];
         
         Object.entries(specifications).forEach(([key, value]) => {
-          // Special handling for setMakeup array
           if (key === 'setMakeup' && Array.isArray(value)) {
             value.forEach((iron: string) => {
               attributeRecords.push({
@@ -937,7 +1016,7 @@ export class ListingController {
         return;
       }
 
-      // ✅ NEW: Check for active orders before allowing deletion
+      // Check for active orders before allowing deletion
       const ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered'];
       
       const activeOrders = await prisma.orders.findFirst({
