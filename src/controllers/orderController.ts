@@ -189,6 +189,8 @@ export class OrderController {
         listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
         listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || '',
         amount: parseFloat(order.amount.toString()),
+        quantity: order.quantity || 1,  // ✅ SIZE VARIANT
+        selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         created_at: order.created_at.toISOString(),
         paid_at: order.paid_at?.toISOString() || null,
         shipped_at: order.shipped_at?.toISOString() || null,
@@ -290,6 +292,8 @@ export class OrderController {
         listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
         listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || '',
         amount: parseFloat(order.amount.toString()),
+        quantity: order.quantity || 1,  // ✅ SIZE VARIANT
+        selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
         created_at: order.created_at.toISOString(),
         paid_at: order.paid_at?.toISOString() || null,
@@ -408,6 +412,8 @@ export class OrderController {
           images: order.listings.images.map((img: any) => img.image_url),
         } : null,
         amount: parseFloat(order.amount.toString()),
+        quantity: order.quantity || 1,  // ✅ SIZE VARIANT
+        selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
         currency: order.currency,
@@ -1483,6 +1489,8 @@ export class OrderController {
           listing_id: order.listing_id,
           listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
           listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || null,
+          quantity: order.quantity || 1,  // ✅ SIZE VARIANT
+          selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
           buyer_id: order.buyer_id,
           buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
           buyer_avatar: order.users_orders_buyer_idTousers?.avatar_url || null,
@@ -1558,6 +1566,8 @@ export class OrderController {
         listing_id: order.listing_id,
         listing_title: order.listings?.title || (order as any).listing_title || 'Item no longer available',
         listing_image: order.listings?.images?.[0]?.image_url || (order as any).listing_image || null,
+        quantity: order.quantity || 1,  // ✅ SIZE VARIANT
+        selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         buyer_id: order.buyer_id,
         buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
         amount: parseFloat(order.amount.toString()),

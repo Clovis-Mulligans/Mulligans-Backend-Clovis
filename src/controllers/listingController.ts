@@ -6,6 +6,18 @@ import { S3Service } from '../services/s3Service';
 
 const prisma = new PrismaClient();
 
+// ✅ SIZE VARIANT: Helper to calculate total quantity from size quantities
+function calculateTotalFromSizeQuantities(specifications: any): number | null {
+  if (!specifications?.sizeQuantities || typeof specifications.sizeQuantities !== 'object') {
+    return null;
+  }
+  const total = Object.values(specifications.sizeQuantities).reduce(
+    (sum: number, qty: any) => sum + (parseInt(qty) || 0), 
+    0
+  );
+  return total > 0 ? total : null;
+}
+
 export class ListingController {
   /**
    * Get featured listings with personalization for home screen
@@ -211,7 +223,8 @@ export class ListingController {
           is_negotiable: is_negotiable || false,
           parcel_size: parcel_size || null,
           shipping_cost: shipping_cost ? parseFloat(shipping_cost) : null,
-          quantity: quantity ? parseInt(quantity) : 1,  // ✅ ADDED: Default to 1
+          // ✅ SIZE VARIANT: Auto-calculate quantity from sizeQuantities if present
+          quantity: calculateTotalFromSizeQuantities(specifications) || (quantity ? parseInt(quantity) : 1),
           seller_id: userId,
           status: 'active',
           created_at: new Date(),
@@ -827,7 +840,12 @@ export class ListingController {
       if (status !== undefined) updateData.status = status;
       if (parcel_size !== undefined) updateData.parcel_size = parcel_size || null;
       if (shipping_cost !== undefined) updateData.shipping_cost = shipping_cost ? parseFloat(shipping_cost) : null;
-      if (quantity !== undefined) updateData.quantity = parseInt(quantity) || 1;  // ✅ ADDED
+      // ✅ SIZE VARIANT: Auto-calculate quantity from sizeQuantities if present
+      if (specifications?.sizeQuantities) {
+        updateData.quantity = calculateTotalFromSizeQuantities(specifications) || (quantity ? parseInt(quantity) : 1);
+      } else if (quantity !== undefined) {
+        updateData.quantity = parseInt(quantity) || 1;
+      }
 
       console.log('📝 Updating listing with fields:', Object.keys(updateData));
 
