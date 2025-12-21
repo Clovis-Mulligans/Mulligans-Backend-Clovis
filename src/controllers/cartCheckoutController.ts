@@ -364,19 +364,16 @@ export class CartCheckoutController {
       // ✅ QUANTITY: Now includes item_quantities
       const sellerBreakdown = Object.entries(sellerGroups).map(([sellerId, data]) => ({
         seller_id: sellerId,
-        seller_connect_id: data.seller.stripe_connect_id,
-        subtotal: data.subtotal.toFixed(2),
-        shipping_total: data.shippingTotal.toFixed(2),
-        total_quantity: data.totalQuantity,  // ✅ NEW
-        listing_ids: data.items.map((item: any) => item.listing_id),
-        item_quantities: data.items.reduce((acc: any, item: any) => {  // ✅ NEW
-      acc[item.listing_id] = item.quantity;
-      return acc;
-    }, {}),
-    item_sizes: Object.fromEntries(
-      data.items.map((item: any) => [item.listing_id, item.selected_size])
-    ),  // ✅ SIZE VARIANT
-    first_image: data.items[0]?.image_url || null,
+        seller_connect_id: data.seller?.stripe_connect_id || null,
+        subtotal: data.subtotal,
+        shipping_total: data.shippingTotal,
+        // ✅ SIZE VARIANT FIX: Use composite keys (listing_id + size) to avoid overwrites
+        cart_items: data.items.map((item: any) => ({
+          listing_id: item.listing_id,
+          quantity: item.quantity || 1,
+          selected_size: item.selected_size || null,
+        })),
+        first_image: data.items[0]?.image_url || null,
       }));
 
       // ✅ ESCROW: Create Stripe Checkout Session (funds stay in platform account)
@@ -504,10 +501,13 @@ export class CartCheckoutController {
       // ✅ QUANTITY: Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
         for (const sellerData of sellerBreakdown) {
-const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, item_quantities, item_sizes, first_image } = sellerData;
-          for (const listingId of listing_ids) {
-            // ✅ Get quantity for this listing
-            const orderQuantity = listingQuantities[listingId] || item_quantities?.[listingId] || 1;
+const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
+          
+          // ✅ SIZE VARIANT FIX: Iterate over cart_items instead of listing_ids
+          for (const cartItem of (cart_items || [])) {
+            const listingId = cartItem.listing_id;
+            const orderQuantity = cartItem.quantity || 1;
+            const selectedSize = cartItem.selected_size || null;
 
             // Get listing price, shipping cost, stock and image
             const listing = await tx.listings.findUnique({
@@ -531,8 +531,6 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, ite
             const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());
             const listingImage = listing.images[0]?.image_url || null;
             
-            // ✅ SIZE VARIANT: Get selected size from seller breakdown
-            const selectedSize = item_sizes?.[listingId] || null;
             
             // ✅ SIZE VARIANT: Get stock for specific size
             const currentStock = getStockForSize(listing, selectedSize);
