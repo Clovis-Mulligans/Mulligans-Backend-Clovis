@@ -530,24 +530,22 @@ if (color) attributeFilters.color = color;
         where.AND.push(...attributeAndConditions);
       }
 
-      // ✅ SIZE VARIANT: Handle size filtering for both single-size and "Various" listings
+     // ✅ SIZE VARIANT: Handle size filtering for both single-size and "Various" listings
 if (size) {
   const sizeValue = size as string;
   const isClothingOrShoes = category === 'Clothing' || category === 'Shoes';
   
   if (isClothingOrShoes) {
-    // For Clothing/Shoes, check BOTH:
-    // 1. Single size listings (listing_attributes.size = value)
-    // 2. Various listings (specifications.sizeQuantities[size] > 0)
     const sizeSpecKey = category === 'Shoes' ? 'shoeSize' : 'size';
     
     if (!where.AND) {
       where.AND = [];
     }
     
+    // Match EITHER the exact size OR "Various" (which contains multiple sizes)
     where.AND.push({
       OR: [
-        // Option 1: Single size listing - check listing_attributes
+        // Option 1: Single size listing
         {
           listing_attributes: {
             some: {
@@ -556,46 +554,32 @@ if (size) {
             }
           }
         },
-        // Option 2: Various listing - check specifications.sizeQuantities
-        // The sizeQuantities is stored as JSON, we check if the key exists with value > 0
+        // Option 2: Various listing (we'll filter by actual stock in app later)
         {
-          AND: [
-            // Must have "Various" as the size
-            {
-              listing_attributes: {
-                some: {
-                  key: sizeSpecKey,
-                  value: 'Various',
-                }
-              }
-            },
-            // AND specifications must contain sizeQuantities with this size having stock
-            {
-              specifications: {
-                path: ['sizeQuantities', sizeValue],
-                not: null,
-              }
+          listing_attributes: {
+            some: {
+              key: sizeSpecKey,
+              value: 'Various',
             }
-          ]
+          }
         }
       ]
     });
     
-    console.log(`📏 Size filter applied for ${category}: ${sizeValue}`);
- } else {
-  // For other categories (like Gloves), use standard attribute filter
-  if (!where.AND) {
-    where.AND = [];
-  }
-  where.AND.push({
-    listing_attributes: {
-      some: {
-        key: 'size',
-        value: { contains: sizeValue, mode: 'insensitive' },
-      }
+    console.log(`📏 Size filter applied for ${category}: ${sizeValue} (also matching Various)`);
+  } else {
+    if (!where.AND) {
+      where.AND = [];
     }
-  });
-}
+    where.AND.push({
+      listing_attributes: {
+        some: {
+          key: 'size',
+          value: { contains: sizeValue, mode: 'insensitive' },
+        }
+      }
+    });
+  }
 }
 
       const orderBy: any = {};
