@@ -18,6 +18,39 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ✅ Constants for escrow system
 const SHIPPING_DEADLINE_DAYS = 5;
 
+// ✅ SIZE VARIANT: Helper to get stock for a specific size
+function getStockForSize(listing: any, selectedSize: string | null): number {
+  if (!selectedSize) {
+    return listing.quantity || 1;
+  }
+  const specs = listing.specifications as any;
+  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    return specs.sizeQuantities[selectedSize] || 0;
+  }
+  return listing.quantity || 1;
+}
+
+// ✅ SIZE VARIANT: Helper to decrement stock for a specific size
+function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
+  if (!specifications || !selectedSize) return specifications;
+  
+  const specs = { ...specifications };
+  if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    const currentStock = specs.sizeQuantities[selectedSize] || 0;
+    specs.sizeQuantities = {
+      ...specs.sizeQuantities,
+      [selectedSize]: Math.max(0, currentStock - quantity)
+    };
+  }
+  return specs;
+}
+
+// ✅ SIZE VARIANT: Helper to calculate total stock from all sizes
+function getTotalStockFromSizes(specifications: any): number {
+  if (!specifications?.sizeQuantities) return 0;
+  return Object.values(specifications.sizeQuantities).reduce((sum: number, qty: any) => sum + (qty || 0), 0);
+}
+
 interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
@@ -35,7 +68,7 @@ export class StripeController {
    */
   static async createCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id, quantity = 1 } = req.body;  // ✅ Accept quantity
+      const { listing_id, quantity = 1, selected_size } = req.body;  // ✅ SIZE VARIANT
       const userId = req.user?.id || req.user?.sub;
       const orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
@@ -61,12 +94,26 @@ export class StripeController {
         return res.status(400).json({ error: 'This item is no longer available' });
       }
 
-      // ✅ Check stock availability
-      if (listing.quantity < orderQuantity) {
+      // ✅ SIZE VARIANT: Check if size selection is required
+      const specs = listing.specifications as any;
+      const hasSizeVariants = specs?.sizeQuantities && Object.keys(specs.sizeQuantities).length > 0;
+      
+      if (hasSizeVariants && !selected_size) {
+        return res.status(400).json({ 
+          error: 'Size selection required',
+          message: 'Please select a size before purchasing',
+          available_sizes: Object.keys(specs.sizeQuantities).filter(size => specs.sizeQuantities[size] > 0)
+        });
+      }
+
+      // ✅ SIZE VARIANT: Check stock availability for specific size
+      const availableStock = getStockForSize(listing, selected_size);
+      if (availableStock < orderQuantity) {
         return res.status(400).json({ 
           error: 'Not enough stock available',
-          available: listing.quantity,
-          requested: orderQuantity
+          available: availableStock,
+          requested: orderQuantity,
+          selected_size: selected_size || null
         });
       }
 
@@ -179,7 +226,8 @@ export class StripeController {
           buyer_id: userId,
           seller_id: listing.seller_id,
           seller_connect_id: sellerConnectId || '',
-          quantity: orderQuantity.toString(),  // ✅ Include quantity
+          quantity: orderQuantity.toString(),
+          selected_size: selected_size || '',  // ✅ SIZE VARIANT
           unit_price: unitPrice.toFixed(2),    // ✅ Price per item
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
@@ -339,8 +387,9 @@ export class StripeController {
       const buyer_id = metadata.buyer_id;
       const seller_id = metadata.seller_id;
       
-      // ✅ Get quantity from metadata (defaults to 1 for backward compatibility)
+      // ✅ Get quantity and size from metadata
       const orderQuantity = parseInt(metadata.quantity || '1');
+      const selectedSize = metadata.selected_size || null;  // ✅ SIZE VARIANT
 
       // Check if order already exists (prevent duplicate processing)
       const existingOrder = await prisma.orders.findFirst({
@@ -374,12 +423,13 @@ export class StripeController {
 
       const listingImage = listing.images?.[0]?.image_url || null;
       const listingTitle = listing.title || 'your item';
-      const currentStock = listing.quantity;
+      
+      // ✅ SIZE VARIANT: Get stock for specific size
+      const currentStock = getStockForSize(listing, selectedSize);
 
       // ✅ Validate stock (should have been checked at checkout, but double-check)
       if (currentStock < orderQuantity) {
-        console.error(`❌ Insufficient stock! Requested: ${orderQuantity}, Available: ${currentStock}`);
-        // In production, you might want to trigger a refund here
+        console.error(`❌ Insufficient stock! Requested: ${orderQuantity}, Available: ${currentStock}${selectedSize ? ` (size: ${selectedSize})` : ''}`);
         return;
       }
 
@@ -426,11 +476,20 @@ export class StripeController {
       const autoCancelAt = new Date();
       autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
-      // ✅ Calculate new stock level
-      const newStock = currentStock - orderQuantity;
-      const shouldMarkSold = newStock <= 0;
+      // ✅ SIZE VARIANT: Calculate new stock level
+      let newTotalStock: number;
+      let updatedSpecs = listing.specifications;
+      
+      if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
+        updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
+        newTotalStock = getTotalStockFromSizes(updatedSpecs);
+      } else {
+        newTotalStock = listing.quantity - orderQuantity;
+      }
+      
+      const shouldMarkSold = newTotalStock <= 0;
 
-      console.log(`📊 Stock update: ${currentStock} - ${orderQuantity} = ${newStock} (Mark sold: ${shouldMarkSold})`);
+      console.log(`📊 Stock update: ${currentStock} - ${orderQuantity} = ${newTotalStock}${selectedSize ? ` (size: ${selectedSize})` : ''} (Mark sold: ${shouldMarkSold})`);
 
       // ✅ Use transaction to ensure atomicity
       const order = await prisma.$transaction(async (tx) => {
@@ -442,7 +501,8 @@ export class StripeController {
             buyer_id,
             seller_id,
             amount: parseFloat(metadata.total_price),
-            quantity: orderQuantity,  // ✅ Store quantity in order
+            quantity: orderQuantity,
+            selected_size: selectedSize,  // ✅ SIZE VARIANT
             seller_payout: sellerPayout,
             currency: 'GBP',
             stripe_payment_intent_id: session.payment_intent as string,
@@ -455,11 +515,12 @@ export class StripeController {
           },
         });
 
-        // ✅ Update listing stock and status
+        // ✅ SIZE VARIANT: Update listing stock, specifications, and status
         await tx.listings.update({
           where: { id: listing_id },
           data: { 
-            quantity: Math.max(0, newStock),
+            quantity: Math.max(0, newTotalStock),
+            specifications: updatedSpecs ?? undefined,  // ✅ Update size quantities
             status: shouldMarkSold ? 'sold' : 'active',
             updated_at: new Date() 
           },
@@ -478,7 +539,7 @@ export class StripeController {
 
       console.log('✅ Order created:', order.id);
       console.log(`📦 Quantity: ${orderQuantity}`);
-      console.log(`📊 New stock: ${newStock}${shouldMarkSold ? ' (listing marked as SOLD)' : ''}`);
+     console.log(`📊 New stock: ${newTotalStock}${shouldMarkSold ? ' (listing marked as SOLD)' : ''}`);
       console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
       console.log(`🔒 Funds held in escrow. Seller payout: £${sellerPayout.toFixed(2)}`);
       console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
@@ -491,7 +552,8 @@ export class StripeController {
 
       const needsVerification = sellerUser?.stripe_connect_status !== 'active';
 
-      // ✅ Notify buyer - WITH IMAGE and quantity
+      // ✅ Notify buyer - WITH IMAGE, quantity, and size
+      const sizeText = selectedSize ? ` (${selectedSize})` : '';
       const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
       await prisma.notifications.create({
         data: {

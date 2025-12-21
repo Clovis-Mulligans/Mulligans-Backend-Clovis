@@ -171,6 +171,7 @@ model orders {
   listing_title                 String?
   listing_image                 String?
   listing_price                 Decimal?          @db.Decimal(10, 2)
+  selected_size                 String?           // Records the size/flex variant purchased
   users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
   listings                      listings?         @relation(fields: [listing_id], references: [id])
   users_orders_seller_idTousers users             @relation("orders_seller_idTousers", fields: [seller_id], references: [id])
@@ -330,16 +331,17 @@ model support_ticket_images {
 }
 
 model cart_items {
-  id         String   @id
-  user_id    String
-  listing_id String
-  added_at   DateTime @default(now())
-  expires_at DateTime
-  quantity   Int      @default(1)
-  listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
-  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id            String   @id
+  user_id       String
+  listing_id    String
+  added_at      DateTime @default(now())
+  expires_at    DateTime
+  quantity      Int      @default(1)
+  selected_size String?  // Records the size/flex variant in cart
+  listings      listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+  users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  @@unique([user_id, listing_id])
+  @@unique([user_id, listing_id, selected_size])
   @@index([user_id])
   @@index([listing_id])
   @@index([expires_at])

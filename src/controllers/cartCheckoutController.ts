@@ -31,6 +31,39 @@ const PLATFORM_FEE_FIXED = 0.99; // £0.99
 // ✅ Escrow constants
 const SHIPPING_DEADLINE_DAYS = 5;
 
+// ✅ SIZE VARIANT: Helper to get stock for a specific size
+function getStockForSize(listing: any, selectedSize: string | null): number {
+  if (!selectedSize) {
+    return listing.quantity || 1;
+  }
+  const specs = listing.specifications as any;
+  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    return specs.sizeQuantities[selectedSize] || 0;
+  }
+  return listing.quantity || 1;
+}
+
+// ✅ SIZE VARIANT: Helper to decrement stock for a specific size
+function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
+  if (!specifications || !selectedSize) return specifications;
+  
+  const specs = { ...specifications };
+  if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    const currentStock = specs.sizeQuantities[selectedSize] || 0;
+    specs.sizeQuantities = {
+      ...specs.sizeQuantities,
+      [selectedSize]: Math.max(0, currentStock - quantity)
+    };
+  }
+  return specs;
+}
+
+// ✅ SIZE VARIANT: Helper to calculate total stock from all sizes
+function getTotalStockFromSizes(specifications: any): number {
+  if (!specifications?.sizeQuantities) return 0;
+  return Object.values(specifications.sizeQuantities).reduce((sum: number, qty: any) => sum + (qty || 0), 0);
+}
+
 export class CartCheckoutController {
   /**
    * Create Stripe Checkout Session for Cart
@@ -104,20 +137,28 @@ export class CartCheckoutController {
         });
       }
 
-      // ✅ QUANTITY: Validate quantities don't exceed stock
-      const overStockItems = cartItems.filter(
-        (item) => (item.quantity || 1) > item.listings.quantity
-      );
+      // ✅ SIZE VARIANT: Validate quantities against size-specific stock
+      const overStockItems: any[] = [];
+      for (const item of cartItems) {
+        const selectedSize = item.selected_size;
+        const requestedQty = item.quantity || 1;
+        const availableStock = getStockForSize(item.listings, selectedSize);
+        
+        if (requestedQty > availableStock) {
+          overStockItems.push({
+            listing_id: item.listing_id,
+            title: item.listings.title,
+            selected_size: selectedSize,
+            requested: requestedQty,
+            available: availableStock,
+          });
+        }
+      }
 
       if (overStockItems.length > 0) {
         return res.status(400).json({
           error: 'Some items exceed available stock',
-          over_stock: overStockItems.map((item) => ({
-            listing_id: item.listing_id,
-            title: item.listings.title,
-            requested: item.quantity || 1,
-            available: item.listings.quantity,
-          })),
+          over_stock: overStockItems,
         });
       }
 
@@ -170,7 +211,8 @@ export class CartCheckoutController {
           listing_id: item.listing_id,
           title: item.listings.title,
           price,
-          quantity,  // ✅ NEW
+          quantity,
+          selected_size: item.selected_size || null,  // ✅ SIZE VARIANT
           shipping_cost: shippingCost,
           image_url: item.listings.images[0]?.image_url || null,
         });
@@ -328,10 +370,13 @@ export class CartCheckoutController {
         total_quantity: data.totalQuantity,  // ✅ NEW
         listing_ids: data.items.map((item: any) => item.listing_id),
         item_quantities: data.items.reduce((acc: any, item: any) => {  // ✅ NEW
-          acc[item.listing_id] = item.quantity;
-          return acc;
-        }, {}),
-        first_image: data.items[0]?.image_url || null,
+      acc[item.listing_id] = item.quantity;
+      return acc;
+    }, {}),
+    item_sizes: Object.fromEntries(
+      data.items.map((item: any) => [item.listing_id, item.selected_size])
+    ),  // ✅ SIZE VARIANT
+    first_image: data.items[0]?.image_url || null,
       }));
 
       // ✅ ESCROW: Create Stripe Checkout Session (funds stay in platform account)
@@ -460,8 +505,7 @@ export class CartCheckoutController {
       // ✅ QUANTITY: Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
         for (const sellerData of sellerBreakdown) {
-          const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, first_image, item_quantities } = sellerData;
-
+const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, item_quantities, item_sizes, first_image } = sellerData;
           for (const listingId of listing_ids) {
             // ✅ Get quantity for this listing
             const orderQuantity = listingQuantities[listingId] || item_quantities?.[listingId] || 1;
@@ -472,7 +516,8 @@ export class CartCheckoutController {
               select: { 
                 price: true, 
                 shipping_cost: true,
-                quantity: true,  // ✅ NEW: Get current stock
+                quantity: true,
+                specifications: true,  // ✅ SIZE VARIANT: Get specifications for size stock
                 title: true,
                 images: {
                   take: 1,
@@ -486,41 +531,56 @@ export class CartCheckoutController {
             const itemPrice = parseFloat(listing.price.toString());
             const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());
             const listingImage = listing.images[0]?.image_url || null;
-            const currentStock = listing.quantity;
+            
+            // ✅ SIZE VARIANT: Get selected size from seller breakdown
+            const selectedSize = item_sizes?.[listingId] || null;
+            
+            // ✅ SIZE VARIANT: Get stock for specific size
+            const currentStock = getStockForSize(listing, selectedSize);
             
             // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
             const orderShipping = Math.ceil(orderQuantity / 5) * itemShippingCost;
 
             // ✅ Validate stock one more time
             if (currentStock < orderQuantity) {
-              console.error(`❌ Insufficient stock for ${listingId}: requested ${orderQuantity}, available ${currentStock}`);
-              throw new Error(`Insufficient stock for ${listing.title}`);
+              console.error(`❌ Insufficient stock for ${listingId}${selectedSize ? ` size ${selectedSize}` : ''}: requested ${orderQuantity}, available ${currentStock}`);
+              throw new Error(`Insufficient stock for ${listing.title}${selectedSize ? ` (${selectedSize})` : ''}`);
             }
 
-            // ✅ Calculate new stock
-            const newStock = currentStock - orderQuantity;
-            const shouldMarkSold = newStock <= 0;
+            // ✅ SIZE VARIANT: Calculate new stock
+            let newTotalStock: number;
+            let updatedSpecs = listing.specifications;
+            
+            if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
+              updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
+              newTotalStock = getTotalStockFromSizes(updatedSpecs);
+            } else {
+              newTotalStock = listing.quantity - orderQuantity;
+            }
+            
+            const shouldMarkSold = newTotalStock <= 0;
 
             // Add to email items list
+            const sizeText = selectedSize ? ` (${selectedSize})` : '';
             orderItems.push({
-              name: listing.title,
-              price: `£${(itemPrice * orderQuantity).toFixed(2)}`,  // ✅ Total for quantity
-              quantity: orderQuantity,  // ✅ NEW
+              name: `${listing.title}${sizeText}`,
+              price: `£${(itemPrice * orderQuantity).toFixed(2)}`,
+              quantity: orderQuantity,
             });
 
             // ✅ ESCROW: Create order - seller_payout stored but NOT transferred yet
-            // ✅ QUANTITY: Now includes quantity and calculates totals
+            // ✅ SIZE VARIANT: Now includes selected_size
             const order = await tx.orders.create({
               data: {
                 id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 listing_id: listingId,
                 buyer_id: buyerId,
                 seller_id: seller_id,
-                amount: itemPrice * orderQuantity,  // ✅ Total for quantity
-                quantity: orderQuantity,  // ✅ NEW: Store quantity
-                shipping_cost: orderShipping,  // ✅ Uses ceil(qty/5) formula
-                seller_payout: (itemPrice * orderQuantity) + orderShipping, // ✅ Total payout
-                // ✅ NEW: Listing snapshot fields (preserved even if listing deleted)
+                amount: itemPrice * orderQuantity,
+                quantity: orderQuantity,
+                selected_size: selectedSize,  // ✅ SIZE VARIANT: Store selected size
+                shipping_cost: orderShipping,
+                seller_payout: (itemPrice * orderQuantity) + orderShipping,
                 listing_title: listing.title,
                 listing_image: listingImage,
                 listing_price: itemPrice,
@@ -528,7 +588,7 @@ export class CartCheckoutController {
                 stripe_payment_intent_id: session.payment_intent as string,
                 status: 'to_ship',
                 paid_at: new Date(),
-                auto_cancel_at: autoCancelAt, // ✅ 5 days to ship
+                auto_cancel_at: autoCancelAt,
                 shipping_address: shippingAddressJson ?? Prisma.JsonNull,
                 updated_at: new Date(),
               },
@@ -540,17 +600,18 @@ export class CartCheckoutController {
             console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
             console.log(`🔒 Seller payout stored: £${((itemPrice * orderQuantity) + orderShipping).toFixed(2)} (held in escrow)`);
 
-            // ✅ QUANTITY: Update listing stock and status
+            // ✅ SIZE VARIANT: Update listing stock, specifications, and status
             await tx.listings.update({
               where: { id: listingId },
               data: { 
-                quantity: Math.max(0, newStock),
-                status: shouldMarkSold ? 'sold' : 'active',  // ✅ Only mark sold if out of stock
+                quantity: Math.max(0, newTotalStock),
+                specifications: updatedSpecs ?? undefined,  // ✅ Update size quantities
+                status: shouldMarkSold ? 'sold' : 'active',
                 updated_at: new Date() 
               },
             });
 
-            console.log(`📊 Stock updated: ${currentStock} → ${newStock}${shouldMarkSold ? ' (SOLD OUT)' : ''}`);
+            console.log(`📊 Stock updated: ${currentStock} → ${newTotalStock}${selectedSize ? ` (size: ${selectedSize})` : ''}${shouldMarkSold ? ' (SOLD OUT)' : ''}`);
           }
         }
 

@@ -1,5 +1,5 @@
 // src/controllers/cartController.ts
-// ✅ UPDATED: Added quantity support for multi-item purchases
+// ✅ UPDATED: Added size variant support (selected_size) for clothing, shoes, grips, and shaft flex
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -14,10 +14,51 @@ const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 const BUYER_PROTECTION_PERCENTAGE = 0.07; // 7%
 const BUYER_PROTECTION_FIXED = 0.99; // £0.99
 
+// ============================================
+// HELPER: Get available stock for a specific size
+// ============================================
+function getStockForSize(listing: any, selectedSize: string | null): number {
+  // If no size selected, return total quantity
+  if (!selectedSize) {
+    return listing.quantity || 1;
+  }
+
+  // Check if listing has size quantities in specifications
+  const specs = listing.specifications as any;
+  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    return specs.sizeQuantities[selectedSize] || 0;
+  }
+
+  // Fallback: if no sizeQuantities, assume total quantity applies
+  return listing.quantity || 1;
+}
+
+// ============================================
+// HELPER: Check if listing has size variants
+// ============================================
+function hasVariants(listing: any): boolean {
+  const specs = listing.specifications as any;
+  return specs?.sizeQuantities && 
+         typeof specs.sizeQuantities === 'object' && 
+         Object.keys(specs.sizeQuantities).length > 0;
+}
+
+// ============================================
+// HELPER: Get all available sizes with stock > 0
+// ============================================
+function getAvailableSizes(listing: any): { size: string; quantity: number }[] {
+  const specs = listing.specifications as any;
+  if (!specs?.sizeQuantities) return [];
+  
+  return Object.entries(specs.sizeQuantities)
+    .filter(([_, qty]) => (qty as number) > 0)
+    .map(([size, qty]) => ({ size, quantity: qty as number }));
+}
+
 export const CartController = {
   // ============================================
   // GET CART - Returns cart grouped by seller
-  // ✅ UPDATED: Now includes quantity and available_stock
+  // ✅ UPDATED: Now includes selected_size
   // ============================================
   async getCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -63,10 +104,13 @@ export const CartController = {
       const itemsWithAvailability = await Promise.all(
         cartItems.map(async (item) => {
           const listing = item.listings;
-          const isAvailable = listing.status === 'active' && listing.quantity > 0;
-          const availableStock = listing.quantity;
+          const selectedSize = item.selected_size;
           
-          // ✅ Cap cart quantity to available stock
+          // ✅ Get stock for specific size (or total if no size)
+          const availableStock = getStockForSize(listing, selectedSize);
+          const isAvailable = listing.status === 'active' && availableStock > 0;
+          
+          // ✅ Cap cart quantity to available stock for this size
           const validQuantity = Math.min(item.quantity, availableStock);
           
           // If cart quantity exceeds stock, update it
@@ -77,10 +121,11 @@ export const CartController = {
             });
           }
           
-          // Count how many other users have this item in their cart
+          // Count how many other users have this item+size in their cart
           const otherCartsCount = await prisma.cart_items.count({
             where: {
               listing_id: item.listing_id,
+              selected_size: selectedSize,
               user_id: { not: userId },
               expires_at: { gt: new Date() }
             }
@@ -124,7 +169,6 @@ export const CartController = {
         // ✅ Calculate line total based on quantity
         const lineTotal = price * quantity;
         // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
-        // ceil(qty / 5) × base_shipping = e.g., 1-5 items = 1x, 6-10 = 2x, etc.
         const lineShipping = Math.ceil(quantity / 5) * shippingCost;
         
         sellerGroups[sellerId].items.push({
@@ -132,9 +176,10 @@ export const CartController = {
           listing_id: item.listing_id,
           title: item.listings.title,
           price: price,
-          quantity: quantity,  // ✅ NEW: Include quantity
-          line_total: lineTotal,  // ✅ NEW: price * quantity
-          available_stock: item.available_stock,  // ✅ NEW: Available stock
+          quantity: quantity,
+          selected_size: item.selected_size,  // ✅ NEW: Include selected size
+          line_total: lineTotal,
+          available_stock: item.available_stock,
           shipping_cost: shippingCost,
           image_url: item.listings.images[0]?.image_url || null,
           parcel_size: item.listings.parcel_size,
@@ -146,7 +191,6 @@ export const CartController = {
         
         sellerGroups[sellerId].subtotal += lineTotal;
         // ✅ SHIPPING: Take MAX shipping per seller (not sum)
-        // Multiple listings from same seller = MAX shipping cost
         sellerGroups[sellerId].shipping_cost = Math.max(sellerGroups[sellerId].shipping_cost, lineShipping);
       }
 
@@ -167,6 +211,7 @@ export const CartController = {
         .filter(item => item.in_other_carts > 0)
         .map(item => ({
           listing_id: item.listing_id,
+          selected_size: item.selected_size,
           message: `This item is in ${item.in_other_carts} other cart${item.in_other_carts > 1 ? 's' : ''}`
         }));
 
@@ -176,7 +221,10 @@ export const CartController = {
         .map(item => ({
           listing_id: item.listing_id,
           title: item.listings.title,
-          message: 'This item is no longer available'
+          selected_size: item.selected_size,
+          message: item.selected_size 
+            ? `Size ${item.selected_size} is no longer available`
+            : 'This item is no longer available'
         }));
 
       res.json({
@@ -186,7 +234,7 @@ export const CartController = {
           shipping_total: Number(shippingTotal.toFixed(2)),
           buyer_protection_fee: Number(buyerProtectionFee.toFixed(2)),
           grand_total: Number(grandTotal.toFixed(2)),
-          item_count: totalItemCount  // ✅ Now counts total quantity, not just line items
+          item_count: totalItemCount
         },
         warnings,
         unavailable_items: unavailableItems
@@ -200,7 +248,7 @@ export const CartController = {
 
   // ============================================
   // ADD TO CART
-  // ✅ UPDATED: Accepts quantity, adds to existing if already in cart
+  // ✅ UPDATED: Accepts selected_size for variants
   // ============================================
   async addToCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -209,7 +257,7 @@ export const CartController = {
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      const { listing_id, quantity = 1 } = req.body;
+      const { listing_id, quantity = 1, selected_size = null } = req.body;
       const requestedQty = Math.max(1, parseInt(quantity) || 1);
 
       if (!listing_id) {
@@ -234,8 +282,26 @@ export const CartController = {
         return res.status(400).json({ error: 'This item is no longer available' });
       }
 
-      if (listing.quantity < 1) {
-        return res.status(400).json({ error: 'This item is out of stock' });
+      // ✅ Check if this listing requires a size selection
+      const listingHasVariants = hasVariants(listing);
+      if (listingHasVariants && !selected_size) {
+        const availableSizes = getAvailableSizes(listing);
+        return res.status(400).json({ 
+          error: 'Please select a size',
+          requires_size: true,
+          available_sizes: availableSizes
+        });
+      }
+
+      // ✅ Get stock for the specific size (or total if no variants)
+      const availableStock = getStockForSize(listing, selected_size);
+
+      if (availableStock < 1) {
+        return res.status(400).json({ 
+          error: selected_size 
+            ? `Size ${selected_size} is out of stock` 
+            : 'This item is out of stock'
+        });
       }
 
       // Can't add your own listing to cart
@@ -243,13 +309,13 @@ export const CartController = {
         return res.status(400).json({ error: 'You cannot add your own listing to cart' });
       }
 
-      // Check if already in cart
-      const existingCartItem = await prisma.cart_items.findUnique({
+      // ✅ Check if already in cart (with same size)
+      // Since selected_size can be null, we need to handle this carefully
+      const existingCartItem = await prisma.cart_items.findFirst({
         where: {
-          user_id_listing_id: {
-            user_id: userId,
-            listing_id: listing_id
-          }
+          user_id: userId,
+          listing_id: listing_id,
+          selected_size: selected_size  // null matches null
         }
       });
 
@@ -257,16 +323,18 @@ export const CartController = {
         // ✅ ADDITIVE: Add requested qty to existing qty
         const newQuantity = existingCartItem.quantity + requestedQty;
         
-        // ✅ Cap at available stock
-        const cappedQuantity = Math.min(newQuantity, listing.quantity);
+        // ✅ Cap at available stock for this size
+        const cappedQuantity = Math.min(newQuantity, availableStock);
         
         if (cappedQuantity === existingCartItem.quantity) {
           // Already at max stock
           return res.status(400).json({ 
             error: 'Maximum quantity reached',
-            message: `Only ${listing.quantity} available`,
+            message: selected_size 
+              ? `Only ${availableStock} available in size ${selected_size}`
+              : `Only ${availableStock} available`,
             current_quantity: existingCartItem.quantity,
-            available_stock: listing.quantity
+            available_stock: availableStock
           });
         }
         
@@ -291,13 +359,14 @@ export const CartController = {
           message: `Quantity updated to ${cappedQuantity}`,
           cart_item: updatedItem,
           quantity: cappedQuantity,
-          available_stock: listing.quantity,
+          selected_size: selected_size,
+          available_stock: availableStock,
           cart_count: cartCount
         });
       }
 
       // ✅ New cart item - cap at available stock
-      const cappedQuantity = Math.min(requestedQty, listing.quantity);
+      const cappedQuantity = Math.min(requestedQty, availableStock);
 
       // Add to cart with 72-hour expiry
       const cartItem = await prisma.cart_items.create({
@@ -306,6 +375,7 @@ export const CartController = {
           user_id: userId,
           listing_id: listing_id,
           quantity: cappedQuantity,
+          selected_size: selected_size,  // ✅ NEW: Store selected size
           expires_at: new Date(Date.now() + CART_EXPIRY_MS)
         }
       });
@@ -323,7 +393,8 @@ export const CartController = {
         message: 'Item added to cart',
         cart_item: cartItem,
         quantity: cappedQuantity,
-        available_stock: listing.quantity,
+        selected_size: selected_size,
+        available_stock: availableStock,
         cart_count: cartCount
       });
 
@@ -335,7 +406,7 @@ export const CartController = {
 
   // ============================================
   // UPDATE CART ITEM QUANTITY
-  // ✅ NEW: Set specific quantity for a cart item
+  // ✅ UPDATED: Works with size variants
   // ============================================
   async updateCartItemQuantity(req: AuthenticatedRequest, res: Response) {
     try {
@@ -345,7 +416,7 @@ export const CartController = {
       }
 
       const { listing_id } = req.params;
-      const { quantity } = req.body;
+      const { quantity, selected_size = null } = req.body;
       const requestedQty = parseInt(quantity);
 
       if (!listing_id) {
@@ -361,7 +432,8 @@ export const CartController = {
         await prisma.cart_items.deleteMany({
           where: {
             user_id: userId,
-            listing_id: listing_id
+            listing_id: listing_id,
+            selected_size: selected_size
           }
         });
 
@@ -392,16 +464,18 @@ export const CartController = {
         return res.status(400).json({ error: 'This item is no longer available' });
       }
 
-      // Cap at available stock
-      const cappedQuantity = Math.min(requestedQty, listing.quantity);
+      // ✅ Get stock for specific size
+      const availableStock = getStockForSize(listing, selected_size);
 
-      // Find and update cart item
-      const cartItem = await prisma.cart_items.findUnique({
+      // Cap at available stock
+      const cappedQuantity = Math.min(requestedQty, availableStock);
+
+      // ✅ Find cart item with matching size
+      const cartItem = await prisma.cart_items.findFirst({
         where: {
-          user_id_listing_id: {
-            user_id: userId,
-            listing_id: listing_id
-          }
+          user_id: userId,
+          listing_id: listing_id,
+          selected_size: selected_size
         }
       });
 
@@ -430,8 +504,9 @@ export const CartController = {
         message: 'Quantity updated',
         cart_item: updatedItem,
         quantity: cappedQuantity,
-        available_stock: listing.quantity,
-        was_capped: requestedQty > listing.quantity,
+        selected_size: selected_size,
+        available_stock: availableStock,
+        was_capped: requestedQty > availableStock,
         cart_count: cartCount
       });
 
@@ -443,6 +518,7 @@ export const CartController = {
 
   // ============================================
   // REMOVE FROM CART
+  // ✅ UPDATED: Accepts selected_size to remove specific variant
   // ============================================
   async removeFromCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -452,16 +528,19 @@ export const CartController = {
       }
 
       const { listing_id } = req.params;
+      // ✅ Get selected_size from query params (for DELETE requests)
+      const selected_size = req.query.selected_size as string | undefined || null;
 
       if (!listing_id) {
         return res.status(400).json({ error: 'Listing ID is required' });
       }
 
-      // Delete the cart item
+      // ✅ Delete the specific cart item (matching size)
       const deleted = await prisma.cart_items.deleteMany({
         where: {
           user_id: userId,
-          listing_id: listing_id
+          listing_id: listing_id,
+          selected_size: selected_size || null
         }
       });
 
@@ -516,7 +595,6 @@ export const CartController = {
 
   // ============================================
   // GET CART COUNT (for badge)
-  // ✅ UPDATED: Returns sum of quantities, not just item count
   // ============================================
   async getCartCount(req: AuthenticatedRequest, res: Response) {
     try {
@@ -553,7 +631,7 @@ export const CartController = {
 
   // ============================================
   // VALIDATE CART (before checkout)
-  // ✅ UPDATED: Validates quantities against stock
+  // ✅ UPDATED: Validates quantities per size
   // ============================================
   async validateCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -576,6 +654,7 @@ export const CartController = {
               status: true,
               price: true,
               quantity: true,
+              specifications: true,
               seller_id: true
             }
           }
@@ -596,30 +675,40 @@ export const CartController = {
 
       for (const item of cartItems) {
         const listing = item.listings;
+        const selectedSize = item.selected_size;
         
-        if (listing.status !== 'active' || listing.quantity < 1) {
-          // Item no longer available
+        // ✅ Get stock for this specific size
+        const availableStock = getStockForSize(listing, selectedSize);
+        
+        if (listing.status !== 'active' || availableStock < 1) {
+          // Item/size no longer available
           unavailable.push({
             listing_id: item.listing_id,
             title: listing.title,
-            reason: 'Item is no longer available'
+            selected_size: selectedSize,
+            reason: selectedSize 
+              ? `Size ${selectedSize} is no longer available`
+              : 'Item is no longer available'
           });
           
           // Remove from cart
           await prisma.cart_items.delete({
             where: { id: item.id }
           });
-        } else if (item.quantity > listing.quantity) {
-          // ✅ Quantity exceeds stock - adjust it
+        } else if (item.quantity > availableStock) {
+          // ✅ Quantity exceeds stock for this size - adjust it
           const oldQty = item.quantity;
-          const newQty = listing.quantity;
+          const newQty = availableStock;
           
           quantityAdjusted.push({
             listing_id: item.listing_id,
             title: listing.title,
+            selected_size: selectedSize,
             old_quantity: oldQty,
             new_quantity: newQty,
-            reason: `Only ${newQty} available`
+            reason: selectedSize
+              ? `Only ${newQty} available in size ${selectedSize}`
+              : `Only ${newQty} available`
           });
           
           // Update cart quantity
@@ -633,6 +722,7 @@ export const CartController = {
             title: listing.title,
             price: listing.price,
             quantity: newQty,
+            selected_size: selectedSize,
             seller_id: listing.seller_id
           });
         } else {
@@ -641,6 +731,7 @@ export const CartController = {
             title: listing.title,
             price: listing.price,
             quantity: item.quantity,
+            selected_size: selectedSize,
             seller_id: listing.seller_id
           });
         }
@@ -672,7 +763,7 @@ export const CartController = {
 
   // ============================================
   // CHECK IF ITEM IS IN CART
-  // ✅ UPDATED: Returns quantity in cart
+  // ✅ UPDATED: Returns info per size variant
   // ============================================
   async isInCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -682,13 +773,14 @@ export const CartController = {
       }
 
       const { listing_id } = req.params;
+      const selected_size = req.query.selected_size as string | undefined || null;
 
-      const cartItem = await prisma.cart_items.findUnique({
+      // ✅ Find cart item with matching size
+      const cartItem = await prisma.cart_items.findFirst({
         where: {
-          user_id_listing_id: {
-            user_id: userId,
-            listing_id: listing_id
-          }
+          user_id: userId,
+          listing_id: listing_id,
+          selected_size: selected_size || null
         }
       });
 
@@ -697,6 +789,7 @@ export const CartController = {
       res.json({ 
         in_cart: isInCart,
         quantity: isInCart ? cartItem?.quantity : 0,
+        selected_size: isInCart ? cartItem?.selected_size : null,
         expires_at: isInCart ? cartItem?.expires_at : null
       });
 
@@ -708,14 +801,14 @@ export const CartController = {
 
   // ============================================
   // GET LISTING CART INFO (for listing detail)
-  // ✅ UPDATED: Returns user's quantity in cart
+  // ✅ UPDATED: Returns info for all sizes in cart
   // ============================================
   async getListingCartInfo(req: AuthenticatedRequest, res: Response) {
     try {
       const { listing_id } = req.params;
       const userId = req.user?.id;
 
-      // Count how many users have this in their cart
+      // Count how many users have this in their cart (any size)
       const inCartsCount = await prisma.cart_items.count({
         where: {
           listing_id: listing_id,
@@ -723,27 +816,32 @@ export const CartController = {
         }
       });
 
-      // Check if current user has it in cart and get quantity
-      let userHasInCart = false;
-      let userCartQuantity = 0;
+      // ✅ Get all cart items for this listing by current user
+      let userCartItems: { selected_size: string | null; quantity: number }[] = [];
+      let totalQuantityInCart = 0;
       
       if (userId) {
-        const userCartItem = await prisma.cart_items.findUnique({
+        const userItems = await prisma.cart_items.findMany({
           where: {
-            user_id_listing_id: {
-              user_id: userId,
-              listing_id: listing_id
-            }
+            user_id: userId,
+            listing_id: listing_id,
+            expires_at: { gt: new Date() }
+          },
+          select: {
+            selected_size: true,
+            quantity: true
           }
         });
-        userHasInCart = userCartItem !== null && userCartItem.expires_at > new Date();
-        userCartQuantity = userHasInCart ? userCartItem!.quantity : 0;
+        
+        userCartItems = userItems;
+        totalQuantityInCart = userItems.reduce((sum, item) => sum + item.quantity, 0);
       }
 
       res.json({
         in_carts_count: inCartsCount,
-        user_has_in_cart: userHasInCart,
-        user_cart_quantity: userCartQuantity  // ✅ NEW
+        user_has_in_cart: totalQuantityInCart > 0,
+        user_cart_quantity: totalQuantityInCart,  // Total across all sizes
+        user_cart_items: userCartItems  // ✅ NEW: Breakdown by size
       });
 
     } catch (error) {

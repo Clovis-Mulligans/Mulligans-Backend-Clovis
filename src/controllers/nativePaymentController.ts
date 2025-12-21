@@ -16,6 +16,39 @@ const PLATFORM_FEE_PERCENT = 0.07; // 7%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
 const SHIPPING_DEADLINE_DAYS = 5;
 
+// ✅ SIZE VARIANT: Helper to get stock for a specific size
+function getStockForSize(listing: any, selectedSize: string | null): number {
+  if (!selectedSize) {
+    return listing.quantity || 1;
+  }
+  const specs = listing.specifications as any;
+  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    return specs.sizeQuantities[selectedSize] || 0;
+  }
+  return listing.quantity || 1;
+}
+
+// ✅ SIZE VARIANT: Helper to decrement stock for a specific size
+function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
+  if (!specifications || !selectedSize) return specifications;
+  
+  const specs = { ...specifications };
+  if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    const currentStock = specs.sizeQuantities[selectedSize] || 0;
+    specs.sizeQuantities = {
+      ...specs.sizeQuantities,
+      [selectedSize]: Math.max(0, currentStock - quantity)
+    };
+  }
+  return specs;
+}
+
+// ✅ SIZE VARIANT: Helper to calculate total stock from all sizes
+function getTotalStockFromSizes(specifications: any): number {
+  if (!specifications?.sizeQuantities) return 0;
+  return Object.values(specifications.sizeQuantities).reduce((sum: number, qty: any) => sum + (qty || 0), 0);
+}
+
 interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
@@ -31,7 +64,7 @@ export class NativePaymentController {
    */
   static async createSingleItemPaymentIntent(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id, quantity = 1 } = req.body;
+      const { listing_id, quantity = 1, selected_size } = req.body;  // ✅ SIZE VARIANT
       const userId = req.user?.id || req.user?.sub;
       const orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
@@ -66,11 +99,26 @@ export class NativePaymentController {
         return res.status(400).json({ error: 'This item is no longer available' });
       }
 
-      if (listing.quantity < orderQuantity) {
+      // ✅ SIZE VARIANT: Check if size selection is required
+      const specs = listing.specifications as any;
+      const hasSizeVariants = specs?.sizeQuantities && Object.keys(specs.sizeQuantities).length > 0;
+      
+      if (hasSizeVariants && !selected_size) {
+        return res.status(400).json({ 
+          error: 'Size selection required',
+          message: 'Please select a size before purchasing',
+          available_sizes: Object.keys(specs.sizeQuantities).filter(size => specs.sizeQuantities[size] > 0)
+        });
+      }
+
+      // ✅ SIZE VARIANT: Validate stock for specific size
+      const availableStock = getStockForSize(listing, selected_size);
+      if (availableStock < orderQuantity) {
         return res.status(400).json({
           error: 'Not enough stock available',
-          available: listing.quantity,
+          available: availableStock,
           requested: orderQuantity,
+          selected_size: selected_size || null,
         });
       }
 
@@ -146,6 +194,7 @@ export class NativePaymentController {
           seller_id: listing.seller_id,
           seller_connect_id: sellerConnectId || '',
           quantity: orderQuantity.toString(),
+          selected_size: selected_size || '',  // ✅ SIZE VARIANT
           unit_price: unitPrice.toFixed(2),
           item_total: itemTotal.toFixed(2),
           shipping_cost: shippingTotal.toFixed(2),
@@ -430,6 +479,7 @@ export class NativePaymentController {
     const buyerId = metadata.buyer_id;
     const sellerId = metadata.seller_id;
     const orderQuantity = parseInt(metadata.quantity || '1');
+    const selectedSize = metadata.selected_size || null;  // ✅ SIZE VARIANT
 
     const listing = await prisma.listings.findUnique({
       where: { id: listingId },
@@ -440,13 +490,26 @@ export class NativePaymentController {
       throw new Error('Listing not found');
     }
 
-    const newStock = listing.quantity - orderQuantity;
-    const shouldMarkSold = newStock <= 0;
+    // ✅ SIZE VARIANT: Get stock for specific size
+    const currentStock = getStockForSize(listing, selectedSize);
+    
+    // ✅ SIZE VARIANT: Calculate new stock
+    let newTotalStock: number;
+    let updatedSpecs = listing.specifications;
+    
+    if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
+      updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
+      newTotalStock = getTotalStockFromSizes(updatedSpecs);
+    } else {
+      newTotalStock = listing.quantity - orderQuantity;
+    }
+    
+    const shouldMarkSold = newTotalStock <= 0;
     const listingImage = listing.images?.[0]?.image_url || null;
     const itemPrice = parseFloat(listing.price.toString());
 
     const order = await prisma.$transaction(async (tx) => {
-      // Create order
+      // Create order with selected_size
       const createdOrder = await tx.orders.create({
         data: {
           id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -455,9 +518,9 @@ export class NativePaymentController {
           seller_id: sellerId,
           amount: parseFloat(metadata.item_total),
           quantity: orderQuantity,
+          selected_size: selectedSize,  // ✅ SIZE VARIANT
           shipping_cost: parseFloat(metadata.shipping_cost || '0'),
           seller_payout: parseFloat(metadata.seller_payout),
-          // ✅ NEW: Listing snapshot fields (preserved even if listing deleted)
           listing_title: listing.title,
           listing_image: listingImage,
           listing_price: itemPrice,
@@ -471,13 +534,14 @@ export class NativePaymentController {
         },
       });
 
-      console.log('📸 Listing snapshot saved:', listing.title, '@ £' + itemPrice);
+      console.log('📸 Listing snapshot saved:', listing.title, '@ £' + itemPrice, selectedSize ? `(${selectedSize})` : '');
 
-      // Update stock
+      // ✅ SIZE VARIANT: Update stock and specifications
       await tx.listings.update({
         where: { id: listingId },
         data: {
-          quantity: Math.max(0, newStock),
+          quantity: Math.max(0, newTotalStock),
+          specifications: updatedSpecs ?? undefined,
           status: shouldMarkSold ? 'sold' : 'active',
           updated_at: new Date(),
         },
@@ -492,6 +556,7 @@ export class NativePaymentController {
     });
 
     // Create notifications
+    const sizeText = selectedSize ? ` (${selectedSize})` : '';
     const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
 
     await prisma.notifications.create({
@@ -500,7 +565,7 @@ export class NativePaymentController {
         user_id: buyerId,
         type: 'order',
         title: 'Payment Successful! 🎉',
-        message: `Your order for "${listing.title}"${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+        message: `Your order for "${listing.title}"${sizeText}${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
         image_url: listingImage,
         related_id: order.id,
       },
