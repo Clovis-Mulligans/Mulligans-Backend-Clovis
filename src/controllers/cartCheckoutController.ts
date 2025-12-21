@@ -472,11 +472,10 @@ export class CartCheckoutController {
 
       console.log('📦 Shipping address JSON:', shippingAddressJson);
 
-      // Check if orders already exist (idempotency)
+      // Check if orders already exist (idempotency) - use payment_intent to check THIS session only
       const existingOrders = await prisma.orders.findMany({
         where: {
-          listing_id: { in: listingIds },
-          buyer_id: buyerId,
+          stripe_payment_intent_id: session.payment_intent as string,
         },
       });
 
