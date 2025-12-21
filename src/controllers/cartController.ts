@@ -799,54 +799,65 @@ export const CartController = {
     }
   },
 
-  // ============================================
-  // GET LISTING CART INFO (for listing detail)
-  // ✅ UPDATED: Returns info for all sizes in cart
-  // ============================================
-  async getListingCartInfo(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { listing_id } = req.params;
-      const userId = req.user?.id;
+ // ============================================
+// GET LISTING CART INFO (for listing detail)
+// ✅ UPDATED: Optionally filter by selected_size
+// ============================================
+async getListingCartInfo(req: AuthenticatedRequest, res: Response) {
+  try {
+    const { listing_id } = req.params;
+    const selected_size = req.query.selected_size as string | undefined;  // ✅ NEW: Get size from query
+    const userId = req.user?.id;
 
-      // Count how many users have this in their cart (any size)
-      const inCartsCount = await prisma.cart_items.count({
-        where: {
-          listing_id: listing_id,
-          expires_at: { gt: new Date() }
+    // Count how many users have this in their cart (any size)
+    const inCartsCount = await prisma.cart_items.count({
+      where: {
+        listing_id: listing_id,
+        expires_at: { gt: new Date() }
+      }
+    });
+
+    // ✅ Get cart items for this listing by current user
+    let userHasInCart = false;
+    let userCartQuantity = 0;
+    let userCartItems: { selected_size: string | null; quantity: number }[] = [];
+    
+    if (userId) {
+      // ✅ If selected_size provided, only check for that specific size
+      const whereClause: any = {
+        user_id: userId,
+        listing_id: listing_id,
+        expires_at: { gt: new Date() }
+      };
+      
+      // ✅ Only add size filter if a size was specified
+      if (selected_size !== undefined) {
+        whereClause.selected_size = selected_size || null;
+      }
+      
+      const userItems = await prisma.cart_items.findMany({
+        where: whereClause,
+        select: {
+          selected_size: true,
+          quantity: true
         }
       });
-
-      // ✅ Get all cart items for this listing by current user
-      let userCartItems: { selected_size: string | null; quantity: number }[] = [];
-      let totalQuantityInCart = 0;
       
-      if (userId) {
-        const userItems = await prisma.cart_items.findMany({
-          where: {
-            user_id: userId,
-            listing_id: listing_id,
-            expires_at: { gt: new Date() }
-          },
-          select: {
-            selected_size: true,
-            quantity: true
-          }
-        });
-        
-        userCartItems = userItems;
-        totalQuantityInCart = userItems.reduce((sum, item) => sum + item.quantity, 0);
-      }
-
-      res.json({
-        in_carts_count: inCartsCount,
-        user_has_in_cart: totalQuantityInCart > 0,
-        user_cart_quantity: totalQuantityInCart,  // Total across all sizes
-        user_cart_items: userCartItems  // ✅ NEW: Breakdown by size
-      });
-
-    } catch (error) {
-      console.error('Failed to get listing cart info:', error);
-      res.status(500).json({ error: 'Failed to get listing cart info' });
+      userCartItems = userItems;
+      userCartQuantity = userItems.reduce((sum, item) => sum + item.quantity, 0);
+      userHasInCart = userCartQuantity > 0;
     }
+
+    res.json({
+      in_carts_count: inCartsCount,
+      user_has_in_cart: userHasInCart,
+      user_cart_quantity: userCartQuantity,
+      user_cart_items: userCartItems
+    });
+
+  } catch (error) {
+    console.error('Failed to get listing cart info:', error);
+    res.status(500).json({ error: 'Failed to get listing cart info' });
   }
+}
 };
