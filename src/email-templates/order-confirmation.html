@@ -11,61 +11,78 @@
     <tr>
       <td align="center" style="padding: 40px 20px;">
         <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+          <!-- Logo -->
           <tr>
             <td align="center" style="padding: 30px 40px; background-color: #ffffff;">
               <img src="https://mulligans-golf-images-mvp.s3.eu-west-2.amazonaws.com/email-assets/mulligans-logo.png" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
             </td>
           </tr>
+          <!-- Green Bar -->
           <tr>
             <td style="height: 4px; background-color: #1DC690;"></td>
           </tr>
+          <!-- Content -->
           <tr>
             <td style="padding: 40px;">
-              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Order Confirmed!</h1>
+              <h1 style="margin: 0 0 20px 0; color: #1DC690; font-size: 24px; font-weight: bold; text-align: center;">Order Confirmed!</h1>
+              
               <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
+              
               <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">Great news! Your order has been confirmed and the seller has been notified.</p>
+              
+              <!-- Order Details Box -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
                 <tr>
                   <td style="padding: 20px;">
-                    <p style="margin: 0 0 10px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Order #{{orderNumber}}</p>
+                    <p style="margin: 0 0 15px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Order #{{orderId}}</p>
+                    
+                    <!-- Items Table -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 15px;">
+                      <tr style="background-color: #E5E7EB;">
+                        <td style="padding: 10px; font-size: 14px; font-weight: 600; color: #374151;">Item</td>
+                        <td style="padding: 10px; font-size: 14px; font-weight: 600; color: #374151; text-align: right;">Price</td>
+                      </tr>
+                      {{itemsList}}
+                    </table>
+                    
+                    <!-- Total -->
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                       <tr>
-                        <td width="80" style="padding-right: 15px; vertical-align: top;">
-                          <img src="{{itemImage}}" alt="{{itemTitle}}" width="80" height="80" style="display: block; border-radius: 6px; object-fit: cover;">
-                        </td>
-                        <td style="vertical-align: top;">
-                          <p style="margin: 0 0 5px 0; color: #111827; font-size: 16px; font-weight: bold;">{{itemTitle}}</p>
-                          <p style="margin: 0 0 5px 0; color: #6B7280; font-size: 14px;">Sold by: {{sellerName}}</p>
-                          <p style="margin: 0; color: #6B7280; font-size: 14px;">Condition: {{itemCondition}}</p>
-                        </td>
-                        <td width="100" style="vertical-align: top; text-align: right;">
-                          <p style="margin: 0; color: #1DC690; font-size: 18px; font-weight: bold;">£{{itemPrice}}</p>
-                        </td>
+                        <td style="padding: 15px 8px 8px 8px; border-top: 2px solid #1DC690; font-size: 16px; font-weight: bold; color: #111827;">Total Paid</td>
+                        <td style="padding: 15px 8px 8px 8px; border-top: 2px solid #1DC690; font-size: 18px; font-weight: bold; color: #1DC690; text-align: right;">{{totalAmount}}</td>
                       </tr>
-                    </table>
-                    <hr style="border: none; border-top: 1px solid #E5E7EB; margin: 20px 0;">
-                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                      <tr><td style="padding: 5px 0; color: #374151; font-size: 14px;">Item Price</td><td style="padding: 5px 0; color: #374151; font-size: 14px; text-align: right;">£{{itemPrice}}</td></tr>
-                      <tr><td style="padding: 5px 0; color: #374151; font-size: 14px;">Shipping</td><td style="padding: 5px 0; color: #374151; font-size: 14px; text-align: right;">£{{shippingCost}}</td></tr>
-                      <tr><td style="padding: 5px 0; color: #374151; font-size: 14px;">Buyer Protection</td><td style="padding: 5px 0; color: #374151; font-size: 14px; text-align: right;">£{{buyerProtection}}</td></tr>
-                      <tr><td style="padding: 10px 0 0 0; color: #111827; font-size: 16px; font-weight: bold; border-top: 2px solid #E5E7EB;">Total Paid</td><td style="padding: 10px 0 0 0; color: #1DC690; font-size: 18px; font-weight: bold; text-align: right; border-top: 2px solid #E5E7EB;">£{{totalPrice}}</td></tr>
                     </table>
                   </td>
                 </tr>
               </table>
+              
+              <!-- Shipping Address Box -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 10px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Shipping To</p>
-                    <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.6;">{{shippingName}}<br>{{shippingAddress}}<br>{{shippingCity}}, {{shippingPostcode}}<br>{{shippingCountry}}</p>
+                    <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.6;">{{shippingAddress}}</p>
                   </td>
                 </tr>
               </table>
-              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;"><strong>What happens next?</strong></p>
+              
+              <!-- What's Next -->
+              <p style="margin: 0 0 15px 0; color: #374151; font-size: 16px; line-height: 1.6;"><strong>What happens next?</strong></p>
               <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">The seller will ship your item within 5 working days. You'll receive another email with tracking information once it's on its way.</p>
+              
+              <!-- View Order Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 30px;">
+                <tr>
+                  <td align="center">
+                    <a href="https://mulligans.uk.com" style="display: inline-block; padding: 14px 32px; background-color: #1DC690; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px;">View Order in App</a>
+                  </td>
+                </tr>
+              </table>
+              
               <p style="margin: 0; color: #374151; font-size: 16px; line-height: 1.6;">Thanks for shopping with us!<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
             </td>
           </tr>
+          <!-- Footer -->
           <tr>
             <td style="padding: 30px 40px; background-color: #1C4670;">
               <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
