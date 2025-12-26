@@ -912,6 +912,29 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
         }),
       ]);
 
+      // Year earnings (last 365 days)
+      const yearStart = new Date();
+      yearStart.setDate(yearStart.getDate() - 365);
+      yearStart.setHours(0, 0, 0, 0);
+
+      const yearOrders = await prisma.orders.aggregate({
+        where: {
+          seller_id: userId,
+          status: { in: ['completed', 'delivered'] },
+          completed_at: { gte: yearStart },
+        },
+        _sum: { seller_payout: true },
+      });
+
+      // All-time earnings
+      const allTimeOrders = await prisma.orders.aggregate({
+        where: {
+          seller_id: userId,
+          status: { in: ['completed', 'delivered'] },
+        },
+        _sum: { seller_payout: true },
+      });
+
       // Get pending balance (orders delivered but not yet completed - in escrow)
       const pendingOrders = await prisma.orders.aggregate({
         where: {
@@ -1016,6 +1039,8 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
         todayEarnings: Number(todayOrders._sum.seller_payout) || 0,
         weekEarnings: Number(weekOrders._sum.seller_payout) || 0,
         monthEarnings: Number(monthOrders._sum.seller_payout) || 0,
+        yearEarnings: Number(yearOrders._sum.seller_payout) || 0,
+        allTimeEarnings: Number(allTimeOrders._sum.seller_payout) || 0, 
         availableBalance: 0,
         pendingBalance: Number(pendingOrders._sum.seller_payout) || 0,
         ordersToShip,
