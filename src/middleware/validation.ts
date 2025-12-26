@@ -1,6 +1,6 @@
 // src/middleware/validation.ts
 import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 
 /**
  * Generic validation middleware factory
@@ -15,14 +15,14 @@ export const validate = (schema: z.ZodSchema) => {
       });
       next();
     } catch (error) {
-      if (error instanceof z.ZodError) {
+    if (error instanceof ZodError) {
         res.status(400).json({
-          error: 'Validation failed',
-          details: (error as any).errors?.map((err: any) => ({
-            field: err.path.join('.'),
-            message: err.message,
-          })),
-        });
+    error: 'Validation failed',
+    details: error.issues.map((issue) => ({
+      field: issue.path.join('.'),
+      message: issue.message,
+    })),
+  });
       } else {
         res.status(500).json({ error: 'Internal server error' });
       }

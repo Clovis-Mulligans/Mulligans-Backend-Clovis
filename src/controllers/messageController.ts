@@ -1,4 +1,3 @@
-// @ts-nocheck
 // src/controllers/messageController.ts
 // ✅ UPDATED: Now creates notifications when messages are sent, with correct image_url and conversation_id
 
@@ -19,7 +18,13 @@ export class MessageController {
   ): Promise<void> {
     try {
       const { listingId, sellerId } = req.body;
-      const buyerId = req.user!.sub;
+      const buyerId = req.user?.sub;
+
+      // Validate user is authenticated
+      if (!buyerId) {
+        res.status(401).json({ error: 'User not authenticated' });
+        return;
+      }
 
       // Check if buyer is trying to message themselves
       if (buyerId === sellerId) {
@@ -72,7 +77,7 @@ export class MessageController {
 
       // Create new conversation if doesn't exist
       if (!conversation) {
-        conversation = await prisma.conversations.create({
+        const newConversation = await prisma.conversations.create({
           data: {
             id: `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             listing_id: listingId || null,
@@ -109,6 +114,7 @@ export class MessageController {
             },
           },
         });
+        conversation = newConversation;
       }
 
       res.json({ conversation });
@@ -126,7 +132,11 @@ export class MessageController {
     res: Response
   ): Promise<void> {
     try {
-      const userId = req.user!.sub;
+      const userId = req.user?.sub;
+      if (!userId) {
+        res.status(401).json({ error: 'User not authenticated' });
+        return;
+      }
       const { page = 1, limit = 20 } = req.query;
 
       const skip = (Number(page) - 1) * Number(limit);
@@ -152,7 +162,7 @@ export class MessageController {
                 },
               },
             },
-           users_conversations_buyer_idTousers: {
+            users_conversations_buyer_idTousers: {
               select: {
                 id: true,
                 display_name: true,
@@ -204,7 +214,11 @@ export class MessageController {
   static async getMessages(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { conversationId } = req.params;
-      const userId = req.user!.sub;
+      const userId = req.user?.sub;
+      if (!userId) {
+        res.status(401).json({ error: 'User not authenticated' });
+        return;
+      }
       const { page = 1, limit = 50 } = req.query;
 
       const skip = (Number(page) - 1) * Number(limit);
@@ -276,7 +290,13 @@ export class MessageController {
     try {
       const { conversationId } = req.params;
       const { content, messageType = 'text', offerAmount } = req.body;
-      const senderId = req.user!.sub;
+      const senderId = req.user?.sub;
+
+      // Validate user is authenticated
+      if (!senderId) {
+        res.status(401).json({ error: 'User not authenticated' });
+        return;
+      }
 
       // Verify user is part of conversation and get full details
       const conversation = await prisma.conversations.findFirst({
@@ -319,7 +339,7 @@ export class MessageController {
         data: {
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           conversation_id: conversationId,
-          sender_id: senderId,
+          sender_id: senderId as string,
           receiver_id: receiverId,
           content,
           message_type: messageType,
@@ -399,7 +419,11 @@ export class MessageController {
   ): Promise<void> {
     try {
       const { conversationId } = req.params;
-      const userId = req.user!.sub;
+      const userId = req.user?.sub;
+      if (!userId) {
+        res.status(401).json({ error: 'User not authenticated' });
+        return;
+      }
 
       // Verify user is part of conversation
       const conversation = await prisma.conversations.findFirst({
@@ -431,7 +455,11 @@ export class MessageController {
    */
   static async getUnreadCount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const userId = req.user!.sub;
+      const userId = req.user?.sub;
+      if (!userId) {
+        res.status(401).json({ error: 'User not authenticated' });
+        return;
+      }
 
       const unreadCount = await prisma.messages.count({
         where: {

@@ -42,6 +42,10 @@ router.delete('/:id/images/:imageId', authenticateToken, ListingController.delet
  * These MUST come LAST because they have generic patterns
  */
 router.get('/seller/:seller_id', ListingController.getSellerListings);
+
+// Track listing view (no auth required)
+router.post('/:id/view', ListingController.trackView);
+
 router.get('/:id', ListingController.getListingById);
 router.get('/', ListingController.getAllListings);
 

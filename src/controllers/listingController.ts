@@ -1110,10 +1110,64 @@ export class ListingController {
         where: { id: imageId },
       });
 
-      res.json({ message: 'Image deleted successfully' });
+     res.json({ message: 'Image deleted successfully' });
     } catch (error) {
       console.error('Delete image error:', error);
       res.status(500).json({ error: 'Failed to delete image' });
     }
   }
-}
+
+  /**
+   * Track a view for a listing
+   * POST /listings/:id/view
+   */
+  static async trackView(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const viewerId = req.user?.id;
+
+      console.log('👁️ POST /listings/:id/view - Listing:', id, 'Viewer:', viewerId || 'anonymous');
+
+      // Check listing exists
+      const listing = await prisma.listings.findUnique({
+        where: { id },
+        select: { 
+          id: true, 
+          seller_id: true,
+          views: true,
+        },
+      });
+
+      if (!listing) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      // Don't count views from the seller themselves
+      if (viewerId && listing.seller_id === viewerId) {
+        console.log('📊 Skipping view - seller viewing own listing');
+        res.json({ success: true, views: listing.views, counted: false });
+        return;
+      }
+
+      // Increment view count
+      const updatedListing = await prisma.listings.update({
+        where: { id },
+        data: {
+          views: { increment: 1 },
+        },
+        select: { views: true },
+      });
+
+      console.log('✅ View tracked - new count:', updatedListing.views);
+      res.json({ 
+        success: true, 
+        views: updatedListing.views,
+        counted: true,
+      });
+    } catch (error) {
+      console.error('❌ Track view error:', error);
+      res.status(500).json({ error: 'Failed to track view' });
+    }
+  }
+}  // <-- Class closing brace
