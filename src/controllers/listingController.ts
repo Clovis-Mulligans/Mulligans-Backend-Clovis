@@ -415,6 +415,7 @@ export class ListingController {
         minPrice,
         maxPrice,
         q,
+        keyword,
         seller_id,
         // Golf-specific filters
         brand,
@@ -445,7 +446,7 @@ export class ListingController {
         slopeAdjust,
       } = req.query;
 
-      console.log('🔍 Search params:', { category, subcategory, q, brand, model, dexterity, shaftFlex });
+      console.log('🔍 Search params:', { category, subcategory, q, keyword, brand, model, dexterity, shaftFlex });
 
       const where: any = {
         status: 'active',
@@ -471,6 +472,49 @@ export class ListingController {
           { description: { contains: q as string, mode: 'insensitive' } },
         ];
       }
+
+      // ✅ Keyword filter - searches across multiple fields including specifications
+if (keyword) {
+  const keywordStr = keyword as string;
+  console.log('🔑 Keyword search:', keywordStr);
+  
+  // First, find listings where shaftModel contains the keyword
+  const shaftModelMatches = await prisma.listing_attributes.findMany({
+    where: {
+      key: 'shaftModel',
+      value: { contains: keywordStr, mode: 'insensitive' },
+    },
+    select: { listing_id: true },
+  });
+  
+  const shaftMatchIds = shaftModelMatches.map(m => m.listing_id);
+  console.log(`🔑 Shaft model matches: ${shaftMatchIds.length}`);
+  
+  // Build OR conditions for keyword search
+  const keywordConditions: any[] = [
+    { title: { contains: keywordStr, mode: 'insensitive' } },
+    { description: { contains: keywordStr, mode: 'insensitive' } },
+    { brand: { contains: keywordStr, mode: 'insensitive' } },
+    { model: { contains: keywordStr, mode: 'insensitive' } },
+  ];
+  
+  // Add shaft model matches if any
+  if (shaftMatchIds.length > 0) {
+    keywordConditions.push({ id: { in: shaftMatchIds } });
+  }
+  
+  // If we already have OR conditions from 'q', we need to AND them together
+  if (where.OR) {
+    // Combine existing OR with keyword OR using AND
+    where.AND = [
+      { OR: where.OR },
+      { OR: keywordConditions },
+    ];
+    delete where.OR;
+  } else {
+    where.OR = keywordConditions;
+  }
+}
 
       // Brand filter
       if (brand) {
