@@ -8,7 +8,8 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_ADDRESS = 'Mulligans <noreply@mail.mulligans.uk.com>';
 
 function loadTemplate(templateName: string, variables: Record<string, string>): string {
-  const templatePath = path.join(__dirname, '../email-templates', `${templateName}.html`);
+  // Path goes from dist/services/ up to project root, then into src/email-templates/
+  const templatePath = path.join(__dirname, '../../src/email-templates', `${templateName}.html`);
   let html = fs.readFileSync(templatePath, 'utf-8');
   
   Object.entries(variables).forEach(([key, value]) => {
