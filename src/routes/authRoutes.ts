@@ -115,10 +115,10 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
 
     console.log('✅ Database user created:', user.id);
 
-    // Send verification email via SendGrid
+    // Send verification email via Resend
     try {
       await sendVerificationEmail(email, verificationCode);
-      console.log('📧 Verification email sent via SendGrid to:', email);
+      console.log('📧 Verification email sent to:', email);
     } catch (emailError) {
       console.error('❌ Failed to send verification email:', emailError);
       // Don't fail registration if email fails - user can request resend
@@ -133,9 +133,53 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('❌ Registration error:', error);
 
+    // Handle case where user already exists in Cognito
     if (error.name === 'UsernameExistsException') {
-      return res.status(400).json({ error: 'An account with this email already exists' });
+      console.log('⚠️ User already exists in Cognito, checking if unverified...');
+      
+      // Check if user exists in our database and is unverified
+      const existingUser = await prisma.users.findFirst({
+        where: { email: req.body.email },
+      });
+
+      if (existingUser && !existingUser.is_verified) {
+        console.log('📧 User is unverified, resending verification code...');
+        
+        // Generate new verification code
+        const verificationCode = generateVerificationCode();
+        const codeExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+        // Update user with new code
+        await prisma.users.update({
+          where: { id: existingUser.id },
+          data: {
+            verification_code: verificationCode,
+            verification_code_expires: codeExpires,
+            updated_at: new Date(),
+          },
+        });
+
+        // Send new verification email
+        try {
+          await sendVerificationEmail(req.body.email, verificationCode);
+          console.log('📧 New verification email sent to:', req.body.email);
+        } catch (emailError) {
+          console.error('❌ Failed to send verification email:', emailError);
+        }
+
+        // Return success - user can now verify with new code
+        return res.status(200).json({
+          message: 'A new verification code has been sent to your email.',
+          email: req.body.email,
+          user_id: existingUser.id,
+          requires_verification: true,
+        });
+      }
+
+      // User exists and is verified - they should log in instead
+      return res.status(400).json({ error: 'An account with this email already exists. Please log in.' });
     }
+
     if (error.name === 'InvalidPasswordException') {
       return res.status(400).json({ error: 'Password must be at least 8 characters with uppercase, lowercase, and numbers' });
     }
@@ -268,9 +312,13 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
       return res.json({ message: 'If an account exists, a verification code has been sent.' });
     }
 
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'This email is already verified. Please log in.' });
+    }
+
     // Generate new code
     const verificationCode = generateVerificationCode();
-    const codeExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const codeExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     // Update user with new code
     await prisma.users.update({
@@ -282,17 +330,19 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
       },
     });
 
-    // Send email via SendGrid
-    await sendVerificationEmail(email, verificationCode);
-    console.log('✅ Verification code resent to:', email);
+    // Send email
+    try {
+      await sendVerificationEmail(email, verificationCode);
+      console.log('📧 Verification email resent to:', email);
+    } catch (emailError) {
+      console.error('❌ Failed to resend verification email:', emailError);
+    }
 
-    res.json({
-      message: 'Verification code sent! Please check your email.',
-    });
+    res.json({ message: 'If an account exists, a verification code has been sent.' });
   } catch (error: any) {
-    console.error('❌ Resend error:', error);
+    console.error('❌ Resend verification error:', error);
     res.status(400).json({
-      error: error.message || 'Failed to resend code',
+      error: error.message || 'Failed to resend verification code',
     });
   }
 });
@@ -308,7 +358,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email is required' });
     }
 
-    console.log('🔐 Forgot password request for:', email);
+    console.log('🔐 Password reset requested for:', email);
 
     // Find user
     const user = await prisma.users.findFirst({
@@ -316,7 +366,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      // Don't reveal if user exists (security)
+      // Don't reveal if user exists - security best practice
       return res.json({ message: 'If an account exists with this email, a reset code has been sent.' });
     }
 
@@ -324,7 +374,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     const resetCode = generateVerificationCode();
     const codeExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    // Store reset code
+    // Save reset code to database
     await prisma.users.update({
       where: { id: user.id },
       data: {
@@ -334,12 +384,16 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       },
     });
 
-    // Send reset email via SendGrid
-    await sendPasswordResetEmail(email, resetCode);
-    console.log('✅ Password reset code sent to:', email);
+    // Send reset email
+    try {
+      await sendPasswordResetEmail(email, resetCode);
+      console.log('📧 Password reset email sent to:', email);
+    } catch (emailError) {
+      console.error('❌ Failed to send password reset email:', emailError);
+    }
 
     res.json({
-      message: 'Password reset code sent! Please check your email.',
+      message: 'If an account exists with this email, a reset code has been sent.',
     });
   } catch (error: any) {
     console.error('❌ Forgot password error:', error);
