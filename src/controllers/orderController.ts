@@ -428,6 +428,7 @@ export class OrderController {
         escrow_release_at: order.escrow_release_at?.toISOString() || null,
         tracking_number: order.tracking_number,
         carrier: order.carrier,
+        label_url: order.label_url,
         shipping_address: isSeller ? order.shipping_address : null,
        buyer: {
           id: order.users_orders_buyer_idTousers?.id,
