@@ -373,6 +373,31 @@ export class SearchController {
         });
       }
 
+      // 6. SEARCH USERS (by display name)
+      const userResults = await prisma.users.findMany({
+        where: {
+          display_name: { contains: query, mode: 'insensitive' },
+          is_deleted: false,
+        },
+        select: {
+          id: true,
+          display_name: true,
+          avatar_url: true,
+        },
+        take: 3,
+        orderBy: { created_at: 'desc' },
+      });
+
+      for (const user of userResults) {
+        addSuggestion({
+          text: user.display_name || 'User',
+          type: 'user',
+          icon: 'person-outline',
+          userId: user.id,
+          image: user.avatar_url || null,
+        });
+      }
+
       // Limit total suggestions to 10
       const limitedSuggestions = suggestions.slice(0, 10);
 
