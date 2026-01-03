@@ -462,7 +462,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
         image_url: listingImage,
         related_id: orderId,
       },
-    });#
+    });
 
     res.json({
       success: true,
