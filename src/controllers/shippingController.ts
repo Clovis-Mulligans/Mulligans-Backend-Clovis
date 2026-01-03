@@ -361,7 +361,14 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
     const order = await prisma.orders.findUnique({
       where: { id: orderId },
       include: {
-        listings: true,
+        listings: {
+          include: {
+            images: {
+              take: 1,
+              orderBy: { display_order: 'asc' },
+            },
+          },
+        },
         users_orders_seller_idTousers: true,
       },
     });
@@ -564,7 +571,14 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
     const order = await prisma.orders.findUnique({
       where: { id: orderId },
       include: {
-        listings: true,
+        listings: {
+          include: {
+            images: {
+              take: 1,
+              orderBy: { display_order: 'asc' },
+            },
+          },
+        },
       },
     });
 
@@ -602,13 +616,17 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
     });
 
     // Notify buyer
+    // ✅ FIX: Add image_url and use consistent type
+    const listingImage = order.listings?.images?.[0]?.image_url || null;
+    
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         user_id: order.buyer_id,
-        type: 'order_shipped',
+        type: 'shipped',  // ✅ FIX: Use 'shipped' to match frontend
         title: 'Your Order Has Shipped! 📦',
         message: `Your ${order.listings?.title || 'item'} is on its way! Tracking: ${order.tracking_number}`,
+        image_url: listingImage,  // ✅ FIX: Add image
         related_id: orderId,
       },
     });
@@ -692,13 +710,31 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
 
         // Notify buyer of delivery
         if (status === 'DELIVERED') {
+          // ✅ FIX: Get listing image for notification
+          const orderWithListing = await prisma.orders.findUnique({
+            where: { id: order.id },
+            include: {
+              listings: {
+                include: {
+                  images: {
+                    take: 1,
+                    orderBy: { display_order: 'asc' },
+                  },
+                },
+              },
+            },
+          });
+          const listingImage = orderWithListing?.listings?.images?.[0]?.image_url || null;
+          const listingTitle = orderWithListing?.listings?.title || 'Your item';
+          
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: order.buyer_id,
-              type: 'order_delivered',
+              type: 'delivered',  // ✅ FIX: Use 'delivered' to match frontend
               title: 'Your Order Has Been Delivered! 🎉',
-              message: `Your item has arrived. You have ${ESCROW_RELEASE_DAYS} days to confirm receipt or report any issues.`,
+              message: `"${listingTitle}" has arrived. You have ${ESCROW_RELEASE_DAYS} days to confirm receipt or report any issues.`,
+              image_url: listingImage,  // ✅ FIX: Add image
               related_id: order.id,
             },
           });
