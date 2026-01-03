@@ -623,7 +623,9 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, firs
 
       // Process seller notifications (outside transaction)
       for (const sellerData of sellerBreakdown) {
-        const { seller_id, seller_connect_id, subtotal, shipping_total, listing_ids, first_image } = sellerData;
+        const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
+// ✅ FIX: Derive listing_ids from cart_items (was causing undefined error)
+const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
 
         // ✅ ESCROW: REMOVED immediate transfer to seller
         // Previously this code transferred funds immediately:
