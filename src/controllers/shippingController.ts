@@ -450,6 +450,8 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
     });
 
     // Create notification for buyer
+    const listingImage = order.listings?.images?.[0]?.image_url || null;
+    
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -457,9 +459,10 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
         type: 'shipping_label_created',
         title: 'Shipping Label Created',
         message: `The seller has created a shipping label for your order. Tracking: ${transaction.trackingNumber}`,
+        image_url: listingImage,
         related_id: orderId,
       },
-    });
+    });#
 
     res.json({
       success: true,
