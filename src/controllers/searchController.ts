@@ -377,7 +377,6 @@ export class SearchController {
       const userResults = await prisma.users.findMany({
         where: {
           display_name: { contains: query, mode: 'insensitive' },
-          is_deleted: false,
         },
         select: {
           id: true,
