@@ -415,6 +415,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
     });
 
     console.log('📋 Transaction result:', transaction.status, transaction.objectId);
+    console.log('📋 Full transaction object:', JSON.stringify(transaction, null, 2));
 
     // Check if transaction was successful
     if (transaction.status !== 'SUCCESS') {
