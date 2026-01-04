@@ -29,7 +29,7 @@ const s3Client = new S3Client({
   },
 });
 
-const S3_BUCKET = process.env.AWS_S3_BUCKET || 'mulligans-images';
+const S3_BUCKET = process.env.AWS_S3_BUCKET || 'mulligans-golf-images-mvp';
 
 // Constants
 const SELLER_RESPONSE_DEADLINE_HOURS = 36;
