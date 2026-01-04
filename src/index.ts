@@ -46,7 +46,14 @@ const socketService = new SocketService(httpServer);
 app.set('socketService', socketService);
 
 // Security: Add protective HTTP headers
-app.use(helmet());
+// Disable CSP for admin panel (inline scripts needed)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/admin')) {
+    // Skip helmet for admin routes
+    return next();
+  }
+  helmet()(req, res, next);
+});
 
 // Rate limiting - general API (100 requests per 15 minutes per IP)
 const generalLimiter = rateLimit({
