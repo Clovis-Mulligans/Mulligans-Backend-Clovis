@@ -5,14 +5,21 @@
 // - Buyer reviews counter-offer
 // - 36-hour deadline with auto-escalation
 // - Admin resolution
-// - Email notifications
+// - Email notifications (with branded templates)
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
-import { sendDisputeEmail } from '../services/emailService';
+import { 
+  sendDisputeOpenedToSeller,
+  sendDisputeOpenedToBuyer,
+  sendDisputeResponseToBuyer,
+  sendDisputeEscalatedToAdmin,
+  sendDisputeEscalatedToBuyer,
+  sendDisputeResolved,
+} from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
@@ -70,63 +77,6 @@ async function uploadDisputeImage(
   const imageUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${s3Key}`;
 
   return { imageUrl, s3Key };
-}
-
-/**
- * Send email notification for dispute events
- */
-async function sendDisputeNotification(
-  to: string,
-  subject: string,
-  htmlContent: string
-): Promise<void> {
-  try {
-    await sendDisputeEmail(to, subject, htmlContent);
-    console.log(`📧 Dispute email sent to: ${to}`);
-  } catch (error) {
-    console.error(`⚠️ Failed to send dispute email to ${to}:`, error);
-  }
-}
-
-/**
- * Create email HTML for dispute notifications
- */
-function createDisputeEmailHtml(
-  title: string,
-  content: string,
-  actionUrl?: string,
-  actionText?: string
-): string {
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: #1DC690; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
-        .content { background: #f9f9f9; padding: 20px; border-radius: 0 0 8px 8px; }
-        .button { display: inline-block; background: #1DC690; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 16px; }
-        .warning { background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 12px; margin: 16px 0; }
-        .urgent { background: #FEE2E2; border-left: 4px solid #EF4444; padding: 12px; margin: 16px 0; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>${title}</h1>
-        </div>
-        <div class="content">
-          ${content}
-          ${actionUrl ? `<a href="${actionUrl}" class="button">${actionText || 'View Details'}</a>` : ''}
-          <p style="margin-top: 24px; font-size: 12px; color: #666;">
-            This is an automated message from Mulligans Golf. Please do not reply to this email.
-          </p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
 }
 
 // ============================================
@@ -301,47 +251,42 @@ export class DisputeController {
         );
       }
 
-      // Send email to seller
+      // Send branded email to seller
       if (seller.email) {
-        const emailHtml = createDisputeEmailHtml(
-          '⚠️ Dispute Opened - Action Required',
-          `
-            <div class="urgent">
-              <strong>You have 36 hours to respond to this dispute.</strong>
-            </div>
-            <p><strong>Item:</strong> ${listingTitle}</p>
-            <p><strong>Buyer:</strong> ${buyer.display_name}</p>
-            <p><strong>Issue:</strong> ${reasonType.replace(/_/g, ' ')}</p>
-            <p><strong>Description:</strong> ${reasonText}</p>
-            <p><strong>Requested Refund:</strong> £${requestedRefundAmount.toFixed(2)} (${requestedRefundPercent}%)</p>
-            <p>Please log in to the Mulligans app to review the claim and respond.</p>
-          `,
-          'mulligans://orders',
-          'Review Dispute'
-        );
-        await sendDisputeEmail(seller.email, `⚠️ Dispute Opened - ${listingTitle}`, emailHtml);
+        try {
+          await sendDisputeOpenedToSeller(seller.email, {
+            sellerName: seller.display_name || 'Seller',
+            buyerName: buyer.display_name || 'Buyer',
+            itemTitle: listingTitle,
+            orderNumber: orderId.slice(-8).toUpperCase(),
+            reasonType: reasonType,
+            reasonText: reasonText,
+            refundAmount: requestedRefundAmount.toFixed(2),
+            refundPercent: requestedRefundPercent.toString(),
+            deadline: sellerDeadline,
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send dispute email to seller:', emailError);
+        }
       }
 
-      // Send email to ADMIN
-      const adminEmailHtml = createDisputeEmailHtml(
-        '🆕 New Dispute Opened',
-        `
-          <p><strong>Order ID:</strong> ${orderId}</p>
-          <p><strong>Dispute ID:</strong> ${disputeId}</p>
-          <p><strong>Item:</strong> ${listingTitle}</p>
-          <p><strong>Buyer:</strong> ${buyer.display_name} (${buyer.email})</p>
-          <p><strong>Seller:</strong> ${seller.display_name} (${seller.email})</p>
-          <p><strong>Issue Type:</strong> ${reasonType.replace(/_/g, ' ')}</p>
-          <p><strong>Description:</strong> ${reasonText}</p>
-          <p><strong>Order Amount:</strong> £${orderAmount.toFixed(2)}</p>
-          <p><strong>Requested Refund:</strong> £${requestedRefundAmount.toFixed(2)} (${requestedRefundPercent}%)</p>
-          <p><strong>Seller Deadline:</strong> ${sellerDeadline.toLocaleString('en-GB')}</p>
-          <div class="warning">
-            <strong>Monitor:</strong> If seller doesn't respond by ${sellerDeadline.toLocaleString('en-GB')}, this will be auto-escalated.
-          </div>
-        `
-      );
-      await sendDisputeEmail(ADMIN_EMAIL, `🆕 New Dispute - Order ${orderId.slice(-8)}`, adminEmailHtml);
+      // Send branded email to buyer (confirmation)
+      if (buyer.email) {
+        try {
+          await sendDisputeOpenedToBuyer(buyer.email, {
+            buyerName: buyer.display_name || 'Buyer',
+            sellerName: seller.display_name || 'Seller',
+            itemTitle: listingTitle,
+            orderNumber: orderId.slice(-8).toUpperCase(),
+            reasonType: reasonType,
+            reasonText: reasonText,
+            refundAmount: requestedRefundAmount.toFixed(2),
+            refundPercent: requestedRefundPercent.toString(),
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send dispute confirmation to buyer:', emailError);
+        }
+      }
 
       console.log('✅ Dispute created:', disputeId);
       res.status(201).json({ 
@@ -767,45 +712,56 @@ export class DisputeController {
         );
       }
 
-      // Send email to buyer
-      if (buyer.email) {
-        const emailHtml = createDisputeEmailHtml(
-          notificationTitle,
-          `
-            <p><strong>Item:</strong> ${listingTitle}</p>
-            <p>${notificationMessage}</p>
-            ${responseText ? `<p><strong>Seller's message:</strong> ${responseText}</p>` : ''}
-          `,
-          'mulligans://orders',
-          responseType === 'counter' ? 'Review Counter Offer' : 'View Details'
-        );
-        await sendDisputeEmail(buyer.email, notificationTitle, emailHtml);
+      // Send branded email to buyer
+      if (buyer.email && (responseType === 'counter' || responseType === 'reject')) {
+        try {
+          await sendDisputeResponseToBuyer(buyer.email, {
+            buyerName: buyer.display_name || 'Buyer',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            isCounterOffer: responseType === 'counter',
+            counterOfferAmount: counterOfferAmount?.toFixed(2),
+            sellerMessage: responseText || 'No message provided',
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send dispute response email to buyer:', emailError);
+        }
       }
 
-      // If escalated, notify admin
+      // If seller accepted, send resolution email
+      if (responseType === 'accept' && buyer.email) {
+        try {
+          await sendDisputeResolved(buyer.email, {
+            userName: buyer.display_name || 'Buyer',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            resolutionType: dispute.requested_refund_percent === 100 ? 'full_refund' : 'partial_refund',
+            refundAmount: resolutionAmount?.toFixed(2),
+            adminNotes: 'The seller accepted your refund request.',
+            isBuyer: true,
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+        }
+      }
+
+      // If escalated (rejected), notify admin
       if (responseType === 'reject') {
-        const adminEmailHtml = createDisputeEmailHtml(
-          '🚨 Dispute Escalated - Review Required',
-          `
-            <div class="urgent">
-              <strong>A seller has rejected a dispute claim. Admin review required.</strong>
-            </div>
-            <p><strong>Dispute ID:</strong> ${disputeId}</p>
-            <p><strong>Order ID:</strong> ${dispute.order_id}</p>
-            <p><strong>Item:</strong> ${listingTitle}</p>
-            <p><strong>Buyer:</strong> ${buyer.display_name} (${buyer.email})</p>
-            <p><strong>Seller:</strong> ${seller.display_name} (${seller.email})</p>
-            <hr/>
-            <p><strong>Buyer's Claim:</strong></p>
-            <p>Issue: ${dispute.reason_type.replace(/_/g, ' ')}</p>
-            <p>${dispute.reason_text}</p>
-            <p>Requested: £${parseFloat(dispute.requested_refund_amount.toString()).toFixed(2)} (${dispute.requested_refund_percent}%)</p>
-            <hr/>
-            <p><strong>Seller's Response:</strong></p>
-            <p>${responseText}</p>
-          `
-        );
-        await sendDisputeEmail(ADMIN_EMAIL, `🚨 Escalated Dispute - ${disputeId.slice(-8)}`, adminEmailHtml);
+        try {
+          await sendDisputeEscalatedToAdmin({
+            disputeId: disputeId,
+            itemTitle: listingTitle,
+            refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+            buyerName: buyer.display_name || 'Buyer',
+            buyerEmail: buyer.email || '',
+            sellerName: seller.display_name || 'Seller',
+            sellerEmail: seller.email || '',
+            reasonType: dispute.reason_type,
+            escalationReason: 'Seller rejected the buyer\'s claim',
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send escalation email to admin:', emailError);
+        }
       }
 
       console.log('✅ Seller response recorded:', disputeId);
@@ -848,6 +804,13 @@ export class DisputeController {
               stripe_payment_intent_id: true,
               listing_title: true,
               listing_image: true,
+            },
+          },
+          users_disputes_buyer: {
+            select: {
+              id: true,
+              display_name: true,
+              email: true,
             },
           },
           users_disputes_seller: {
@@ -911,6 +874,7 @@ export class DisputeController {
         },
       });
 
+      const buyer = dispute.users_disputes_buyer;
       const seller = dispute.users_disputes_seller;
       const listingTitle = dispute.orders.listing_title || 'Your item';
 
@@ -935,6 +899,39 @@ export class DisputeController {
           `The buyer accepted your counter offer for "${listingTitle}".`,
           { type: 'dispute_resolved', disputeId }
         );
+      }
+
+      // Send branded resolution emails to both parties
+      if (buyer.email) {
+        try {
+          await sendDisputeResolved(buyer.email, {
+            userName: buyer.display_name || 'Buyer',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            resolutionType: dispute.counter_offer_percent === 100 ? 'full_refund' : 'partial_refund',
+            refundAmount: counterOfferAmount.toFixed(2),
+            adminNotes: 'You accepted the seller\'s counter offer.',
+            isBuyer: true,
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+        }
+      }
+
+      if (seller.email) {
+        try {
+          await sendDisputeResolved(seller.email, {
+            userName: seller.display_name || 'Seller',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            resolutionType: dispute.counter_offer_percent === 100 ? 'full_refund' : 'partial_refund',
+            refundAmount: counterOfferAmount.toFixed(2),
+            adminNotes: 'The buyer accepted your counter offer.',
+            isBuyer: false,
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send resolution email to seller:', emailError);
+        }
       }
 
       console.log('✅ Counter offer accepted:', disputeId);
@@ -1036,29 +1033,38 @@ export class DisputeController {
         );
       }
 
-      // Email admin
-      const adminEmailHtml = createDisputeEmailHtml(
-        '🚨 Dispute Escalated by Buyer',
-        `
-          <div class="urgent">
-            <strong>The buyer has rejected the counter offer and escalated this dispute.</strong>
-          </div>
-          <p><strong>Dispute ID:</strong> ${disputeId}</p>
-          <p><strong>Order ID:</strong> ${dispute.order_id}</p>
-          <p><strong>Item:</strong> ${listingTitle}</p>
-          <p><strong>Order Amount:</strong> £${parseFloat(dispute.orders.amount.toString()).toFixed(2)}</p>
-          <hr/>
-          <p><strong>Buyer:</strong> ${buyer.display_name} (${buyer.email})</p>
-          <p><strong>Requested:</strong> £${parseFloat(dispute.requested_refund_amount.toString()).toFixed(2)} (${dispute.requested_refund_percent}%)</p>
-          <p><strong>Claim:</strong> ${dispute.reason_text}</p>
-          ${additionalNotes ? `<p><strong>Additional Notes:</strong> ${additionalNotes}</p>` : ''}
-          <hr/>
-          <p><strong>Seller:</strong> ${seller.display_name} (${seller.email})</p>
-          <p><strong>Counter Offer:</strong> £${parseFloat(dispute.counter_offer_amount!.toString()).toFixed(2)} (${dispute.counter_offer_percent}%)</p>
-          <p><strong>Seller's Response:</strong> ${dispute.seller_response_text}</p>
-        `
-      );
-      await sendDisputeEmail(ADMIN_EMAIL, `🚨 Escalated Dispute - Review Required - ${disputeId.slice(-8)}`, adminEmailHtml);
+      // Send branded email to admin
+      try {
+        await sendDisputeEscalatedToAdmin({
+          disputeId: disputeId,
+          itemTitle: listingTitle,
+          refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+          buyerName: buyer.display_name || 'Buyer',
+          buyerEmail: buyer.email || '',
+          sellerName: seller.display_name || 'Seller',
+          sellerEmail: seller.email || '',
+          reasonType: dispute.reason_type,
+          escalationReason: additionalNotes 
+            ? `Buyer rejected counter offer: ${additionalNotes}`
+            : 'Buyer rejected the seller\'s counter offer',
+        });
+      } catch (emailError) {
+        console.error('⚠️ Failed to send escalation email to admin:', emailError);
+      }
+
+      // Send confirmation email to buyer
+      if (buyer.email) {
+        try {
+          await sendDisputeEscalatedToBuyer(buyer.email, {
+            buyerName: buyer.display_name || 'Buyer',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send escalation confirmation to buyer:', emailError);
+        }
+      }
 
       console.log('✅ Dispute escalated:', disputeId);
       res.json({ 
@@ -1236,26 +1242,40 @@ export class DisputeController {
         await sendPushNotification(seller.push_token, '⚖️ Dispute Resolved', sellerMessage, { type: 'dispute_resolved', disputeId });
       }
 
-      // Email both parties
-      const buyerEmailHtml = createDisputeEmailHtml(
-        '⚖️ Dispute Resolved',
-        `
-          <p><strong>Item:</strong> ${listingTitle}</p>
-          <p>${buyerMessage}</p>
-          <p><strong>Our notes:</strong> ${resolutionNotes}</p>
-        `
-      );
-      await sendDisputeEmail(buyer.email!, 'Dispute Resolved', buyerEmailHtml);
+      // Send branded emails to both parties
+      if (buyer.email) {
+        try {
+          await sendDisputeResolved(buyer.email, {
+            userName: buyer.display_name || 'Buyer',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            resolutionType: resolutionType as 'full_refund' | 'partial_refund' | 'no_refund',
+            refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
+            adminNotes: resolutionNotes,
+            isBuyer: true,
+          });
+          console.log(`✅ Dispute email sent to ${buyer.email}`);
+        } catch (emailError) {
+          console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+        }
+      }
 
-      const sellerEmailHtml = createDisputeEmailHtml(
-        '⚖️ Dispute Resolved',
-        `
-          <p><strong>Item:</strong> ${listingTitle}</p>
-          <p>${sellerMessage}</p>
-          <p><strong>Our notes:</strong> ${resolutionNotes}</p>
-        `
-      );
-      await sendDisputeEmail(seller.email!, 'Dispute Resolved', sellerEmailHtml);
+      if (seller.email) {
+        try {
+          await sendDisputeResolved(seller.email, {
+            userName: seller.display_name || 'Seller',
+            itemTitle: listingTitle,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+            resolutionType: resolutionType as 'full_refund' | 'partial_refund' | 'no_refund',
+            refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
+            adminNotes: resolutionNotes,
+            isBuyer: false,
+          });
+          console.log(`✅ Dispute email sent to ${seller.email}`);
+        } catch (emailError) {
+          console.error('⚠️ Failed to send resolution email to seller:', emailError);
+        }
+      }
 
       console.log('✅ Admin resolved dispute:', disputeId);
       res.json({ 
@@ -1442,23 +1462,36 @@ export class DisputeController {
           },
         });
 
-        // Email admin
-        const adminEmailHtml = createDisputeEmailHtml(
-          '🕐 Dispute Auto-Escalated (No Response)',
-          `
-            <div class="urgent">
-              <strong>Seller failed to respond within 36 hours. Review required.</strong>
-            </div>
-            <p><strong>Dispute ID:</strong> ${dispute.id}</p>
-            <p><strong>Item:</strong> ${listingTitle}</p>
-            <p><strong>Buyer:</strong> ${buyer.display_name} (${buyer.email})</p>
-            <p><strong>Seller:</strong> ${seller.display_name} (${seller.email})</p>
-            <p><strong>Requested:</strong> £${parseFloat(dispute.requested_refund_amount.toString()).toFixed(2)} (${dispute.requested_refund_percent}%)</p>
-            <p><strong>Reason:</strong> ${dispute.reason_type.replace(/_/g, ' ')}</p>
-            <p><strong>Description:</strong> ${dispute.reason_text}</p>
-          `
-        );
-        await sendDisputeEmail(ADMIN_EMAIL, `🕐 Auto-Escalated Dispute - ${dispute.id.slice(-8)}`, adminEmailHtml);
+        // Send branded email to admin
+        try {
+          await sendDisputeEscalatedToAdmin({
+            disputeId: dispute.id,
+            itemTitle: listingTitle,
+            refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+            buyerName: buyer.display_name || 'Buyer',
+            buyerEmail: buyer.email || '',
+            sellerName: seller.display_name || 'Seller',
+            sellerEmail: seller.email || '',
+            reasonType: dispute.reason_type,
+            escalationReason: 'Auto-escalated: Seller failed to respond within 36 hours',
+          });
+        } catch (emailError) {
+          console.error('⚠️ Failed to send auto-escalation email to admin:', emailError);
+        }
+
+        // Send confirmation to buyer
+        if (buyer.email) {
+          try {
+            await sendDisputeEscalatedToBuyer(buyer.email, {
+              buyerName: buyer.display_name || 'Buyer',
+              itemTitle: listingTitle,
+              orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+              refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+            });
+          } catch (emailError) {
+            console.error('⚠️ Failed to send auto-escalation confirmation to buyer:', emailError);
+          }
+        }
 
         console.log(`✅ Auto-escalated dispute: ${dispute.id}`);
       }
@@ -1473,6 +1506,7 @@ export class DisputeController {
       res.status(500).json({ error: 'Failed to auto-escalate disputes' });
     }
   }
+
   /**
    * Upload image to a dispute (multipart/form-data)
    * POST /api/disputes/:id/images
