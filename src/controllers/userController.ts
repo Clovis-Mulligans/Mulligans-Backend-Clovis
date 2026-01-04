@@ -1,6 +1,6 @@
 // src/controllers/userController.ts
 // UPDATED: Added getCurrentUser and updateCurrentUser methods for /me endpoint
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
@@ -1061,6 +1061,59 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
     } catch (error) {
       console.error('❌ Get seller stats error:', error);
       res.status(500).json({ error: 'Failed to get seller stats' });
+    }
+  }
+
+  /**
+   * Get sold items for a user (public - for transparency)
+   * GET /users/:userId/sold-items
+   */
+  static async getSoldItems(req: Request, res: Response): Promise<void> {
+    try {
+      const { userId } = req.params;
+
+      console.log('📦 GET /users/:userId/sold-items - User ID:', userId);
+
+      const soldOrders = await prisma.orders.findMany({
+        where: {
+          seller_id: userId,
+          status: {
+            in: ['delivered', 'completed', 'reviewed'],
+          },
+        },
+        include: {
+          listings: {
+            include: {
+              images: {
+                take: 1,
+                orderBy: { display_order: 'asc' },
+              },
+            },
+          },
+        },
+        orderBy: {
+          updated_at: 'desc',
+        },
+      });
+
+      const items = soldOrders.map((order: any) => ({
+        id: order.listing_id,
+        title: order.listings?.title || 'Unknown Item',
+        price: order.amount || order.listings?.price || 0,
+        images: order.listings?.images?.map((img: any) => ({
+          id: img.id,
+          image_url: img.image_url,
+        })) || [],
+        sold_at: order.updated_at || order.created_at,
+        brand: order.listings?.brand || null,
+        category: order.listings?.category || null,
+      }));
+
+      console.log(`✅ Returned ${items.length} sold items for user ${userId}`);
+      res.json({ items, total: items.length });
+    } catch (error) {
+      console.error('❌ Error fetching sold items:', error);
+      res.status(500).json({ error: 'Failed to fetch sold items' });
     }
   }
 }

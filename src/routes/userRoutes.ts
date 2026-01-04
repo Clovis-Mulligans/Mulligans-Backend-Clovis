@@ -28,6 +28,7 @@ router.put('/:userId', authenticateToken, UserController.updateUser);
 
 // Public routes (no auth required) - COME LAST
 router.get('/:userId/seller-stats', UserController.getSellerStats);  // ✅ NEW - Seller dashboard stats
+router.get('/:userId/sold-items', UserController.getSoldItems); 
 router.get('/:userId/stats', UserController.getUserStats);
 router.get('/:userId/listings', UserController.getUserListings);
 router.get('/:userId', UserController.getUser);
