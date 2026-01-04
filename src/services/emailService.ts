@@ -193,3 +193,26 @@ export async function sendEscrowReleased(sellerEmail: string, data: Record<strin
   
   console.log(`✅ Escrow released notification sent to ${sellerEmail}`);
 }
+// ============================================
+// DISPUTE EMAILS
+// ============================================
+
+export async function sendDisputeEmail(
+  to: string,
+  subject: string,
+  html: string
+): Promise<void> {
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: to,
+    subject: subject,
+    html: html,
+  });
+
+  if (error) {
+    console.error('❌ Failed to send dispute email:', error);
+    throw new Error(error.message);
+  }
+
+  console.log(`✅ Dispute email sent to ${to}`);
+}

@@ -26,6 +26,7 @@ import shippingRoutes from './routes/shippingRoutes';
 import sesRoutes from './routes/sesRoutes';
 import { runEscrowJobs } from './services/escrowService';
 import { updateVerificationStatus } from './services/verificationService';
+import disputeRoutes from './routes/disputeRoutes';
 
 const app = express();
 const httpServer = createServer(app);
@@ -98,6 +99,7 @@ app.use('/api/stripe/connect', stripeConnectRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/shipping', shippingRoutes);
 app.use('/api/ses', sesRoutes);
+app.use('/api/disputes', disputeRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
