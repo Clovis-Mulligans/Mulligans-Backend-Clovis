@@ -329,7 +329,12 @@ export class ListingController {
         return;
       }
 
-      console.log(`📸 Uploading ${files.length} images...`);
+      // Get current count of images for this listing to set correct display_order
+      const existingImageCount = await prisma.images.count({
+        where: { listing_id: id }
+      });
+
+      console.log(`📸 Uploading ${files.length} images... (existing: ${existingImageCount})`);
 
       // Import sharp for image processing
       const sharp = require('sharp');
@@ -383,7 +388,7 @@ export class ListingController {
             listing_id: id,
             image_url: uploadResult.url,
             s3_key: uploadResult.key,
-            display_order: i,
+            display_order: existingImageCount + i,
             created_at: new Date(),
           },
         });
