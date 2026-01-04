@@ -1,7 +1,7 @@
 // src/services/escrowService.ts
 // Handles automated escrow operations via cron jobs
 // - Auto-cancel unshipped orders after 5 days
-// - Auto-release funds 5 days after delivery
+// - Auto-release funds 3 days after delivery (buyer has 3 days to raise issues)
 // - Flag potentially lost orders after 14 days
 
 import { PrismaClient } from '@prisma/client';
@@ -17,7 +17,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // CONSTANTS
 // ============================================
 const SHIPPING_DEADLINE_DAYS = 5;
-const ESCROW_RELEASE_DAYS = 5;
+const ESCROW_RELEASE_DAYS = 3; // ✅ UPDATED: Buyer has 3 days from delivery to raise an issue
 const LOST_IN_TRANSIT_DAYS = 14;
 
 // ============================================
@@ -191,7 +191,8 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
 
 // ============================================
 // AUTO-RELEASE ESCROW
-// Runs daily - releases funds for delivered orders after 5 days
+// Runs daily - releases funds for delivered orders after 3 days
+// ✅ UPDATED: Now checks for disputed orders and skips them
 // ============================================
 export async function autoReleaseEscrow(): Promise<void> {
   console.log('🔄 Running escrow release check...');
@@ -200,11 +201,13 @@ export async function autoReleaseEscrow(): Promise<void> {
     const now = new Date();
 
     // Find orders ready for escrow release
+    // ✅ IMPORTANT: Only release if NOT disputed
     const ordersToRelease = await prisma.orders.findMany({
       where: {
-        status: 'delivered',
+        status: 'delivered', // Only delivered orders, NOT disputed
         escrow_release_at: {
           lte: now,
+          not: null, // Must have a release date set
         },
       },
       include: {
