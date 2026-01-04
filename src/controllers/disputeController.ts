@@ -1473,4 +1473,109 @@ export class DisputeController {
       res.status(500).json({ error: 'Failed to auto-escalate disputes' });
     }
   }
+  /**
+   * Upload image to a dispute (multipart/form-data)
+   * POST /api/disputes/:id/images
+   * 
+   * This accepts multipart/form-data uploads instead of base64
+   * to avoid 413 payload errors
+   */
+  static async uploadDisputeImageFile(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+      const { id: disputeId } = req.params;
+
+      console.log(`📷 Uploading dispute image for dispute: ${disputeId}`);
+
+      // Verify the dispute exists and user is the buyer or seller
+      const dispute = await prisma.disputes.findUnique({
+        where: { id: disputeId },
+        select: {
+          id: true,
+          buyer_id: true,
+          seller_id: true,
+          status: true,
+        },
+      });
+
+      if (!dispute) {
+        return res.status(404).json({ error: 'Dispute not found' });
+      }
+
+      // Only buyer can upload during initial dispute creation
+      // Only seller can upload during counter-offer
+      const isBuyer = dispute.buyer_id === userId;
+      const isSeller = dispute.seller_id === userId;
+
+      if (!isBuyer && !isSeller) {
+        return res.status(403).json({ error: 'You are not authorized to upload images to this dispute' });
+      }
+
+      // Determine who is uploading
+      const uploadedBy = isBuyer ? 'buyer' : 'seller';
+
+      // Get the file from multer
+      const file = (req as any).file;
+      if (!file) {
+        return res.status(400).json({ error: 'No image file provided' });
+      }
+
+      // Check current image count (max 5 per party)
+      const existingImages = await prisma.dispute_images.count({
+        where: {
+          dispute_id: disputeId,
+          uploaded_by: uploadedBy,
+        },
+      });
+
+      if (existingImages >= 5) {
+        return res.status(400).json({ error: `Maximum 5 images allowed per ${uploadedBy}` });
+      }
+
+      // Generate unique filename
+      const fileExtension = file.originalname?.split('.').pop()?.toLowerCase() || 'jpg';
+      const validExtensions = ['jpg', 'jpeg', 'png', 'webp', 'heic'];
+      const extension = validExtensions.includes(fileExtension) ? fileExtension : 'jpg';
+      
+      const s3Key = `disputes/${disputeId}/${uploadedBy}/${uuidv4()}.${extension}`;
+
+      // Upload to S3
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: s3Key,
+          Body: file.buffer,
+          ContentType: file.mimetype || `image/${extension}`,
+        })
+      );
+
+      const imageUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${s3Key}`;
+
+      // Save to database
+      const disputeImage = await prisma.dispute_images.create({
+        data: {
+          id: uuidv4(),
+          dispute_id: disputeId,
+          image_url: imageUrl,
+          s3_key: s3Key,
+          uploaded_by: uploadedBy,
+          created_at: new Date(),
+        },
+      });
+
+      console.log(`✅ Dispute image uploaded: ${imageUrl}`);
+
+      res.status(201).json({
+        success: true,
+        image: {
+          id: disputeImage.id,
+          url: imageUrl,
+          uploaded_by: uploadedBy,
+        },
+      });
+    } catch (error: any) {
+      console.error('❌ Error uploading dispute image:', error);
+      res.status(500).json({ error: 'Failed to upload image' });
+    }
+  }
 }
