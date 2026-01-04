@@ -27,6 +27,7 @@ import sesRoutes from './routes/sesRoutes';
 import { runEscrowJobs } from './services/escrowService';
 import { updateVerificationStatus } from './services/verificationService';
 import disputeRoutes from './routes/disputeRoutes';
+import adminRoutes from './routes/adminRoutes';
 
 const app = express();
 const httpServer = createServer(app);
@@ -34,6 +35,9 @@ const PORT = Number(process.env.PORT) || 3001;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 app.set('trust proxy', 1);
+
+// Serve static files (admin panel)
+app.use(express.static('public'));
 
 // Initialize WebSocket
 const socketService = new SocketService(httpServer);
@@ -100,6 +104,7 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/shipping', shippingRoutes);
 app.use('/api/ses', sesRoutes);
 app.use('/api/disputes', disputeRoutes);
+app.use('/admin', adminRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
