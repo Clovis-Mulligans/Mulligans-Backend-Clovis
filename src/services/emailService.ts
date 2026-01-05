@@ -5,7 +5,7 @@ import path from 'path';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const FROM_ADDRESS = 'Mulligans <noreply@mail.mulligans.uk.com>';
+const FROM_ADDRESS = 'Mulligans <hello@mail.mulligans.uk.com>';
 const ADMIN_EMAIL = 'info@mulligans.uk.com';
 
 function loadTemplate(templateName: string, variables: Record<string, string>): string {
