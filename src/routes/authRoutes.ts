@@ -236,13 +236,15 @@ router.post('/verify-email', async (req: Request, res: Response) => {
       }
     }
 
-    // Clear verification code and mark as verified
+    // ✅ FIXED: Only clear verification code, do NOT set is_verified to true
+    // is_verified is for SELLER VERIFICATION (the badge), not email verification
+    // Email verification is tracked via Cognito confirmation status
     await prisma.users.update({
       where: { id: user.id },
       data: {
         verification_code: null,
         verification_code_expires: null,
-        is_verified: true,
+        // ❌ REMOVED: is_verified: true - this was giving new users the verified seller badge!
         updated_at: new Date(),
       },
     });
@@ -257,7 +259,7 @@ router.post('/verify-email', async (req: Request, res: Response) => {
       console.error('⚠️ Failed to send welcome email:', emailError);
     }
 
-    // Create JWT token
+    // Auto-login after verification
     const token = jwt.sign(
       {
         userId: user.id,
@@ -273,8 +275,6 @@ router.post('/verify-email', async (req: Request, res: Response) => {
     res.json({
       message: 'Email verified successfully!',
       accessToken: token,
-      idToken: token,
-      refreshToken: token,
       user: {
         id: user.id,
         email: user.email,
@@ -282,7 +282,7 @@ router.post('/verify-email', async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    console.error('❌ Verification error:', error);
+    console.error('❌ Verify email error:', error);
     res.status(400).json({
       error: error.message || 'Verification failed',
     });
@@ -302,25 +302,19 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
 
     console.log('📧 Resending verification code to:', email);
 
-    // Find user
     const user = await prisma.users.findFirst({
       where: { email },
     });
 
     if (!user) {
       // Don't reveal if user exists
-      return res.json({ message: 'If an account exists, a verification code has been sent.' });
-    }
-
-    if (user.is_verified) {
-      return res.status(400).json({ error: 'This email is already verified. Please log in.' });
+      return res.json({ message: 'If an account exists with this email, a new code has been sent.' });
     }
 
     // Generate new code
     const verificationCode = generateVerificationCode();
     const codeExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    // Update user with new code
     await prisma.users.update({
       where: { id: user.id },
       data: {
@@ -333,12 +327,13 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
     // Send email
     try {
       await sendVerificationEmail(email, verificationCode);
-      console.log('📧 Verification email resent to:', email);
+      console.log('📧 Verification code resent to:', email);
     } catch (emailError) {
-      console.error('❌ Failed to resend verification email:', emailError);
+      console.error('❌ Failed to send verification email:', emailError);
+      return res.status(500).json({ error: 'Failed to send verification email. Please try again.' });
     }
 
-    res.json({ message: 'If an account exists, a verification code has been sent.' });
+    res.json({ message: 'A new verification code has been sent to your email.' });
   } catch (error: any) {
     console.error('❌ Resend verification error:', error);
     res.status(400).json({
@@ -360,21 +355,21 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
     console.log('🔐 Password reset requested for:', email);
 
-    // Find user
+    // Check if user exists
     const user = await prisma.users.findFirst({
       where: { email },
     });
 
     if (!user) {
       // Don't reveal if user exists - security best practice
-      return res.json({ message: 'If an account exists with this email, a reset code has been sent.' });
+      return res.json({ message: 'If an account exists with this email, a password reset code has been sent.' });
     }
 
     // Generate reset code
     const resetCode = generateVerificationCode();
     const codeExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    // Save reset code to database
+    // Save to database
     await prisma.users.update({
       where: { id: user.id },
       data: {
@@ -390,21 +385,20 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       console.log('📧 Password reset email sent to:', email);
     } catch (emailError) {
       console.error('❌ Failed to send password reset email:', emailError);
+      return res.status(500).json({ error: 'Failed to send reset email. Please try again.' });
     }
 
-    res.json({
-      message: 'If an account exists with this email, a reset code has been sent.',
-    });
+    res.json({ message: 'If an account exists with this email, a password reset code has been sent.' });
   } catch (error: any) {
     console.error('❌ Forgot password error:', error);
     res.status(400).json({
-      error: error.message || 'Failed to send reset code',
+      error: error.message || 'Failed to process password reset request',
     });
   }
 });
 
 /**
- * Reset Password - Confirm with code and set new password
+ * Reset Password - Use reset code to set new password
  */
 router.post('/reset-password', async (req: Request, res: Response) => {
   try {
