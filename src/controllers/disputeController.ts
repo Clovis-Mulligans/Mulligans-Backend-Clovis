@@ -3,7 +3,7 @@
 // - Buyer opens dispute with photos + refund request
 // - Seller responds (accept/counter/reject)
 // - Buyer reviews counter-offer
-// - 36-hour deadline with auto-escalation
+// - 72-hour deadline with auto-escalation
 // - Admin resolution
 // - Email notifications (with branded templates)
 // - ✅ SELLER PAYOUT: Transfers remaining funds to seller after partial/no refund
@@ -42,7 +42,7 @@ const S3_BUCKET = process.env.AWS_S3_BUCKET || 'mulligans-golf-images-mvp';
 // ============================================
 // CONSTANTS
 // ============================================
-const SELLER_RESPONSE_DEADLINE_HOURS = 36;
+const SELLER_RESPONSE_DEADLINE_HOURS = 72;
 const ESCROW_RELEASE_DAYS = 3; // ✅ Buyer has 3 days from delivery to raise an issue
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'info@mulligans.uk.com';
 
@@ -361,7 +361,7 @@ export class DisputeController {
       const orderAmount = parseFloat(order.amount.toString());
       const requestedRefundAmount = (orderAmount * requestedRefundPercent) / 100;
 
-      // Calculate seller deadline (36 hours from now)
+      // Calculate seller deadline (72 hours from now)
       const sellerDeadline = new Date();
       sellerDeadline.setHours(sellerDeadline.getHours() + SELLER_RESPONSE_DEADLINE_HOURS);
 
@@ -430,7 +430,7 @@ export class DisputeController {
           user_id: order.seller_id,
           type: 'dispute',
           title: '⚠️ Dispute Opened',
-          message: `A buyer has opened a dispute for "${listingTitle}". You have 36 hours to respond. Requested: £${requestedRefundAmount.toFixed(2)} (${requestedRefundPercent}%)`,
+          message: `A buyer has opened a dispute for "${listingTitle}". You have 72 hours to respond. Requested: £${requestedRefundAmount.toFixed(2)} (${requestedRefundPercent}%)`,
           image_url: listingImage,
           related_id: disputeId,
         },
@@ -441,7 +441,7 @@ export class DisputeController {
         await sendPushNotification(
           seller.push_token,
           '⚠️ Dispute Opened - Action Required',
-          `A dispute has been opened for "${listingTitle}". You have 36 hours to respond.`,
+          `A dispute has been opened for "${listingTitle}". You have 72 hours to respond.`,
           { type: 'dispute', disputeId, orderId }
         );
       }
@@ -487,7 +487,7 @@ export class DisputeController {
       res.status(201).json({ 
         success: true, 
         disputeId,
-        message: 'Dispute opened successfully. The seller has 36 hours to respond.',
+        message: 'Dispute opened successfully. The seller has 72 hours to respond.',
         dispute: {
           id: disputeId,
           status: 'open',
@@ -1746,7 +1746,7 @@ export class DisputeController {
             sellerName: seller.display_name || 'Seller',
             sellerEmail: seller.email || '',
             reasonType: dispute.reason_type,
-            escalationReason: 'Auto-escalated: Seller failed to respond within 36 hours',
+            escalationReason: 'Auto-escalated: Seller failed to respond within 72 hours',
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send auto-escalation email to admin:', emailError);
