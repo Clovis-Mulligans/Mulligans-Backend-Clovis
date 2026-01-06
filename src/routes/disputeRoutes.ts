@@ -68,6 +68,10 @@ router.put('/:id/respond', authenticateToken, DisputeController.respondToDispute
 // GET /api/admin/disputes
 router.get('/admin/list', DisputeController.getAdminDisputes);
 
+// Get single dispute detail (admin) - includes full listing
+// GET /api/admin/disputes/:id
+router.get('/admin/:id', DisputeController.getAdminDisputeDetail);
+
 // Admin resolves dispute
 // PUT /api/disputes/:id/resolve
 router.put('/:id/resolve', DisputeController.adminResolveDispute);

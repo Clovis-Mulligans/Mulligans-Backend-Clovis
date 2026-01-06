@@ -1652,6 +1652,171 @@ export class DisputeController {
   }
 
   /**
+ * Get single dispute detail (admin) - includes full listing info
+ * GET /api/admin/disputes/:id
+ */
+static async getAdminDisputeDetail(req: Request, res: Response) {
+  try {
+    const disputeId = req.params.id;
+
+    const dispute = await prisma.disputes.findFirst({
+      where: { id: disputeId },
+      include: {
+        orders: {
+          select: {
+            id: true,
+            amount: true,
+            seller_payout: true,
+            listing_id: true,
+            listing_title: true,
+            listing_image: true,
+            shipping_address: true,
+            tracking_number: true,
+            carrier: true,
+            created_at: true,
+            paid_at: true,
+            shipped_at: true,
+            delivered_at: true,
+            // Include full listing data
+            listings: {
+              select: {
+                id: true,
+                title: true,
+                description: true,
+                price: true,
+                images: {
+                  select: { image_url: true },
+                  orderBy: { display_order: 'asc' },
+                },
+              },
+            },
+          },
+        },
+        users_disputes_buyer: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+            avatar_url: true,
+            rating: true,
+            total_purchases: true,
+          },
+        },
+        users_disputes_seller: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+            avatar_url: true,
+            rating: true,
+            total_sales: true,
+            is_verified: true,
+          },
+        },
+        dispute_images: {
+          orderBy: { created_at: 'asc' },
+        },
+      },
+    });
+
+    if (!dispute) {
+      return res.status(404).json({ error: 'Dispute not found' });
+    }
+
+    res.json({
+      dispute: {
+        id: dispute.id,
+        order_id: dispute.order_id,
+        status: dispute.status,
+        
+        // Buyer's claim
+        reason_type: dispute.reason_type,
+        reason_text: dispute.reason_text,
+        requested_refund_percent: dispute.requested_refund_percent,
+        requested_refund_amount: parseFloat(dispute.requested_refund_amount.toString()),
+        
+        // Seller's response
+        seller_response_type: dispute.seller_response_type,
+        counter_offer_percent: dispute.counter_offer_percent,
+        counter_offer_amount: dispute.counter_offer_amount ? parseFloat(dispute.counter_offer_amount.toString()) : null,
+        seller_response_text: dispute.seller_response_text,
+        seller_responded_at: dispute.seller_responded_at?.toISOString() || null,
+        
+        // Resolution
+        resolution_type: dispute.resolution_type,
+        resolution_amount: dispute.resolution_amount ? parseFloat(dispute.resolution_amount.toString()) : null,
+        resolution_notes: dispute.resolution_notes,
+        resolved_by: dispute.resolved_by,
+        resolved_at: dispute.resolved_at?.toISOString() || null,
+        
+        // Deadline
+        seller_deadline: dispute.seller_deadline.toISOString(),
+        auto_escalated: dispute.auto_escalated,
+        
+        // Timestamps
+        created_at: dispute.created_at.toISOString(),
+        updated_at: dispute.updated_at.toISOString(),
+        
+        // Order info with full listing
+        order: {
+          id: dispute.orders.id,
+          amount: parseFloat(dispute.orders.amount.toString()),
+          seller_payout: dispute.orders.seller_payout ? parseFloat(dispute.orders.seller_payout.toString()) : null,
+          listing_title: dispute.orders.listing_title,
+          listing_image: dispute.orders.listing_image,
+          tracking_number: dispute.orders.tracking_number,
+          carrier: dispute.orders.carrier,
+          created_at: dispute.orders.created_at?.toISOString() || null,
+          shipped_at: dispute.orders.shipped_at?.toISOString() || null,
+          delivered_at: dispute.orders.delivered_at?.toISOString() || null,
+          // Full listing info for admin
+          listing: dispute.orders.listings ? {
+            id: dispute.orders.listings.id,
+            description: dispute.orders.listings.description,
+            price: parseFloat(dispute.orders.listings.price.toString()),
+            images: dispute.orders.listings.images.map(img => img.image_url),
+          } : null,
+        },
+        
+        // Users
+        buyer: {
+          id: dispute.users_disputes_buyer.id,
+          display_name: dispute.users_disputes_buyer.display_name,
+          email: dispute.users_disputes_buyer.email,
+          avatar_url: dispute.users_disputes_buyer.avatar_url,
+          rating: parseFloat(dispute.users_disputes_buyer.rating?.toString() || '0'),
+          total_purchases: dispute.users_disputes_buyer.total_purchases,
+        },
+        seller: {
+          id: dispute.users_disputes_seller.id,
+          display_name: dispute.users_disputes_seller.display_name,
+          email: dispute.users_disputes_seller.email,
+          avatar_url: dispute.users_disputes_seller.avatar_url,
+          rating: parseFloat(dispute.users_disputes_seller.rating?.toString() || '0'),
+          total_sales: dispute.users_disputes_seller.total_sales,
+          is_verified: dispute.users_disputes_seller.is_verified,
+        },
+        
+        // Images
+        buyer_images: dispute.dispute_images.filter(img => img.uploaded_by === 'buyer').map(img => ({
+          id: img.id,
+          url: img.image_url,
+          created_at: img.created_at.toISOString(),
+        })),
+        seller_images: dispute.dispute_images.filter(img => img.uploaded_by === 'seller').map(img => ({
+          id: img.id,
+          url: img.image_url,
+          created_at: img.created_at.toISOString(),
+        })),
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ Get admin dispute detail error:', error);
+    res.status(500).json({ error: 'Failed to get dispute' });
+  }
+}
+
+  /**
    * Auto-escalate expired disputes (called by cron job)
    * POST /api/disputes/auto-escalate
    */
