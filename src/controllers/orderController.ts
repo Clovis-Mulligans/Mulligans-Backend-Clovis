@@ -416,16 +416,16 @@ if (order.disputes && order.disputes.length > 0) {
           id: d.id,
           status: d.status,
           reason_type: d.reason_type,
-          reason: d.description || null,
+          reason: d.reason_text || d.description || null,
           requested_refund_amount: d.requested_refund_amount 
             ? parseFloat(d.requested_refund_amount.toString()) 
             : null,
           requested_refund_percent: d.requested_refund_percent,
-          final_refund_amount: d.final_refund_amount 
-            ? parseFloat(d.final_refund_amount.toString()) 
-            : null,
+          final_refund_amount: d.resolution_amount
+  ? parseFloat(d.resolution_amount.toString())
+  : null,
           resolution_notes: d.resolution_notes,
-          seller_response: d.seller_response,
+          seller_response: d.seller_response_text || d.seller_response || null,
           counter_amount: d.counter_amount 
             ? parseFloat(d.counter_amount.toString()) 
             : null,
