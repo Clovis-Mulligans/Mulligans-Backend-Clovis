@@ -392,10 +392,7 @@ export class OrderController {
             },
           },
           // ✅ NEW: Include dispute data for resolution display
-          disputes: {
-            orderBy: { created_at: 'desc' },
-            take: 1,
-          },
+          disputes: true,
         },
       });
 
@@ -406,10 +403,15 @@ export class OrderController {
       const isBuyer = order.buyer_id === userId;
       const isSeller = order.seller_id === userId;
 
-      // ✅ Format dispute data
-      let disputeData = null;
-      if (order.disputes && order.disputes.length > 0) {
-        const d = order.disputes[0];
+     // ✅ Format dispute data
+let disputeData = null;
+if (order.disputes && order.disputes.length > 0) {
+  // Get most recent dispute (sort in JS since Prisma include doesn't support orderBy)
+  const disputes = (order as any).disputes || [];
+  const latestDispute = disputes.sort((a: any, b: any) => 
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )[0];
+  const d = latestDispute;
         disputeData = {
           id: d.id,
           status: d.status,
