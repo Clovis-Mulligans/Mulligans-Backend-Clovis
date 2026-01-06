@@ -1414,7 +1414,7 @@
       document.getElementById('modalContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
       try {
-        const response = await fetch(`${API_BASE}/disputes/${id}`, {
+        const response = await fetch(`${API_BASE}/disputes/admin/${id}`, {
           headers: { 'Authorization': `Admin ${adminPassword}` },
         });
 
@@ -1650,6 +1650,36 @@
             </div>
           </div>
         ` : ''}
+        <!-- Original Listing -->
+          ${d.order.listing ? `
+          <div class="detail-section" style="grid-column: 1 / -1;">
+            <h3>🏷️ Original Listing</h3>
+            <div class="detail-card">
+              <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                <!-- Listing Images -->
+                <div style="flex: 0 0 auto;">
+                  <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Listing Photos (${d.order.listing.images?.length || 0})</h4>
+                  <div class="evidence-grid" style="grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); max-width: 500px;">
+                    ${d.order.listing.images?.map(img => `
+                      <img class="evidence-image" src="${img}" onclick="openImage('${img}')" alt="Listing photo" style="width: 100px; height: 100px; object-fit: cover;">
+                    `).join('') || '<span style="color: #9CA3AF; font-size: 13px;">No images available</span>'}
+                  </div>
+                </div>
+                <!-- Listing Description -->
+                <div style="flex: 1; min-width: 250px;">
+                  <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Description</h4>
+                  <div style="background: #F9FAFB; border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto;">
+                    <p style="font-size: 14px; color: #374151; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(d.order.listing.description) || 'No description available'}</p>
+                  </div>
+                  <div style="margin-top: 12px;">
+                    <span style="font-size: 12px; color: #6B7280;">Listed Price: </span>
+                    <span style="font-size: 14px; font-weight: 600; color: #1DC690;">£${d.order.listing.price?.toFixed(2) || 'N/A'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          ` : ''}
       `;
     }
 
