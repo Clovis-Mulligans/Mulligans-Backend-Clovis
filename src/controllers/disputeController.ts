@@ -790,7 +790,7 @@ export class DisputeController {
       } else if (responseType === 'counter') {
         // Seller makes counter-offer
         if (!counterOfferPercent || counterOfferPercent < 10 || counterOfferPercent > 100 || counterOfferPercent % 10 !== 0) {
-          return res.status(400).json({ error: 'Invalid counter offer percentage' });
+          return res.status(400).json({ error: 'Invalid counter proposal percentage' });
         }
         newStatus = 'counter_offered';
         counterOfferAmount = (orderAmount * counterOfferPercent) / 100;
@@ -898,8 +898,8 @@ export class DisputeController {
         notificationTitle = '✅ Dispute Resolved';
         notificationMessage = `The seller has accepted your request. £${resolutionAmount?.toFixed(2)} will be refunded to your account.`;
       } else if (responseType === 'counter') {
-        notificationTitle = '💬 Counter Offer Received';
-        notificationMessage = `The seller has made a counter offer of £${counterOfferAmount?.toFixed(2)} (${counterOfferPercent}%) for "${listingTitle}". Please review and respond.`;
+        notificationTitle = '💬 Counter Dispute Received';
+        notificationMessage = `The seller has made a counter proposal of £${counterOfferAmount?.toFixed(2)} (${counterOfferPercent}%) for "${listingTitle}". Please review and respond.`;
       } else if (responseType === 'reject') {
         notificationTitle = '⚠️ Dispute Escalated';
         notificationMessage = `The seller has rejected your claim for "${listingTitle}". Mulligans will now review and make a decision.`;
@@ -986,7 +986,7 @@ export class DisputeController {
         message: responseType === 'accept' 
           ? 'You have accepted the buyer\'s request. A refund has been processed.'
           : responseType === 'counter'
-          ? 'Your counter offer has been sent to the buyer.'
+          ? 'Your counter proposal has been sent to the buyer.'
           : 'Your response has been recorded. Mulligans will review and make a decision.',
       });
     } catch (error: any) {
@@ -996,7 +996,7 @@ export class DisputeController {
   }
 
   /**
-   * Buyer accepts counter offer
+   * Buyer accepts counter proposal
    * PUT /api/disputes/:id/accept-counter
    * 
    * ✅ ESCROW: Refunds counter amount to buyer, transfers remaining to seller
@@ -1006,7 +1006,7 @@ export class DisputeController {
       const userId = (req as any).user?.id;
       const disputeId = req.params.id;
 
-      console.log('✅ Buyer accepting counter offer:', disputeId);
+      console.log('✅ Buyer accepting counter proposal:', disputeId);
 
       const dispute = await prisma.disputes.findFirst({
         where: {
@@ -1044,7 +1044,7 @@ export class DisputeController {
       });
 
       if (!dispute) {
-        return res.status(404).json({ error: 'Dispute not found or no counter offer to accept' });
+        return res.status(404).json({ error: 'Dispute not found or no counter proposal to accept' });
       }
 
       const counterOfferAmount = parseFloat(dispute.counter_offer_amount!.toString());
@@ -1064,7 +1064,7 @@ export class DisputeController {
               resolution: 'buyer_accepted_counter',
             },
           });
-          console.log(`💸 Counter offer refund processed: £${counterOfferAmount.toFixed(2)}`);
+          console.log(`💸 counter proposal refund processed: £${counterOfferAmount.toFixed(2)}`);
         } catch (refundError: any) {
           console.error('⚠️ Refund failed:', refundError.message);
           return res.status(500).json({ error: 'Failed to process refund' });
@@ -1118,7 +1118,7 @@ export class DisputeController {
           user_id: seller.id,
           type: 'dispute_resolved',
           title: '✅ Dispute Resolved',
-          message: `The buyer accepted your counter offer of £${counterOfferAmount.toFixed(2)} for "${listingTitle}".${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`,
+          message: `The buyer accepted your counter proposal of £${counterOfferAmount.toFixed(2)} for "${listingTitle}".${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`,
           image_url: dispute.orders.listing_image,
           related_id: disputeId,
         },
@@ -1129,7 +1129,7 @@ export class DisputeController {
         await sendPushNotification(
           seller.push_token,
           '✅ Dispute Resolved',
-          `The buyer accepted your counter offer for "${listingTitle}".`,
+          `The buyer accepted your counter proposal for "${listingTitle}".`,
           { type: 'dispute_resolved', disputeId }
         );
       }
@@ -1143,7 +1143,7 @@ export class DisputeController {
             orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             resolutionType: dispute.counter_offer_percent === 100 ? 'full_refund' : 'partial_refund',
             refundAmount: counterOfferAmount.toFixed(2),
-            adminNotes: 'You accepted the seller\'s counter offer.',
+            adminNotes: 'You accepted the seller\'s counter proposal.',
             isBuyer: true,
           });
         } catch (emailError) {
@@ -1159,7 +1159,7 @@ export class DisputeController {
             orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             resolutionType: dispute.counter_offer_percent === 100 ? 'full_refund' : 'partial_refund',
             refundAmount: counterOfferAmount.toFixed(2),
-            adminNotes: `The buyer accepted your counter offer.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ' Your payout is being processed.'}`,
+            adminNotes: `The buyer accepted your counter proposal.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ' Your payout is being processed.'}`,
             isBuyer: false,
           });
         } catch (emailError) {
@@ -1167,15 +1167,15 @@ export class DisputeController {
         }
       }
 
-      console.log('✅ Counter offer accepted:', disputeId);
+      console.log('✅ counter proposal accepted:', disputeId);
       res.json({ 
         success: true, 
-        message: `Counter offer accepted. £${counterOfferAmount.toFixed(2)} will be refunded to your account.`,
+        message: `counter proposal accepted. £${counterOfferAmount.toFixed(2)} will be refunded to your account.`,
         resolution_amount: counterOfferAmount,
       });
     } catch (error: any) {
-      console.error('❌ Accept counter offer error:', error);
-      res.status(500).json({ error: 'Failed to accept counter offer' });
+      console.error('❌ Accept counter proposal error:', error);
+      res.status(500).json({ error: 'Failed to accept counter proposal' });
     }
   }
 
@@ -1278,8 +1278,8 @@ export class DisputeController {
           sellerEmail: seller.email || '',
           reasonType: dispute.reason_type,
           escalationReason: additionalNotes 
-            ? `Buyer rejected counter offer: ${additionalNotes}`
-            : 'Buyer rejected the seller\'s counter offer',
+            ? `Buyer rejected counter proposal: ${additionalNotes}`
+            : 'Buyer rejected the seller\'s counter proposal',
         });
       } catch (emailError) {
         console.error('⚠️ Failed to send escalation email to admin:', emailError);
