@@ -1414,7 +1414,7 @@
       document.getElementById('modalContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
       try {
-        const response = await fetch(`${API_BASE}/disputes/admin/${id}`, {
+        const response = await fetch(`/api/disputes/admin/${id}`, {
           headers: { 'Authorization': `Admin ${adminPassword}` },
         });
 
