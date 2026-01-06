@@ -405,13 +405,17 @@ export class OrderController {
 
      // ✅ Format dispute data
 let disputeData = null;
-if (order.disputes && order.disputes.length > 0) {
-  // Get most recent dispute (sort in JS since Prisma include doesn't support orderBy)
-  const disputes = (order as any).disputes || [];
-  const latestDispute = disputes.sort((a: any, b: any) => 
-    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  )[0];
-  const d = latestDispute;
+if (order.disputes) {
+  // Handle both single object (one-to-one) and array (one-to-many) relations
+  const disputesArray = Array.isArray((order as any).disputes) 
+    ? (order as any).disputes 
+    : [(order as any).disputes];
+  
+  if (disputesArray.length > 0 && disputesArray[0]) {
+    const latestDispute = disputesArray.sort((a: any, b: any) => 
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )[0];
+    const d = latestDispute;
         disputeData = {
           id: d.id,
           status: d.status,
@@ -435,6 +439,7 @@ if (order.disputes && order.disputes.length > 0) {
           auto_escalated: d.auto_escalated || false,
         };
       }
+  }
 
       const formattedOrder = {
         id: order.id,
