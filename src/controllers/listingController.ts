@@ -329,12 +329,7 @@ export class ListingController {
         return;
       }
 
-      // Get current count of images for this listing to set correct display_order
-      const existingImageCount = await prisma.images.count({
-        where: { listing_id: id }
-      });
-
-      console.log(`📸 Uploading ${files.length} images... (existing: ${existingImageCount})`);
+      console.log(`📸 Uploading ${files.length} images...`);
 
       // Import sharp for image processing
       const sharp = require('sharp');
@@ -381,17 +376,21 @@ export class ListingController {
           finalFilename
         );
 
-        // Create image record
-        await prisma.images.create({
-          data: {
-            id: `img_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 9)}`,
-            listing_id: id,
-            image_url: uploadResult.url,
-            s3_key: uploadResult.key,
-            display_order: existingImageCount + i,
-            created_at: new Date(),
-          },
-        });
+        // Create image record with atomic display_order calculation
+        // This prevents race conditions when multiple images upload in parallel
+        const imageId = `img_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        await prisma.$executeRaw`
+          INSERT INTO listing_images (id, listing_id, image_url, s3_key, display_order, created_at)
+          VALUES (
+            ${imageId},
+            ${id},
+            ${uploadResult.url},
+            ${uploadResult.key},
+            COALESCE((SELECT MAX(display_order) FROM listing_images WHERE listing_id = ${id}), -1) + 1,
+            NOW()
+          )
+        `;
 
         console.log(`✅ Image ${i + 1} uploaded:`, uploadResult.url);
       }
@@ -1219,4 +1218,4 @@ if (keyword) {
       res.status(500).json({ error: 'Failed to track view' });
     }
   }
-}  // <-- Class closing brace
+} 
