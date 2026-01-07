@@ -381,13 +381,13 @@ export class ListingController {
         const imageId = `img_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 9)}`;
         
         await prisma.$executeRaw`
-          INSERT INTO listing_images (id, listing_id, image_url, s3_key, display_order, created_at)
+          INSERT INTO images (id, listing_id, image_url, s3_key, display_order, created_at)
           VALUES (
             ${imageId},
             ${id},
             ${uploadResult.url},
             ${uploadResult.key},
-            COALESCE((SELECT MAX(display_order) FROM listing_images WHERE listing_id = ${id}), -1) + 1,
+            COALESCE((SELECT MAX(display_order) FROM images WHERE listing_id = ${id}), -1) + 1,
             NOW()
           )
         `;
