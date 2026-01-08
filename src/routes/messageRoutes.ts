@@ -1,6 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth';
+import { sendPushNotification } from '../controllers/pushNotificationController';
 import rateLimit from 'express-rate-limit';
 
 const router = express.Router();
@@ -27,7 +28,7 @@ router.get('/unread-count', authenticateToken, async (req: any, res) => {
       }
     });
 
-    console.log('📬 Unread count for user', userId, ':', unreadCount);
+    console.log('[MSG] Unread count for user', userId, ':', unreadCount);
     res.json({ unread_count: unreadCount });
   } catch (error) {
     console.error('Failed to get unread count:', error);
@@ -35,13 +36,13 @@ router.get('/unread-count', authenticateToken, async (req: any, res) => {
   }
 });
 
-// ✅ Mark messages as read in a conversation
+// Mark messages as read in a conversation
 router.patch('/conversations/:id/read', authenticateToken, async (req: any, res) => {
   try {
     const conversationId = req.params.id;
     const userId = req.user.sub || req.user.id;
 
-    console.log('📖 Marking messages as read in conversation:', conversationId);
+    console.log('[MSG] Marking messages as read in conversation:', conversationId);
     console.log('   For user:', userId);
 
     // Mark all messages in this conversation where user is receiver as read
@@ -56,7 +57,7 @@ router.patch('/conversations/:id/read', authenticateToken, async (req: any, res)
       }
     });
 
-    console.log('✅ Marked', result.count, 'messages as read');
+    console.log('[MSG] Marked', result.count, 'messages as read');
     res.json({ success: true, marked_count: result.count });
   } catch (error) {
     console.error('Failed to mark messages as read:', error);
@@ -70,7 +71,7 @@ router.post('/conversations', authenticateToken, async (req: any, res) => {
     const { listing_id, seller_id, buyer_id: providedBuyerId } = req.body;
     const userId = req.user.sub || req.user.id;
 
-    console.log('📨 Create conversation request:');
+    console.log('[MSG] Create conversation request:');
     console.log('   listing_id:', listing_id);
     console.log('   seller_id:', seller_id);
     console.log('   providedBuyerId:', providedBuyerId);
@@ -190,7 +191,7 @@ router.get('/conversations/:id/messages', authenticateToken, async (req: any, re
 });
 
 // Send message
-// ✅ FIXED: Notification now includes image_url and uses conversation_id (not listing_id)
+// FIXED: Now includes push notification
 router.post('/', authenticateToken, messageLimiter, async (req: any, res) => {
   try {
     const { conversation_id, content } = req.body;
@@ -242,8 +243,10 @@ router.post('/', authenticateToken, messageLimiter, async (req: any, res) => {
       }
     });
 
-    // ✅ FIXED: Create notification with image_url and conversation_id
+    // Create notification with image_url and conversation_id
     const listingImage = conversation.listings?.images?.[0]?.image_url || null;
+    const senderName = sender.display_name || 'Someone';
+    const listingTitle = conversation.listings?.title || 'an item';
     
     await prisma.notifications.create({
       data: {
@@ -251,14 +254,27 @@ router.post('/', authenticateToken, messageLimiter, async (req: any, res) => {
         user_id: receiver_id,
         type: 'message',
         title: 'New Message',
-        message: `${sender.display_name || 'Someone'} sent you a message about ${conversation.listings?.title || 'an item'}`,
-        image_url: listingImage,          // ✅ NOW INCLUDES LISTING IMAGE
-        related_id: conversation_id,       // ✅ FIXED: Now uses conversation_id (not listing_id)
+        message: `${senderName} sent you a message about ${listingTitle}`,
+        image_url: listingImage,
+        related_id: conversation_id,
         related_user_id: sender.id
       }
     });
 
-    console.log('📬 Created message notification for user', receiver_id);
+    console.log('[MSG] Created notification for user:', receiver_id);
+
+    // SEND PUSH NOTIFICATION
+    try {
+      console.log('[MSG] Sending push notification to:', receiver_id);
+      await sendPushNotification(
+        receiver_id,
+        `New message from ${senderName}`,
+        content.length > 50 ? content.substring(0, 50) + '...' : content,
+        { type: 'message', conversation_id: conversation_id }
+      );
+    } catch (pushErr) {
+      console.error('[MSG] Push notification failed:', pushErr);
+    }
 
     res.json(message);
   } catch (error) {
@@ -272,7 +288,7 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
   try {
     const userId = req.user.sub || req.user.id;
     
-    console.log('🔍 Fetching conversations for user:', userId);
+    console.log('[MSG] Fetching conversations for user:', userId);
     
     const current_user = await prisma.users.findUnique({
       where: { id: userId }
@@ -282,7 +298,7 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    console.log('✅ Current user found:', current_user.display_name);
+    console.log('[MSG] Current user found:', current_user.display_name);
 
     // Get all conversations for this user
     const conversations = await prisma.conversations.findMany({
@@ -294,21 +310,15 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
       }
     });
 
-    console.log('📬 Found', conversations.length, 'conversations');
+    console.log('[MSG] Found', conversations.length, 'conversations');
 
     // Enrich each conversation with details
     const enrichedConversations = await Promise.all(
       conversations.map(async (conv) => {
-        console.log('\n📝 Processing conversation:', conv.id);
-        console.log('   Buyer:', conv.buyer_id);
-        console.log('   Seller:', conv.seller_id);
-        
         // Determine the "other user"
         const other_user_id = conv.buyer_id === current_user.id 
           ? conv.seller_id 
           : conv.buyer_id;
-
-        console.log('   Other user ID:', other_user_id);
 
         // Fetch other user details
        const other_user = await prisma.users.findUnique({
@@ -321,8 +331,6 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
           }
         });
 
-        console.log('   Other user found:', other_user?.display_name || 'NOT FOUND');
-
         // Fetch listing details
         const listing = await prisma.listings.findUnique({
           where: { id: conv.listing_id },
@@ -334,8 +342,6 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
           }
         });
 
-        console.log('   Listing:', listing?.title || 'NOT FOUND');
-
         // Fetch last message
         const lastMessage = await prisma.messages.findFirst({
           where: { conversation_id: conv.id },
@@ -346,8 +352,6 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
             sender_id: true
           }
         });
-
-        console.log('   Last message:', lastMessage?.content || 'NO MESSAGES');
 
         // Count unread messages for this user in this conversation
         const unreadCount = await prisma.messages.count({
@@ -381,11 +385,11 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
       return new Date(b.last_message_timestamp).getTime() - new Date(a.last_message_timestamp).getTime();
     });
 
-    console.log('\n✅ Returning', enrichedConversations.length, 'enriched conversations');
+    console.log('[MSG] Returning', enrichedConversations.length, 'enriched conversations');
 
     res.json({ conversations: enrichedConversations });
   } catch (error) {
-    console.error('❌ Failed to get conversations:', error);
+    console.error('[MSG] Failed to get conversations:', error);
     res.status(500).json({ error: 'Failed to get conversations' });
   }
 });
