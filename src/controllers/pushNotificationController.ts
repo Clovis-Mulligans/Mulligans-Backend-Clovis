@@ -125,11 +125,28 @@ export const sendPushNotification = async (
     const result: any = await response.json();
     console.log('[PUSH] Expo API response:', JSON.stringify(result));
 
-    if (result.data?.[0]?.status === 'ok') {
+    // Handle Expo response - can be object or array
+    // Single notification: { data: { status: 'ok', id: '...' } }
+    // Batch notification: { data: [{ status: 'ok', id: '...' }] }
+    const pushResult = Array.isArray(result.data) ? result.data[0] : result.data;
+    
+    if (pushResult?.status === 'ok') {
       console.log('[PUSH] SUCCESS - Notification sent to:', user.display_name || userId);
       return true;
+    } else if (pushResult?.status === 'error') {
+      console.error('[PUSH] FAILED - Error:', pushResult.message, '| Details:', pushResult.details);
+      
+      // Handle invalid token - clear it from database
+      if (pushResult.details?.error === 'DeviceNotRegistered') {
+        console.log('[PUSH] Clearing invalid token for user:', userId);
+        await prisma.users.update({
+          where: { id: userId },
+          data: { push_token: null, push_token_platform: null },
+        });
+      }
+      return false;
     } else {
-      console.error('[PUSH] FAILED - Expo response:', JSON.stringify(result));
+      console.error('[PUSH] FAILED - Unexpected response:', JSON.stringify(result));
       return false;
     }
   } catch (error) {
