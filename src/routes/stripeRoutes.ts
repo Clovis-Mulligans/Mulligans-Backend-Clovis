@@ -38,7 +38,7 @@ router.post(
 router.post(
   '/native-payment/fulfill',
   authenticateToken,
-  NativePaymentController.fulfillNativePayment
+  NativePaymentController.confirmPayment  // ← FIXED: was fulfillNativePayment
 );
 
 // Webhook endpoint (NOT protected - Stripe calls this)

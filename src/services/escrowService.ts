@@ -3,10 +3,12 @@
 // - Auto-cancel unshipped orders after 5 days
 // - Auto-release funds 3 days after delivery (buyer has 3 days to raise issues)
 // - Flag potentially lost orders after 14 days
+// UPDATED: Added push notifications
 
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
 import { sendEscrowReleased } from './emailService';
+import { sendPushNotification } from '../controllers/pushNotificationController';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -17,7 +19,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // CONSTANTS
 // ============================================
 const SHIPPING_DEADLINE_DAYS = 5;
-const ESCROW_RELEASE_DAYS = 3; // ✅ UPDATED: Buyer has 3 days from delivery to raise an issue
+const ESCROW_RELEASE_DAYS = 3;
 const LOST_IN_TRANSIT_DAYS = 14;
 
 // ============================================
@@ -25,12 +27,11 @@ const LOST_IN_TRANSIT_DAYS = 14;
 // Runs daily - cancels orders not shipped within 5 days
 // ============================================
 export async function autoCancelUnshippedOrders(): Promise<void> {
-  console.log('🔄 Running auto-cancel check for unshipped orders...');
+  console.log('[ESCROW] Running auto-cancel check for unshipped orders...');
 
   try {
     const now = new Date();
 
-    // Find orders that are past their auto_cancel_at date and still in 'to_ship' status
     const overdueOrders = await prisma.orders.findMany({
       where: {
         status: 'to_ship',
@@ -66,11 +67,11 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
       },
     });
 
-    console.log(`📦 Found ${overdueOrders.length} overdue orders to cancel`);
+    console.log(`[ESCROW] Found ${overdueOrders.length} overdue orders to cancel`);
 
     for (const order of overdueOrders) {
       try {
-        console.log(`❌ Auto-cancelling order ${order.id} - seller didn't ship within ${SHIPPING_DEADLINE_DAYS} days`);
+        console.log(`[ESCROW] Auto-cancelling order ${order.id} - seller didn't ship within ${SHIPPING_DEADLINE_DAYS} days`);
 
         // 1. Refund the buyer via Stripe
         if (order.stripe_payment_intent_id) {
@@ -84,10 +85,9 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
                 auto_cancelled: 'true',
               },
             });
-            console.log(`💸 Refund created: ${refund.id} for order ${order.id}`);
+            console.log(`[ESCROW] Refund created: ${refund.id} for order ${order.id}`);
           } catch (refundError: any) {
-            console.error(`⚠️ Refund failed for order ${order.id}:`, refundError.message);
-            // Continue with cancellation even if refund fails - we can handle manually
+            console.error(`[ESCROW] Refund failed for order ${order.id}:`, refundError.message);
           }
         }
 
@@ -111,7 +111,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
               updated_at: now,
             },
           });
-          console.log(`📋 Relisted item: ${order.listing_id}`);
+          console.log(`[ESCROW] Relisted item: ${order.listing_id}`);
         }
 
         // 4. Increment seller's shipping strikes
@@ -128,13 +128,13 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
 
         // 5. If this is 2nd+ strike, create automatic 1-star review
         if (newStrikeCount >= 2) {
-          console.log(`⚠️ Seller ${seller.id} has ${newStrikeCount} strikes - creating auto-review`);
+          console.log(`[ESCROW] Seller ${seller.id} has ${newStrikeCount} strikes - creating auto-review`);
 
           await prisma.reviews.create({
             data: {
               id: `review_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               order_id: order.id,
-              reviewer_id: 'system', // Special system reviewer ID
+              reviewer_id: 'system',
               reviewed_user_id: seller.id,
               rating: 1,
               review_text: 'Order automatically cancelled - seller did not ship within the required timeframe.',
@@ -144,7 +144,6 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
             },
           });
 
-          // Update seller's rating
           await updateUserRating(seller.id);
         }
 
@@ -164,6 +163,18 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
           },
         });
 
+        // PUSH: Notify buyer
+        try {
+          await sendPushNotification(
+            order.buyer_id,
+            'Order Cancelled - Refund Issued',
+            `Your order for "${listingTitle}" was cancelled. Full refund processed.`,
+            { type: 'order_cancelled', order_id: order.id }
+          );
+        } catch (pushErr) {
+          console.error('[ESCROW] Push to buyer failed:', pushErr);
+        }
+
         // 7. Notify seller
         await prisma.notifications.create({
           data: {
@@ -177,37 +188,46 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
           },
         });
 
-        console.log(`✅ Order ${order.id} cancelled successfully`);
+        // PUSH: Notify seller
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Order Cancelled - Deadline Missed',
+            `Your order for "${listingTitle}" was cancelled. Ship within ${SHIPPING_DEADLINE_DAYS} days next time.`,
+            { type: 'order_cancelled', order_id: order.id }
+          );
+        } catch (pushErr) {
+          console.error('[ESCROW] Push to seller failed:', pushErr);
+        }
+
+        console.log(`[ESCROW] Order ${order.id} cancelled successfully`);
       } catch (orderError: any) {
-        console.error(`❌ Failed to cancel order ${order.id}:`, orderError.message);
+        console.error(`[ESCROW] Failed to cancel order ${order.id}:`, orderError.message);
       }
     }
 
-    console.log('✅ Auto-cancel check complete');
+    console.log('[ESCROW] Auto-cancel check complete');
   } catch (error: any) {
-    console.error('❌ Auto-cancel job failed:', error.message);
+    console.error('[ESCROW] Auto-cancel job failed:', error.message);
   }
 }
 
 // ============================================
 // AUTO-RELEASE ESCROW
 // Runs daily - releases funds for delivered orders after 3 days
-// ✅ UPDATED: Now checks for disputed orders and skips them
 // ============================================
 export async function autoReleaseEscrow(): Promise<void> {
-  console.log('🔄 Running escrow release check...');
+  console.log('[ESCROW] Running escrow release check...');
 
   try {
     const now = new Date();
 
-    // Find orders ready for escrow release
-    // ✅ IMPORTANT: Only release if NOT disputed
     const ordersToRelease = await prisma.orders.findMany({
       where: {
-        status: 'delivered', // Only delivered orders, NOT disputed
+        status: 'delivered',
         escrow_release_at: {
           lte: now,
-          not: null, // Must have a release date set
+          not: null,
         },
       },
       include: {
@@ -230,11 +250,11 @@ export async function autoReleaseEscrow(): Promise<void> {
       },
     });
 
-    console.log(`💰 Found ${ordersToRelease.length} orders ready for escrow release`);
+    console.log(`[ESCROW] Found ${ordersToRelease.length} orders ready for escrow release`);
 
     for (const order of ordersToRelease) {
       try {
-        console.log(`💸 Releasing escrow for order ${order.id}`);
+        console.log(`[ESCROW] Releasing escrow for order ${order.id}`);
 
         const seller = order.users_orders_seller_idTousers;
 
@@ -254,10 +274,9 @@ export async function autoReleaseEscrow(): Promise<void> {
               },
             });
 
-            console.log(`✅ Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)} to ${seller.stripe_connect_id}`);
+            console.log(`[ESCROW] Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)} to ${seller.stripe_connect_id}`);
           } catch (transferError: any) {
-            console.error(`⚠️ Transfer failed for order ${order.id}:`, transferError.message);
-            // Don't mark as completed if transfer fails
+            console.error(`[ESCROW] Transfer failed for order ${order.id}:`, transferError.message);
             continue;
           }
         }
@@ -286,19 +305,31 @@ export async function autoReleaseEscrow(): Promise<void> {
         const listingTitle = order.listings?.title || 'Your item';
         const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
-       await prisma.notifications.create({
+        await prisma.notifications.create({
           data: {
             id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             user_id: seller.id,
             type: 'payout',
-            title: 'Payment Released! 💰',
+            title: 'Payment Released!',
             message: `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
             image_url: listingImage,
             related_id: order.id,
           },
         });
 
-        // ✅ Send escrow released EMAIL to seller
+        // PUSH: Notify seller of payout
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Payment Released!',
+            `£${payoutAmount} for "${listingTitle}" is on its way to your bank.`,
+            { type: 'payout', order_id: order.id }
+          );
+        } catch (pushErr) {
+          console.error('[ESCROW] Push to seller failed:', pushErr);
+        }
+
+        // Send escrow released EMAIL to seller
         const sellerEmailRecord = await prisma.users.findUnique({
           where: { id: seller.id },
           select: { email: true },
@@ -316,22 +347,21 @@ export async function autoReleaseEscrow(): Promise<void> {
               fees: fees,
               payoutAmount: payoutAmount,
             });
-            console.log('📧 Escrow released email sent to seller:', sellerEmailRecord.email);
+            console.log('[ESCROW] Escrow released email sent to seller:', sellerEmailRecord.email);
           } catch (emailError) {
-            console.error('⚠️ Failed to send escrow released email:', emailError);
+            console.error('[ESCROW] Failed to send escrow released email:', emailError);
           }
         }
 
-
-        console.log(`✅ Escrow released for order ${order.id}`);
+        console.log(`[ESCROW] Escrow released for order ${order.id}`);
       } catch (orderError: any) {
-        console.error(`❌ Failed to release escrow for order ${order.id}:`, orderError.message);
+        console.error(`[ESCROW] Failed to release escrow for order ${order.id}:`, orderError.message);
       }
     }
 
-    console.log('✅ Escrow release check complete');
+    console.log('[ESCROW] Escrow release check complete');
   } catch (error: any) {
-    console.error('❌ Escrow release job failed:', error.message);
+    console.error('[ESCROW] Escrow release job failed:', error.message);
   }
 }
 
@@ -340,20 +370,19 @@ export async function autoReleaseEscrow(): Promise<void> {
 // Runs daily - flags orders that may be lost
 // ============================================
 export async function checkLostInTransit(): Promise<void> {
-  console.log('🔄 Running lost-in-transit check...');
+  console.log('[ESCROW] Running lost-in-transit check...');
 
   try {
     const now = new Date();
     const lostThreshold = new Date(now.getTime() - LOST_IN_TRANSIT_DAYS * 24 * 60 * 60 * 1000);
 
-    // Find orders shipped more than 14 days ago but not delivered
     const potentiallyLostOrders = await prisma.orders.findMany({
       where: {
         status: 'in_transit',
         shipped_at: {
           lte: lostThreshold,
         },
-        reported_lost_at: null, // Not already flagged
+        reported_lost_at: null,
       },
       include: {
         listings: {
@@ -374,7 +403,7 @@ export async function checkLostInTransit(): Promise<void> {
       },
     });
 
-    console.log(`📦 Found ${potentiallyLostOrders.length} potentially lost orders`);
+    console.log(`[ESCROW] Found ${potentiallyLostOrders.length} potentially lost orders`);
 
     for (const order of potentiallyLostOrders) {
       try {
@@ -394,15 +423,27 @@ export async function checkLostInTransit(): Promise<void> {
           },
         });
 
-        console.log(`📬 Sent lost-in-transit notification for order ${order.id}`);
+        // PUSH: Notify buyer
+        try {
+          await sendPushNotification(
+            order.buyer_id,
+            'Delivery Delayed',
+            `Your order for "${listingTitle}" may be delayed. You can report it as lost if needed.`,
+            { type: 'delivery_delayed', order_id: order.id }
+          );
+        } catch (pushErr) {
+          console.error('[ESCROW] Push to buyer failed:', pushErr);
+        }
+
+        console.log(`[ESCROW] Sent lost-in-transit notification for order ${order.id}`);
       } catch (notifyError: any) {
-        console.error(`⚠️ Failed to notify about order ${order.id}:`, notifyError.message);
+        console.error(`[ESCROW] Failed to notify about order ${order.id}:`, notifyError.message);
       }
     }
 
-    console.log('✅ Lost-in-transit check complete');
+    console.log('[ESCROW] Lost-in-transit check complete');
   } catch (error: any) {
-    console.error('❌ Lost-in-transit check failed:', error.message);
+    console.error('[ESCROW] Lost-in-transit check failed:', error.message);
   }
 }
 
@@ -426,14 +467,14 @@ async function updateUserRating(userId: string): Promise<void> {
     await prisma.users.update({
       where: { id: userId },
       data: {
-        rating: Math.round(averageRating * 100) / 100, // Round to 2 decimal places
+        rating: Math.round(averageRating * 100) / 100,
         updated_at: new Date(),
       },
     });
 
-    console.log(`📊 Updated rating for user ${userId}: ${averageRating.toFixed(2)}`);
+    console.log(`[ESCROW] Updated rating for user ${userId}: ${averageRating.toFixed(2)}`);
   } catch (error: any) {
-    console.error(`⚠️ Failed to update rating for user ${userId}:`, error.message);
+    console.error(`[ESCROW] Failed to update rating for user ${userId}:`, error.message);
   }
 }
 
@@ -443,7 +484,7 @@ async function updateUserRating(userId: string): Promise<void> {
 // ============================================
 export async function runEscrowJobs(): Promise<void> {
   console.log('═══════════════════════════════════════════');
-  console.log('🕐 Starting escrow jobs at', new Date().toISOString());
+  console.log('[ESCROW] Starting escrow jobs at', new Date().toISOString());
   console.log('═══════════════════════════════════════════');
 
   await autoCancelUnshippedOrders();
@@ -451,7 +492,7 @@ export async function runEscrowJobs(): Promise<void> {
   await checkLostInTransit();
 
   console.log('═══════════════════════════════════════════');
-  console.log('✅ All escrow jobs completed');
+  console.log('[ESCROW] All escrow jobs completed');
   console.log('═══════════════════════════════════════════');
 }
 

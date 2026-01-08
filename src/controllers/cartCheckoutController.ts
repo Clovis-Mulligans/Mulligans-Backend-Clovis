@@ -1,15 +1,17 @@
 // src/controllers/cartCheckoutController.ts
 // Handles checkout for cart with multiple items (potentially from multiple sellers)
-// ✅ ESCROW UPDATE: Removed immediate transfers - funds held until escrow releases
-// ✅ ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
-// ✅ FIXED: Now includes image_url in notifications
-// ✅ UPDATED: Sends order confirmation email to buyer
-// ✅ QUANTITY UPDATE: Now handles quantities in cart items
+// ESCROW UPDATE: Removed immediate transfers - funds held until escrow releases
+// ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
+// FIXED: Now includes image_url in notifications
+// UPDATED: Sends order confirmation email to buyer
+// QUANTITY UPDATE: Now handles quantities in cart items
+// PUSH: Added push notifications
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
+import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -28,10 +30,10 @@ interface AuthenticatedRequest extends Request {
 const PLATFORM_FEE_PERCENT = 0.07; // 7%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
 
-// ✅ Escrow constants
+// Escrow constants
 const SHIPPING_DEADLINE_DAYS = 5;
 
-// ✅ SIZE VARIANT: Helper to get stock for a specific size
+// SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
   if (!selectedSize) {
     return listing.quantity || 1;
@@ -43,7 +45,7 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
   return listing.quantity || 1;
 }
 
-// ✅ SIZE VARIANT: Helper to decrement stock for a specific size
+// SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
   if (!specifications || !selectedSize) return specifications;
   
@@ -58,7 +60,7 @@ function decrementSizeStock(specifications: any, selectedSize: string, quantity:
   return specs;
 }
 
-// ✅ SIZE VARIANT: Helper to calculate total stock from all sizes
+// SIZE VARIANT: Helper to calculate total stock from all sizes
 function getTotalStockFromSizes(specifications: any): number {
   if (!specifications?.sizeQuantities) return 0;
   return Object.values(specifications.sizeQuantities).reduce((sum: number, qty: any) => sum + (qty || 0), 0);
@@ -68,11 +70,6 @@ export class CartCheckoutController {
   /**
    * Create Stripe Checkout Session for Cart
    * POST /api/stripe/create-cart-checkout
-   * 
-   * This creates a single checkout session for all cart items.
-   * After payment, separate orders are created for each seller.
-   * ✅ ESCROW: Funds held in platform account until delivery confirmed
-   * ✅ QUANTITY: Now includes quantities in calculations
    */
   static async createCartCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
@@ -82,7 +79,7 @@ export class CartCheckoutController {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('🛒 Creating cart checkout session for user:', userId);
+      console.log('[CART] Creating cart checkout session for user:', userId);
 
       // Get all cart items for this user
       const cartItems = await prisma.cart_items.findMany({
@@ -121,7 +118,6 @@ export class CartCheckoutController {
       );
 
       if (unavailableItems.length > 0) {
-        // Remove unavailable items from cart
         await prisma.cart_items.deleteMany({
           where: {
             id: { in: unavailableItems.map((item) => item.id) },
@@ -137,7 +133,7 @@ export class CartCheckoutController {
         });
       }
 
-      // ✅ SIZE VARIANT: Validate quantities against size-specific stock
+      // SIZE VARIANT: Validate quantities against size-specific stock
       const overStockItems: any[] = [];
       for (const item of cartItems) {
         const selectedSize = item.selected_size;
@@ -175,21 +171,20 @@ export class CartCheckoutController {
       }
 
       // Group items by seller for order creation later
-      // ✅ QUANTITY: Now includes totalQuantity per seller
       const sellerGroups: {
         [sellerId: string]: {
           seller: any;
           items: any[];
           subtotal: number;
           shippingTotal: number;
-          totalQuantity: number;  // ✅ NEW
+          totalQuantity: number;
         };
       } = {};
 
       for (const item of cartItems) {
         const sellerId = item.listings.seller_id;
         const seller = item.listings.users;
-        const quantity = item.quantity || 1;  // ✅ Get quantity from cart item
+        const quantity = item.quantity || 1;
 
         if (!sellerGroups[sellerId]) {
           sellerGroups[sellerId] = {
@@ -197,14 +192,13 @@ export class CartCheckoutController {
             items: [],
             subtotal: 0,
             shippingTotal: 0,
-            totalQuantity: 0,  // ✅ NEW
+            totalQuantity: 0,
           };
         }
 
         const price = parseFloat(item.listings.price.toString());
         const shippingCost = parseFloat((item.listings as any).shipping_cost?.toString() || '0');
         
-        // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
         const listingShipping = Math.ceil(quantity / 5) * shippingCost;
         
         sellerGroups[sellerId].items.push({
@@ -212,23 +206,21 @@ export class CartCheckoutController {
           title: item.listings.title,
           price,
           quantity,
-          selected_size: item.selected_size || null,  // ✅ SIZE VARIANT
+          selected_size: item.selected_size || null,
           shipping_cost: shippingCost,
           image_url: item.listings.images[0]?.image_url || null,
         });
-        sellerGroups[sellerId].subtotal += price * quantity;  // ✅ Multiply by quantity
-        // ✅ SHIPPING: Take MAX shipping per seller (not sum)
+        sellerGroups[sellerId].subtotal += price * quantity;
         sellerGroups[sellerId].shippingTotal = Math.max(sellerGroups[sellerId].shippingTotal, listingShipping);
-        sellerGroups[sellerId].totalQuantity += quantity;  // ✅ NEW
+        sellerGroups[sellerId].totalQuantity += quantity;
       }
 
       // Ensure all sellers have Connect accounts (auto-create if needed)
-      // (Sellers still need Connect accounts for future payout after escrow)
       for (const sellerId of Object.keys(sellerGroups)) {
         const seller = sellerGroups[sellerId].seller;
 
         if (!seller.stripe_connect_id) {
-          console.log('🔗 Auto-creating Connect account for seller:', sellerId);
+          console.log('[CART] Auto-creating Connect account for seller:', sellerId);
 
           try {
             const account = await stripe.accounts.create({
@@ -254,7 +246,6 @@ export class CartCheckoutController {
               },
             });
 
-            // Update database
             await prisma.users.update({
               where: { id: sellerId },
               data: {
@@ -265,9 +256,9 @@ export class CartCheckoutController {
             });
 
             seller.stripe_connect_id = account.id;
-            console.log('✅ Connect account created:', account.id);
+            console.log('[CART] Connect account created:', account.id);
           } catch (error: any) {
-            console.error('❌ Failed to create Connect account for seller:', sellerId, error);
+            console.error('[CART] Failed to create Connect account for seller:', sellerId, error);
             return res.status(500).json({
               error: 'Failed to set up seller payments',
               details: error.message,
@@ -276,12 +267,11 @@ export class CartCheckoutController {
         }
       }
 
-      // ✅ QUANTITY: Calculate totals with quantity support
+      // Calculate totals with quantity support
       const itemsTotal = cartItems.reduce(
         (sum, item) => sum + parseFloat(item.listings.price.toString()) * (item.quantity || 1),
         0
       );
-      // ✅ SHIPPING: Sum each seller's MAX shipping (already calculated with ceil(qty/5) logic)
       const shippingTotal = Object.values(sellerGroups).reduce(
         (sum, group) => sum + group.shippingTotal,
         0
@@ -297,18 +287,17 @@ export class CartCheckoutController {
       const platformFeePence = Math.round(platformFee * 100);
       const shippingTotalPence = Math.round(shippingTotal * 100);
 
-      console.log('💰 Cart checkout price breakdown:', {
+      console.log('[CART] Cart checkout price breakdown:', {
         itemsTotal: itemsTotal.toFixed(2),
         shippingTotal: shippingTotal.toFixed(2),
         platformFee: platformFee.toFixed(2),
         grandTotal: grandTotal.toFixed(2),
         itemCount: cartItems.length,
-        totalQuantity: totalQuantity,  // ✅ NEW
+        totalQuantity: totalQuantity,
         sellerCount: Object.keys(sellerGroups).length,
-        escrowNote: 'Funds held until delivery confirmed',
       });
 
-      // ✅ QUANTITY: Build line items for Stripe Checkout with quantities
+      // Build line items for Stripe Checkout with quantities
       const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = cartItems.map(
         (item) => ({
           price_data: {
@@ -322,7 +311,7 @@ export class CartCheckoutController {
             },
             unit_amount: Math.round(parseFloat(item.listings.price.toString()) * 100),
           },
-          quantity: item.quantity || 1,  // ✅ Use cart item quantity
+          quantity: item.quantity || 1,
         })
       );
 
@@ -346,7 +335,7 @@ export class CartCheckoutController {
             currency: 'gbp',
             product_data: {
               name: 'Shipping',
-              description: `Delivery for ${totalQuantity} item${totalQuantity > 1 ? 's' : ''}`,  // ✅ Use totalQuantity
+              description: `Delivery for ${totalQuantity} item${totalQuantity > 1 ? 's' : ''}`,
             },
             unit_amount: shippingTotalPence,
           },
@@ -354,20 +343,18 @@ export class CartCheckoutController {
         });
       }
 
-      // ✅ QUANTITY: Build listing quantities map for metadata
+      // Build listing quantities map for metadata
       const listingQuantities: Record<string, number> = {};
       for (const item of cartItems) {
         listingQuantities[item.listing_id] = item.quantity || 1;
       }
 
-      // Create seller breakdown for metadata (including images for notifications)
-      // ✅ QUANTITY: Now includes item_quantities
+      // Create seller breakdown for metadata
       const sellerBreakdown = Object.entries(sellerGroups).map(([sellerId, data]) => ({
         seller_id: sellerId,
         seller_connect_id: data.seller?.stripe_connect_id || null,
         subtotal: data.subtotal,
         shipping_total: data.shippingTotal,
-        // ✅ SIZE VARIANT FIX: Use composite keys (listing_id + size) to avoid overwrites
         cart_items: data.items.map((item: any) => ({
           listing_id: item.listing_id,
           quantity: item.quantity || 1,
@@ -376,13 +363,13 @@ export class CartCheckoutController {
         first_image: data.items[0]?.image_url || null,
       }));
 
-      // ✅ ESCROW: Create Stripe Checkout Session (funds stay in platform account)
+      // Create Stripe Checkout Session
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
         line_items: lineItems,
         shipping_address_collection: {
-          allowed_countries: ['GB'], // UK only for now
+          allowed_countries: ['GB'],
         },
         metadata: {
           type: 'cart_checkout',
@@ -392,28 +379,25 @@ export class CartCheckoutController {
           platform_fee: platformFee.toFixed(2),
           grand_total: grandTotal.toFixed(2),
           item_count: cartItems.length.toString(),
-          total_quantity: totalQuantity.toString(),  // ✅ NEW
+          total_quantity: totalQuantity.toString(),
           listing_ids: cartItems.map((item) => item.listing_id).join(','),
-          listing_quantities: JSON.stringify(listingQuantities),  // ✅ NEW
+          listing_quantities: JSON.stringify(listingQuantities),
           seller_breakdown: JSON.stringify(sellerBreakdown),
           first_item_image: cartItems[0]?.listings.images[0]?.image_url || '',
-          escrow: 'true', // ✅ Flag that this uses escrow
+          escrow: 'true',
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
       });
 
-      console.log('✅ Cart checkout session created:', session.id);
-      console.log('📦 Listings:', cartItems.map((item) => `${item.listing_id} (x${item.quantity || 1})`));  // ✅ Show quantities
-      console.log('👥 Sellers:', Object.keys(sellerGroups));
-      console.log('🔒 Funds will be held in escrow until delivery + 5 days');
+      console.log('[CART] Cart checkout session created:', session.id);
 
       res.json({
         sessionId: session.id,
         url: session.url,
         summary: {
           itemCount: cartItems.length,
-          totalQuantity: totalQuantity,  // ✅ NEW
+          totalQuantity: totalQuantity,
           itemsTotal: itemsTotal.toFixed(2),
           shippingTotal: shippingTotal.toFixed(2),
           platformFee: platformFee.toFixed(2),
@@ -421,7 +405,7 @@ export class CartCheckoutController {
         },
       });
     } catch (error: any) {
-      console.error('❌ Cart checkout session error:', error);
+      console.error('[CART] Cart checkout session error:', error);
       res.status(500).json({
         error: 'Failed to create checkout session',
         details: error.message,
@@ -432,22 +416,20 @@ export class CartCheckoutController {
   /**
    * Fulfill Cart Order (called from webhook)
    * Creates separate orders for each seller
-   * ✅ ESCROW UPDATE: No longer transfers immediately - funds held in escrow
-   * ✅ QUANTITY UPDATE: Now handles quantities and reduces stock
    */
   static async fulfillCartOrder(session: Stripe.Checkout.Session) {
     try {
-      console.log('📦 Fulfilling cart order for session:', session.id);
+      console.log('[CART] Fulfilling cart order for session:', session.id);
 
       const metadata = session.metadata!;
       const buyerId = metadata.buyer_id;
       const listingIds = metadata.listing_ids.split(',');
-      const listingQuantities = JSON.parse(metadata.listing_quantities || '{}');  // ✅ NEW: Get quantities
+      const listingQuantities = JSON.parse(metadata.listing_quantities || '{}');
       const sellerBreakdown = JSON.parse(metadata.seller_breakdown);
       const firstItemImage = metadata.first_item_image || null;
       const grandTotal = metadata.grand_total;
       const shippingTotal = metadata.shipping_total || '0';
-      const totalQuantity = parseInt(metadata.total_quantity || '0');  // ✅ NEW
+      const totalQuantity = parseInt(metadata.total_quantity || '0');
 
       // Get shipping address from session
       const collectedInfo = (session as any).collected_information;
@@ -455,7 +437,7 @@ export class CartCheckoutController {
       const shippingAddress = shippingDetails?.address;
       const shippingName = shippingDetails?.name;
 
-      console.log('📍 Shipping details:', { name: shippingName, address: shippingAddress });
+      console.log('[CART] Shipping details:', { name: shippingName, address: shippingAddress });
 
       // Build shipping address JSON for storage
       const shippingAddressJson = shippingAddress ? {
@@ -467,9 +449,7 @@ export class CartCheckoutController {
         country: shippingAddress.country || 'GB',
       } : null;
 
-      console.log('📦 Shipping address JSON:', shippingAddressJson);
-
-      // Check if orders already exist (idempotency) - use payment_intent to check THIS session only
+      // Check if orders already exist (idempotency)
       const existingOrders = await prisma.orders.findMany({
         where: {
           stripe_payment_intent_id: session.payment_intent as string,
@@ -477,7 +457,7 @@ export class CartCheckoutController {
       });
 
       if (existingOrders.length > 0) {
-        console.log('⚠️ Orders already exist for this session');
+        console.log('[CART] Orders already exist for this session');
         return;
       }
 
@@ -490,33 +470,32 @@ export class CartCheckoutController {
         },
       });
 
-      // ✅ ESCROW: Auto-cancel date (5 days, not 7)
+      // Auto-cancel date (5 days)
       const autoCancelAt = new Date();
       autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
       // Create orders for each seller
       const createdOrders: any[] = [];
-      const orderItems: { name: string; price: string; quantity: number }[] = [];  // ✅ Added quantity
+      const orderItems: { name: string; price: string; quantity: number }[] = [];
 
-      // ✅ QUANTITY: Use transaction to ensure atomicity for stock updates
+      // Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
         for (const sellerData of sellerBreakdown) {
-const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
+          const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
           
-          // ✅ SIZE VARIANT FIX: Iterate over cart_items instead of listing_ids
           for (const cartItem of (cart_items || [])) {
             const listingId = cartItem.listing_id;
             const orderQuantity = cartItem.quantity || 1;
             const selectedSize = cartItem.selected_size || null;
 
-            // Get listing price, shipping cost, stock and image
+            // Get listing details
             const listing = await tx.listings.findUnique({
               where: { id: listingId },
               select: { 
                 price: true, 
                 shipping_cost: true,
                 quantity: true,
-                specifications: true,  // ✅ SIZE VARIANT: Get specifications for size stock
+                specifications: true,
                 title: true,
                 images: {
                   take: 1,
@@ -531,20 +510,16 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, firs
             const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());
             const listingImage = listing.images[0]?.image_url || null;
             
-            
-            // ✅ SIZE VARIANT: Get stock for specific size
             const currentStock = getStockForSize(listing, selectedSize);
-            
-            // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
             const orderShipping = Math.ceil(orderQuantity / 5) * itemShippingCost;
 
-            // ✅ Validate stock one more time
+            // Validate stock
             if (currentStock < orderQuantity) {
-              console.error(`❌ Insufficient stock for ${listingId}${selectedSize ? ` size ${selectedSize}` : ''}: requested ${orderQuantity}, available ${currentStock}`);
-              throw new Error(`Insufficient stock for ${listing.title}${selectedSize ? ` (${selectedSize})` : ''}`);
+              console.error(`[CART] Insufficient stock for ${listingId}: requested ${orderQuantity}, available ${currentStock}`);
+              throw new Error(`Insufficient stock for ${listing.title}`);
             }
 
-            // ✅ SIZE VARIANT: Calculate new stock
+            // Calculate new stock
             let newTotalStock: number;
             let updatedSpecs = listing.specifications;
             
@@ -565,8 +540,7 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, firs
               quantity: orderQuantity,
             });
 
-            // ✅ ESCROW: Create order - seller_payout stored but NOT transferred yet
-            // ✅ SIZE VARIANT: Now includes selected_size
+            // Create order
             const order = await tx.orders.create({
               data: {
                 id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -575,7 +549,7 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, firs
                 seller_id: seller_id,
                 amount: itemPrice * orderQuantity,
                 quantity: orderQuantity,
-                selected_size: selectedSize,  // ✅ SIZE VARIANT: Store selected size
+                selected_size: selectedSize,
                 shipping_cost: orderShipping,
                 seller_payout: (itemPrice * orderQuantity) + orderShipping,
                 listing_title: listing.title,
@@ -592,27 +566,22 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, firs
             });
 
             createdOrders.push({ ...order, image_url: listingImage, title: listing.title, quantity: orderQuantity });
-            console.log(`✅ Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})`);
-            console.log('📸 Listing snapshot saved:', listing.title, '@ £' + itemPrice);
-            console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
-            console.log(`🔒 Seller payout stored: £${((itemPrice * orderQuantity) + orderShipping).toFixed(2)} (held in escrow)`);
+            console.log(`[CART] Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})`);
 
-            // ✅ SIZE VARIANT: Update listing stock, specifications, and status
+            // Update listing stock
             await tx.listings.update({
               where: { id: listingId },
               data: { 
                 quantity: Math.max(0, newTotalStock),
-                specifications: updatedSpecs ?? undefined,  // ✅ Update size quantities
+                specifications: updatedSpecs ?? undefined,
                 status: shouldMarkSold ? 'sold' : 'active',
                 updated_at: new Date() 
               },
             });
-
-            console.log(`📊 Stock updated: ${currentStock} → ${newTotalStock}${selectedSize ? ` (size: ${selectedSize})` : ''}${shouldMarkSold ? ' (SOLD OUT)' : ''}`);
           }
         }
 
-        // Remove items from cart (inside transaction)
+        // Remove items from cart
         await tx.cart_items.deleteMany({
           where: {
             user_id: buyerId,
@@ -624,29 +593,15 @@ const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, firs
       // Process seller notifications (outside transaction)
       for (const sellerData of sellerBreakdown) {
         const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
-// ✅ FIX: Derive listing_ids from cart_items (was causing undefined error)
-const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
-
-        // ✅ ESCROW: REMOVED immediate transfer to seller
-        // Previously this code transferred funds immediately:
-        // const transfer = await stripe.transfers.create({
-        //   amount: transferAmount,
-        //   currency: 'gbp',
-        //   destination: seller_connect_id,
-        //   ...
-        // });
-        // 
-        // Now funds are held in platform account until escrow releases
-        // (handled by escrowService.ts autoReleaseEscrow job)
+        const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
 
         const sellerSubtotal = parseFloat(subtotal);
         const sellerShipping = parseFloat(shipping_total || '0');
-        console.log('💰 Seller payout scheduled (after escrow):', {
+        console.log('[CART] Seller payout scheduled (after escrow):', {
           seller_id,
           subtotal: sellerSubtotal.toFixed(2),
           shipping: sellerShipping.toFixed(2),
           totalPayout: (sellerSubtotal + sellerShipping).toFixed(2),
-          releaseCondition: 'After delivery + 5 days OR buyer confirms receipt',
         });
 
         // Get first listing image for this seller's notification
@@ -660,7 +615,7 @@ const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
 
         const needsVerification = sellerUser?.stripe_connect_status !== 'active';
 
-        // ✅ Calculate total quantity for this seller
+        // Calculate total quantity for this seller
         const sellerTotalQty = createdOrders
           .filter((o: any) => listing_ids.includes(o.listing_id))
           .reduce((sum: number, o: any) => sum + (o.quantity || 1), 0);
@@ -672,29 +627,51 @@ const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: seller_id,
               type: 'payout',
-              title: 'Congratulations on your sale! 🎉',
+              title: 'Congratulations on your sale!',
               message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. Add your bank details to receive payment after delivery.`,
               image_url: sellerFirstImage,
               related_id: createdOrders[0]?.id,
             },
           });
-          console.log('📬 Seller notification created with image:', sellerFirstImage ? 'YES' : 'NO');
-       } else {
+
+          // PUSH: Notify seller (needs verification)
+          try {
+            await sendPushNotification(
+              seller_id,
+              'Congratulations on your sale!',
+              `You sold ${listing_ids.length} item(s) for £${subtotal}. Add bank details to get paid.`,
+              { type: 'sale', order_id: createdOrders[0]?.id }
+            );
+          } catch (pushErr) {
+            console.error('[CART] Push to seller failed:', pushErr);
+          }
+        } else {
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: seller_id,
               type: 'sale',
-              title: 'Item Sold! 🎉',
+              title: 'Item Sold!',
               message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
               image_url: sellerFirstImage,
               related_id: createdOrders[0]?.id,
             },
           });
-          console.log('📬 Seller notification created with image:', sellerFirstImage ? 'YES' : 'NO');
+
+          // PUSH: Notify seller
+          try {
+            await sendPushNotification(
+              seller_id,
+              'Item Sold!',
+              `You sold ${listing_ids.length} item(s) for £${subtotal}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+              { type: 'sale', order_id: createdOrders[0]?.id }
+            );
+          } catch (pushErr) {
+            console.error('[CART] Push to seller failed:', pushErr);
+          }
         }
 
-        // ✅ Send sale notification EMAIL to seller
+        // Send sale notification EMAIL to seller
         const sellerEmailRecord = await prisma.users.findUnique({
           where: { id: seller_id },
           select: { email: true },
@@ -713,19 +690,17 @@ const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
               buyerName: buyer?.display_name || 'Buyer',
               shippingAddress: shippingAddr,
             });
-            console.log('📧 Sale notification email sent to seller:', sellerEmailRecord.email);
+            console.log('[CART] Sale notification email sent to seller:', sellerEmailRecord.email);
           } catch (emailError) {
-            console.error('⚠️ Failed to send sale notification email:', emailError);
+            console.error('[CART] Failed to send sale notification email:', emailError);
           }
         }
       }
 
       // Get first item image for buyer notification
-
-      // Get first item image for buyer notification
       const buyerNotificationImage = firstItemImage || createdOrders[0]?.image_url || null;
 
-      // ✅ Calculate total items including quantities
+      // Calculate total items including quantities
       const totalItems = totalQuantity || createdOrders.reduce((sum, o) => sum + (o.quantity || 1), 0);
       const itemText = totalItems === 1 ? '1 item' : `${totalItems} items`;
 
@@ -735,23 +710,32 @@ const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: buyerId,
           type: 'order',
-          title: 'Payment Successful! 🎉',
+          title: 'Payment Successful!',
           message: `Your order of ${itemText} has been confirmed. Sellers will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
           image_url: buyerNotificationImage,
           related_id: createdOrders[0]?.id,
         },
       });
-      console.log('📬 Buyer notification created with image:', buyerNotificationImage ? 'YES' : 'NO');
+
+      // PUSH: Notify buyer
+      try {
+        await sendPushNotification(
+          buyerId,
+          'Payment Successful!',
+          `Your order of ${itemText} is confirmed. Sellers will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          { type: 'order', order_id: createdOrders[0]?.id }
+        );
+      } catch (pushErr) {
+        console.error('[CART] Push to buyer failed:', pushErr);
+      }
 
       // Send order confirmation email to buyer
       if (buyer?.email) {
         try {
-          // Format shipping address for email
           const formattedAddress = shippingAddressJson 
             ? `${shippingAddressJson.name}\n${shippingAddressJson.line1}${shippingAddressJson.line2 ? '\n' + shippingAddressJson.line2 : ''}\n${shippingAddressJson.city}\n${shippingAddressJson.postal_code}`
             : 'Address not available';
 
-          // ✅ Format items with quantities for email
           const itemsListHtml = orderItems.map(item => 
             `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">${item.price}</td></tr>`
           ).join('');
@@ -764,18 +748,16 @@ const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
             shippingAddress: formattedAddress.replace(/\n/g, '<br>'),
           });
           
-          console.log('📧 Order confirmation email sent to:', buyer.email);
+          console.log('[CART] Order confirmation email sent to:', buyer.email);
         } catch (emailError) {
-          console.error('⚠️ Failed to send order confirmation email:', emailError);
-          // Don't fail the order if email fails
+          console.error('[CART] Failed to send order confirmation email:', emailError);
         }
       }
 
-      console.log('✅ Cart order fulfilled successfully (escrow mode with quantity support)');
-     console.log(`📦 Orders created: ${createdOrders.length}, Total items: ${totalItems}`);
-console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
+      console.log('[CART] Cart order fulfilled successfully');
+      console.log(`[CART] Orders created: ${createdOrders.length}, Total items: ${totalItems}`);
     } catch (error) {
-      console.error('❌ Error fulfilling cart order:', error);
+      console.error('[CART] Error fulfilling cart order:', error);
       throw error;
     }
   }

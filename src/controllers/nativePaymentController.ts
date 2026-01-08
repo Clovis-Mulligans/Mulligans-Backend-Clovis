@@ -1,10 +1,12 @@
 // src/controllers/nativePaymentController.ts
 // Handles native in-app payments (Apple Pay / Google Pay)
 // Uses Payment Intents instead of Checkout Sessions
+// UPDATED: Added push notifications
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -16,7 +18,7 @@ const PLATFORM_FEE_PERCENT = 0.07; // 7%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
 const SHIPPING_DEADLINE_DAYS = 5;
 
-// ✅ SIZE VARIANT: Helper to get stock for a specific size
+// SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
   if (!selectedSize) {
     return listing.quantity || 1;
@@ -28,7 +30,7 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
   return listing.quantity || 1;
 }
 
-// ✅ SIZE VARIANT: Helper to decrement stock for a specific size
+// SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
   if (!specifications || !selectedSize) return specifications;
   
@@ -43,7 +45,7 @@ function decrementSizeStock(specifications: any, selectedSize: string, quantity:
   return specs;
 }
 
-// ✅ SIZE VARIANT: Helper to calculate total stock from all sizes
+// SIZE VARIANT: Helper to calculate total stock from all sizes
 function getTotalStockFromSizes(specifications: any): number {
   if (!specifications?.sizeQuantities) return 0;
   return Object.values(specifications.sizeQuantities).reduce((sum: number, qty: any) => sum + (qty || 0), 0);
@@ -64,7 +66,7 @@ export class NativePaymentController {
    */
   static async createSingleItemPaymentIntent(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id, quantity = 1, selected_size } = req.body;  // ✅ SIZE VARIANT
+      const { listing_id, quantity = 1, selected_size } = req.body;
       const userId = req.user?.id || req.user?.sub;
       const orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
@@ -72,7 +74,7 @@ export class NativePaymentController {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('📱 Creating native payment intent for listing:', listing_id, 'qty:', orderQuantity);
+      console.log('[PAY] Creating native payment intent for listing:', listing_id, 'qty:', orderQuantity);
 
       // Get listing details
       const listing = await prisma.listings.findUnique({
@@ -99,7 +101,7 @@ export class NativePaymentController {
         return res.status(400).json({ error: 'This item is no longer available' });
       }
 
-      // ✅ SIZE VARIANT: Check if size selection is required
+      // SIZE VARIANT: Check if size selection is required
       const specs = listing.specifications as any;
       const hasSizeVariants = specs?.sizeQuantities && Object.keys(specs.sizeQuantities).length > 0;
       
@@ -111,7 +113,7 @@ export class NativePaymentController {
         });
       }
 
-      // ✅ SIZE VARIANT: Validate stock for specific size
+      // SIZE VARIANT: Validate stock for specific size
       const availableStock = getStockForSize(listing, selected_size);
       if (availableStock < orderQuantity) {
         return res.status(400).json({
@@ -131,7 +133,7 @@ export class NativePaymentController {
       // Auto-create Connect account if needed
       let sellerConnectId = seller.stripe_connect_id;
       if (!sellerConnectId) {
-        console.log('🔗 Auto-creating Connect account for seller:', seller.id);
+        console.log('[PAY] Auto-creating Connect account for seller:', seller.id);
         const account = await stripe.accounts.create({
           type: 'express',
           country: 'GB',
@@ -158,20 +160,20 @@ export class NativePaymentController {
             updated_at: new Date(),
           },
         });
-        console.log('✅ Connect account auto-created:', account.id);
+        console.log('[PAY] Connect account auto-created:', account.id);
       }
 
       // Calculate prices
       const unitPrice = parseFloat(listing.price.toString());
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
-      const shippingTotal = Math.ceil(orderQuantity / 5) * shippingCost; // Every 5 items = 1 shipping
+      const shippingTotal = Math.ceil(orderQuantity / 5) * shippingCost;
       const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + PLATFORM_FEE_FIXED;
       const grandTotal = itemTotal + shippingTotal + platformFee;
 
       const totalAmountPence = Math.round(grandTotal * 100);
 
-      console.log('💰 Native payment breakdown:', {
+      console.log('[PAY] Native payment breakdown:', {
         unitPrice: unitPrice.toFixed(2),
         quantity: orderQuantity,
         itemTotal: itemTotal.toFixed(2),
@@ -194,7 +196,7 @@ export class NativePaymentController {
           seller_id: listing.seller_id,
           seller_connect_id: sellerConnectId || '',
           quantity: orderQuantity.toString(),
-          selected_size: selected_size || '',  // ✅ SIZE VARIANT
+          selected_size: selected_size || '',
           unit_price: unitPrice.toFixed(2),
           item_total: itemTotal.toFixed(2),
           shipping_cost: shippingTotal.toFixed(2),
@@ -204,7 +206,7 @@ export class NativePaymentController {
         },
       });
 
-      console.log('✅ Payment Intent created:', paymentIntent.id);
+      console.log('[PAY] Payment Intent created:', paymentIntent.id);
 
       res.json({
         clientSecret: paymentIntent.client_secret,
@@ -219,13 +221,13 @@ export class NativePaymentController {
         },
       });
     } catch (error: any) {
-      console.error('❌ Create single item payment intent error:', error);
+      console.error('[PAY] Error creating payment intent:', error);
       res.status(500).json({ error: error.message || 'Failed to create payment' });
     }
   }
 
   /**
-   * Create Payment Intent for cart (Apple Pay on cart screen)
+   * Create Payment Intent for cart checkout
    * POST /api/stripe/native-payment/cart
    */
   static async createCartPaymentIntent(req: AuthenticatedRequest, res: Response) {
@@ -236,14 +238,11 @@ export class NativePaymentController {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('📱 Creating native cart payment intent for user:', userId);
+      console.log('[PAY] Creating cart payment intent for user:', userId);
 
-      // Get cart items
+      // Get user's cart items
       const cartItems = await prisma.cart_items.findMany({
-        where: {
-          user_id: userId,
-          expires_at: { gt: new Date() },
-        },
+        where: { user_id: userId },
         include: {
           listings: {
             include: {
@@ -251,8 +250,6 @@ export class NativePaymentController {
               users: {
                 select: {
                   id: true,
-                  email: true,
-                  display_name: true,
                   stripe_connect_id: true,
                 },
               },
@@ -265,41 +262,24 @@ export class NativePaymentController {
         return res.status(400).json({ error: 'Cart is empty' });
       }
 
-      // Validate items
-      const unavailableItems = cartItems.filter(item => item.listings.status !== 'active');
-      if (unavailableItems.length > 0) {
-        await prisma.cart_items.deleteMany({
-          where: { id: { in: unavailableItems.map(item => item.id) } },
-        });
-        return res.status(400).json({
-          error: 'Some items are no longer available',
-          unavailable: unavailableItems.map(item => ({
-            listing_id: item.listing_id,
-            title: item.listings.title,
-          })),
-        });
-      }
-
-      // Check stock
-      const overStockItems = cartItems.filter(
-        item => (item.quantity || 1) > item.listings.quantity
+      // Validate all items are available
+      const unavailableItems = cartItems.filter(
+        item => !item.listings || item.listings.status !== 'active'
       );
-      if (overStockItems.length > 0) {
-        return res.status(400).json({
-          error: 'Some items exceed available stock',
-          over_stock: overStockItems.map(item => ({
-            listing_id: item.listing_id,
-            title: item.listings.title,
-            requested: item.quantity || 1,
-            available: item.listings.quantity,
-          })),
+      if (unavailableItems.length > 0) {
+        return res.status(400).json({ 
+          error: 'Some items are no longer available',
+          unavailable: unavailableItems.map(i => i.listing_id),
         });
       }
 
-      // Check not buying own items
-      const ownItems = cartItems.filter(item => item.listings.seller_id === userId);
+      // Check for own items
+      const ownItems = cartItems.filter(item => item.listings?.seller_id === userId);
       if (ownItems.length > 0) {
-        return res.status(400).json({ error: 'You cannot buy your own listings' });
+        return res.status(400).json({ 
+          error: 'You cannot buy your own listings',
+          own_items: ownItems.map(i => i.listing_id),
+        });
       }
 
       // Calculate totals
@@ -307,42 +287,26 @@ export class NativePaymentController {
       let shippingTotal = 0;
       const itemsMetadata: string[] = [];
 
-      // Group by seller for shipping calculation
-      const sellerGroups: { [sellerId: string]: { items: any[]; maxShipping: number } } = {};
-
-      for (const item of cartItems) {
-        const quantity = item.quantity || 1;
-        const price = parseFloat(item.listings.price.toString());
-        const shippingCost = parseFloat((item.listings as any).shipping_cost?.toString() || '0');
-        const sellerId = item.listings.seller_id;
-
-        itemsTotal += price * quantity;
-
-        if (!sellerGroups[sellerId]) {
-          sellerGroups[sellerId] = { items: [], maxShipping: 0 };
-        }
-        sellerGroups[sellerId].items.push(item);
-        const listingShipping = Math.ceil(quantity / 5) * shippingCost;
-        sellerGroups[sellerId].maxShipping = Math.max(sellerGroups[sellerId].maxShipping, listingShipping);
-
-        itemsMetadata.push(`${item.listing_id}:${quantity}`);
-      }
-
-      // Sum max shipping per seller
-      for (const sellerId of Object.keys(sellerGroups)) {
-        shippingTotal += sellerGroups[sellerId].maxShipping;
+      for (const cartItem of cartItems) {
+        const listing = cartItem.listings!;
+        const quantity = cartItem.quantity || 1;
+        const unitPrice = parseFloat(listing.price.toString());
+        const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
+        
+        itemsTotal += unitPrice * quantity;
+        shippingTotal += Math.ceil(quantity / 5) * shippingCost;
+        itemsMetadata.push(`${listing.id}:${quantity}`);
       }
 
       const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + PLATFORM_FEE_FIXED;
       const grandTotal = itemsTotal + shippingTotal + platformFee;
       const totalAmountPence = Math.round(grandTotal * 100);
 
-      console.log('💰 Native cart payment breakdown:', {
+      console.log('[PAY] Cart payment breakdown:', {
         itemsTotal: itemsTotal.toFixed(2),
-        shipping: shippingTotal.toFixed(2),
+        shippingTotal: shippingTotal.toFixed(2),
         platformFee: platformFee.toFixed(2),
         grandTotal: grandTotal.toFixed(2),
-        itemCount: cartItems.length,
       });
 
       // Create Payment Intent
@@ -355,7 +319,7 @@ export class NativePaymentController {
         metadata: {
           type: 'native_cart',
           buyer_id: userId,
-          items: itemsMetadata.join(','), // Format: "listing_id:qty,listing_id:qty"
+          items: itemsMetadata.join(','),
           items_total: itemsTotal.toFixed(2),
           shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
@@ -363,7 +327,7 @@ export class NativePaymentController {
         },
       });
 
-      console.log('✅ Cart Payment Intent created:', paymentIntent.id);
+      console.log('[PAY] Cart Payment Intent created:', paymentIntent.id);
 
       res.json({
         clientSecret: paymentIntent.client_secret,
@@ -376,18 +340,19 @@ export class NativePaymentController {
           buyerProtection: platformFee,
           total: grandTotal,
         },
+        itemCount: cartItems.length,
       });
     } catch (error: any) {
-      console.error('❌ Create cart payment intent error:', error);
+      console.error('[PAY] Error creating cart payment intent:', error);
       res.status(500).json({ error: error.message || 'Failed to create payment' });
     }
   }
 
   /**
-   * Fulfill native payment after successful Apple Pay
-   * POST /api/stripe/native-payment/fulfill
+   * Confirm payment and create order (called after Apple Pay succeeds)
+   * POST /api/stripe/native-payment/confirm
    */
-  static async fulfillNativePayment(req: AuthenticatedRequest, res: Response) {
+  static async confirmPayment(req: AuthenticatedRequest, res: Response) {
     try {
       const { paymentIntentId, shippingAddress } = req.body;
       const userId = req.user?.id || req.user?.sub;
@@ -396,73 +361,68 @@ export class NativePaymentController {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      if (!paymentIntentId) {
-        return res.status(400).json({ error: 'Payment Intent ID required' });
-      }
+      console.log('[PAY] Confirming payment:', paymentIntentId);
 
-      console.log('📦 Fulfilling native payment:', paymentIntentId);
-
-      // Retrieve Payment Intent from Stripe
+      // Retrieve the payment intent
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       if (paymentIntent.status !== 'succeeded') {
-        return res.status(400).json({ error: 'Payment not completed' });
+        return res.status(400).json({ 
+          error: 'Payment not successful',
+          status: paymentIntent.status,
+        });
       }
 
-      const metadata = paymentIntent.metadata;
-
-      // Verify buyer matches
-      if (metadata.buyer_id !== userId) {
+      // Verify this payment belongs to this user
+      if (paymentIntent.metadata.buyer_id !== userId) {
         return res.status(403).json({ error: 'Unauthorized' });
       }
 
-      // Check if already fulfilled
+      // Check if already processed
       const existingOrder = await prisma.orders.findFirst({
         where: { stripe_payment_intent_id: paymentIntentId },
       });
 
       if (existingOrder) {
-        console.log('⚠️ Order already exists for this payment');
-        return res.json({ success: true, message: 'Order already created', orderId: existingOrder.id });
+        return res.json({ 
+          success: true, 
+          order_id: existingOrder.id,
+          message: 'Order already created',
+        });
       }
 
-      // Format shipping address
-      const shippingAddressJson = shippingAddress ? {
-        name: shippingAddress.name || '',
-        line1: shippingAddress.line1 || shippingAddress.address?.line1 || '',
-        line2: shippingAddress.line2 || shippingAddress.address?.line2 || null,
-        city: shippingAddress.city || shippingAddress.address?.city || '',
-        postal_code: shippingAddress.postalCode || shippingAddress.address?.postalCode || '',
-        country: shippingAddress.country || shippingAddress.address?.country || 'GB',
-      } : null;
-
+      // Calculate auto-cancel date
       const autoCancelAt = new Date();
       autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
+      // Create order based on type
+      const metadata = paymentIntent.metadata;
+      let orders: any;
+
       if (metadata.type === 'native_single_item') {
-        // Single item order
-        const order = await NativePaymentController.fulfillSingleItem(
+        orders = await NativePaymentController.fulfillSingleItem(
           paymentIntent,
-          shippingAddressJson,
+          shippingAddress,
           autoCancelAt
         );
-        
-        return res.json({ success: true, orderId: order.id });
       } else if (metadata.type === 'native_cart') {
-        // Cart order
-        const orders = await NativePaymentController.fulfillCart(
+        orders = await NativePaymentController.fulfillCart(
           paymentIntent,
-          shippingAddressJson,
+          shippingAddress,
           autoCancelAt
         );
-        
-        return res.json({ success: true, orderIds: orders.map(o => o.id) });
       } else {
         return res.status(400).json({ error: 'Unknown payment type' });
       }
+
+      res.json({
+        success: true,
+        order_id: Array.isArray(orders) ? orders[0]?.id : orders?.id,
+        orders: Array.isArray(orders) ? orders.map((o: any) => o.id) : [orders?.id],
+      });
     } catch (error: any) {
-      console.error('❌ Fulfill native payment error:', error);
-      res.status(500).json({ error: error.message || 'Failed to fulfill order' });
+      console.error('[PAY] Error confirming payment:', error);
+      res.status(500).json({ error: error.message || 'Failed to confirm payment' });
     }
   }
 
@@ -478,8 +438,8 @@ export class NativePaymentController {
     const listingId = metadata.listing_id;
     const buyerId = metadata.buyer_id;
     const sellerId = metadata.seller_id;
-    const orderQuantity = parseInt(metadata.quantity || '1');
-    const selectedSize = metadata.selected_size || null;  // ✅ SIZE VARIANT
+    const orderQuantity = parseInt(metadata.quantity) || 1;
+    const selectedSize = metadata.selected_size || null;
 
     const listing = await prisma.listings.findUnique({
       where: { id: listingId },
@@ -490,10 +450,7 @@ export class NativePaymentController {
       throw new Error('Listing not found');
     }
 
-    // ✅ SIZE VARIANT: Get stock for specific size
-    const currentStock = getStockForSize(listing, selectedSize);
-    
-    // ✅ SIZE VARIANT: Calculate new stock
+    // SIZE VARIANT: Calculate new stock
     let newTotalStock: number;
     let updatedSpecs = listing.specifications;
     
@@ -518,7 +475,7 @@ export class NativePaymentController {
           seller_id: sellerId,
           amount: parseFloat(metadata.item_total),
           quantity: orderQuantity,
-          selected_size: selectedSize,  // ✅ SIZE VARIANT
+          selected_size: selectedSize,
           shipping_cost: parseFloat(metadata.shipping_cost || '0'),
           seller_payout: parseFloat(metadata.seller_payout),
           listing_title: listing.title,
@@ -534,9 +491,9 @@ export class NativePaymentController {
         },
       });
 
-      console.log('📸 Listing snapshot saved:', listing.title, '@ £' + itemPrice, selectedSize ? `(${selectedSize})` : '');
+      console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + itemPrice, selectedSize ? `(${selectedSize})` : '');
 
-      // ✅ SIZE VARIANT: Update stock and specifications
+      // SIZE VARIANT: Update stock and specifications
       await tx.listings.update({
         where: { id: listingId },
         data: {
@@ -564,26 +521,50 @@ export class NativePaymentController {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         user_id: buyerId,
         type: 'order',
-        title: 'Payment Successful! 🎉',
+        title: 'Payment Successful!',
         message: `Your order for "${listing.title}"${sizeText}${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
         image_url: listingImage,
         related_id: order.id,
       },
     });
 
+    // PUSH: Notify buyer
+    try {
+      await sendPushNotification(
+        buyerId,
+        'Payment Successful!',
+        `Your order for "${listing.title}" is confirmed. Shipping within ${SHIPPING_DEADLINE_DAYS} days.`,
+        { type: 'order', order_id: order.id }
+      );
+    } catch (pushErr) {
+      console.error('[PAY] Push to buyer failed:', pushErr);
+    }
+
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         user_id: sellerId,
         type: 'sale',
-        title: 'Item Sold! 🎉',
+        title: 'Item Sold!',
         message: `"${listing.title}"${qtyText} sold for £${metadata.item_total}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
         image_url: listingImage,
         related_id: order.id,
       },
     });
 
-    console.log('✅ Single item order fulfilled:', order.id);
+    // PUSH: Notify seller of sale
+    try {
+      await sendPushNotification(
+        sellerId,
+        'You Made a Sale!',
+        `"${listing.title}" sold for £${metadata.item_total}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+        { type: 'sale', order_id: order.id }
+      );
+    } catch (pushErr) {
+      console.error('[PAY] Push to seller failed:', pushErr);
+    }
+
+    console.log('[PAY] Single item order fulfilled:', order.id);
     return order;
   }
 
@@ -635,7 +616,6 @@ export class NativePaymentController {
             quantity: itemData.quantity,
             shipping_cost: orderShipping,
             seller_payout: sellerPayout,
-            // ✅ NEW: Listing snapshot fields (preserved even if listing deleted)
             listing_title: listing.title,
             listing_image: listingImage,
             listing_price: unitPrice,
@@ -649,7 +629,7 @@ export class NativePaymentController {
           },
         });
 
-        console.log('📸 Listing snapshot saved:', listing.title, '@ £' + unitPrice);
+        console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + unitPrice);
         orders.push({ ...order, listing });
 
         // Update stock
@@ -681,12 +661,24 @@ export class NativePaymentController {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         user_id: buyerId,
         type: 'order',
-        title: 'Payment Successful! 🎉',
+        title: 'Payment Successful!',
         message: `Your order of ${totalItems} item${totalItems > 1 ? 's' : ''} has been confirmed.`,
         image_url: firstImage,
         related_id: orders[0]?.id,
       },
     });
+
+    // PUSH: Notify buyer
+    try {
+      await sendPushNotification(
+        buyerId,
+        'Payment Successful!',
+        `Your order of ${totalItems} item${totalItems > 1 ? 's' : ''} is confirmed.`,
+        { type: 'order', order_id: orders[0]?.id }
+      );
+    } catch (pushErr) {
+      console.error('[PAY] Push to buyer failed:', pushErr);
+    }
 
     // Notify each seller
     const sellerOrders: { [sellerId: string]: any[] } = {};
@@ -708,15 +700,27 @@ export class NativePaymentController {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: sellerId,
           type: 'sale',
-          title: 'Items Sold! 🎉',
+          title: 'Items Sold!',
           message: `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
           image_url: sellerImage,
           related_id: sellerOrderList[0]?.id,
         },
       });
+
+      // PUSH: Notify seller of sale
+      try {
+        await sendPushNotification(
+          sellerId,
+          'You Made a Sale!',
+          `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          { type: 'sale', order_id: sellerOrderList[0]?.id }
+        );
+      } catch (pushErr) {
+        console.error('[PAY] Push to seller failed:', pushErr);
+      }
     }
 
-    console.log('✅ Cart orders fulfilled:', orders.length);
+    console.log('[PAY] Cart orders fulfilled:', orders.length);
     return orders;
   }
 }

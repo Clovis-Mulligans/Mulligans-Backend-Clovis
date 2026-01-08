@@ -7,6 +7,7 @@
 // - Admin resolution
 // - Email notifications (with branded templates)
 // - ✅ SELLER PAYOUT: Transfers remaining funds to seller after partial/no refund
+// - ✅ PUSH NOTIFICATIONS: All parties notified via push
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
@@ -181,6 +182,18 @@ async function transferSellerPayout(
         },
       });
 
+      // PUSH: Notify seller
+      try {
+        await sendPushNotification(
+          seller.id,
+          'Payment Pending - Action Required',
+          `You have £${sellerReceives.toFixed(2)} waiting. Add bank details to receive payment.`,
+          { type: 'payout_pending', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
+      }
+
       return { 
         success: false, 
         error: 'Seller has no Connect account - notified to set up',
@@ -203,6 +216,18 @@ async function transferSellerPayout(
           related_id: orderId,
         },
       });
+
+      // PUSH: Notify seller
+      try {
+        await sendPushNotification(
+          seller.id,
+          'Payment Processing',
+          `£${sellerReceives.toFixed(2)} is being processed. Complete verification to receive funds.`,
+          { type: 'payout_pending', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
+      }
     }
 
     // Create the transfer
@@ -235,6 +260,18 @@ async function transferSellerPayout(
         related_id: orderId,
       },
     });
+
+    // PUSH: Notify seller
+    try {
+      await sendPushNotification(
+        seller.id,
+        'Payment Released',
+        `£${sellerReceives.toFixed(2)} from dispute resolution has been transferred.`,
+        { type: 'payout', order_id: orderId }
+      );
+    } catch (pushErr) {
+      console.error('[DISPUTE] Push notification failed:', pushErr);
+    }
 
     return { 
       success: true, 
@@ -317,7 +354,6 @@ export class DisputeController {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
           users_orders_buyer_idTousers: {
@@ -436,14 +472,16 @@ export class DisputeController {
         },
       });
 
-      // Send push notification to seller
-      if (seller.push_token) {
+      // ✅ PUSH: Notify seller of dispute opened
+      try {
         await sendPushNotification(
-          seller.push_token,
-          '⚠️ Dispute Opened - Action Required',
+          seller.id,
+          'Dispute Opened - Action Required',
           `A dispute has been opened for "${listingTitle}". You have 72 hours to respond.`,
-          { type: 'dispute', disputeId, orderId }
+          { type: 'dispute', dispute_id: disputeId, order_id: orderId }
         );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
       }
 
       // Send branded email to seller
@@ -752,7 +790,6 @@ export class DisputeController {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
           users_disputes_seller: {
@@ -898,7 +935,7 @@ export class DisputeController {
         notificationTitle = '✅ Dispute Resolved';
         notificationMessage = `The seller has accepted your request. £${resolutionAmount?.toFixed(2)} will be refunded to your account.`;
       } else if (responseType === 'counter') {
-        notificationTitle = '💬 Counter Dispute Received';
+        notificationTitle = '💬 Counter Offer Received';
         notificationMessage = `The seller has made a counter proposal of £${counterOfferAmount?.toFixed(2)} (${counterOfferPercent}%) for "${listingTitle}". Please review and respond.`;
       } else if (responseType === 'reject') {
         notificationTitle = '⚠️ Dispute Escalated';
@@ -917,14 +954,16 @@ export class DisputeController {
         },
       });
 
-      // Send push notification to buyer
-      if (buyer.push_token) {
+      // ✅ PUSH: Notify buyer of seller response
+      try {
         await sendPushNotification(
-          buyer.push_token,
+          buyer.id,
           notificationTitle,
           notificationMessage,
-          { type: 'dispute_update', disputeId }
+          { type: 'dispute_update', dispute_id: disputeId }
         );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
       }
 
       // Send branded email to buyer
@@ -1037,7 +1076,6 @@ export class DisputeController {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
         },
@@ -1124,14 +1162,16 @@ export class DisputeController {
         },
       });
 
-      // Push notification to seller
-      if (seller.push_token) {
+      // ✅ PUSH: Notify seller of resolution
+      try {
         await sendPushNotification(
-          seller.push_token,
-          '✅ Dispute Resolved',
+          seller.id,
+          'Dispute Resolved',
           `The buyer accepted your counter proposal for "${listingTitle}".`,
-          { type: 'dispute_resolved', disputeId }
+          { type: 'dispute_resolved', dispute_id: disputeId }
         );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
       }
 
       // Send branded resolution emails to both parties
@@ -1218,7 +1258,6 @@ export class DisputeController {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
         },
@@ -1256,14 +1295,16 @@ export class DisputeController {
         },
       });
 
-      // Push notification to seller
-      if (seller.push_token) {
+      // ✅ PUSH: Notify seller of escalation
+      try {
         await sendPushNotification(
-          seller.push_token,
-          '⚠️ Dispute Escalated',
+          seller.id,
+          'Dispute Escalated',
           `The dispute for "${listingTitle}" has been escalated to Mulligans.`,
-          { type: 'dispute_escalated', disputeId }
+          { type: 'dispute_escalated', dispute_id: disputeId }
         );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
       }
 
       // Send branded email to admin
@@ -1360,7 +1401,6 @@ export class DisputeController {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
           users_disputes_seller: {
@@ -1368,7 +1408,6 @@ export class DisputeController {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
         },
@@ -1504,12 +1543,28 @@ export class DisputeController {
         },
       });
 
-      // Push notifications
-      if (buyer.push_token) {
-        await sendPushNotification(buyer.push_token, '⚖️ Dispute Resolved', buyerMessage, { type: 'dispute_resolved', disputeId });
+      // ✅ PUSH: Notify buyer of resolution
+      try {
+        await sendPushNotification(
+          buyer.id,
+          'Dispute Resolved',
+          buyerMessage,
+          { type: 'dispute_resolved', dispute_id: disputeId }
+        );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
       }
-      if (seller.push_token) {
-        await sendPushNotification(seller.push_token, '⚖️ Dispute Resolved', sellerMessage, { type: 'dispute_resolved', disputeId });
+
+      // ✅ PUSH: Notify seller of resolution
+      try {
+        await sendPushNotification(
+          seller.id,
+          'Dispute Resolved',
+          sellerMessage,
+          { type: 'dispute_resolved', dispute_id: disputeId }
+        );
+      } catch (pushErr) {
+        console.error('[DISPUTE] Push notification failed:', pushErr);
       }
 
       // Send branded emails to both parties
@@ -1652,169 +1707,169 @@ export class DisputeController {
   }
 
   /**
- * Get single dispute detail (admin) - includes full listing info
- * GET /api/admin/disputes/:id
- */
-static async getAdminDisputeDetail(req: Request, res: Response) {
-  try {
-    const disputeId = req.params.id;
+   * Get single dispute detail (admin) - includes full listing info
+   * GET /api/admin/disputes/:id
+   */
+  static async getAdminDisputeDetail(req: Request, res: Response) {
+    try {
+      const disputeId = req.params.id;
 
-    const dispute = await prisma.disputes.findFirst({
-      where: { id: disputeId },
-      include: {
-        orders: {
-          select: {
-            id: true,
-            amount: true,
-            seller_payout: true,
-            listing_id: true,
-            listing_title: true,
-            listing_image: true,
-            shipping_address: true,
-            tracking_number: true,
-            carrier: true,
-            created_at: true,
-            paid_at: true,
-            shipped_at: true,
-            delivered_at: true,
-            // Include full listing data
-            listings: {
-              select: {
-                id: true,
-                title: true,
-                description: true,
-                price: true,
-                images: {
-                  select: { image_url: true },
-                  orderBy: { display_order: 'asc' },
+      const dispute = await prisma.disputes.findFirst({
+        where: { id: disputeId },
+        include: {
+          orders: {
+            select: {
+              id: true,
+              amount: true,
+              seller_payout: true,
+              listing_id: true,
+              listing_title: true,
+              listing_image: true,
+              shipping_address: true,
+              tracking_number: true,
+              carrier: true,
+              created_at: true,
+              paid_at: true,
+              shipped_at: true,
+              delivered_at: true,
+              // Include full listing data
+              listings: {
+                select: {
+                  id: true,
+                  title: true,
+                  description: true,
+                  price: true,
+                  images: {
+                    select: { image_url: true },
+                    orderBy: { display_order: 'asc' },
+                  },
                 },
               },
             },
           },
-        },
-        users_disputes_buyer: {
-          select: {
-            id: true,
-            display_name: true,
-            email: true,
-            avatar_url: true,
-            rating: true,
-            total_purchases: true,
+          users_disputes_buyer: {
+            select: {
+              id: true,
+              display_name: true,
+              email: true,
+              avatar_url: true,
+              rating: true,
+              total_purchases: true,
+            },
+          },
+          users_disputes_seller: {
+            select: {
+              id: true,
+              display_name: true,
+              email: true,
+              avatar_url: true,
+              rating: true,
+              total_sales: true,
+              is_verified: true,
+            },
+          },
+          dispute_images: {
+            orderBy: { created_at: 'asc' },
           },
         },
-        users_disputes_seller: {
-          select: {
-            id: true,
-            display_name: true,
-            email: true,
-            avatar_url: true,
-            rating: true,
-            total_sales: true,
-            is_verified: true,
-          },
-        },
-        dispute_images: {
-          orderBy: { created_at: 'asc' },
-        },
-      },
-    });
+      });
 
-    if (!dispute) {
-      return res.status(404).json({ error: 'Dispute not found' });
+      if (!dispute) {
+        return res.status(404).json({ error: 'Dispute not found' });
+      }
+
+      res.json({
+        dispute: {
+          id: dispute.id,
+          order_id: dispute.order_id,
+          status: dispute.status,
+          
+          // Buyer's claim
+          reason_type: dispute.reason_type,
+          reason_text: dispute.reason_text,
+          requested_refund_percent: dispute.requested_refund_percent,
+          requested_refund_amount: parseFloat(dispute.requested_refund_amount.toString()),
+          
+          // Seller's response
+          seller_response_type: dispute.seller_response_type,
+          counter_offer_percent: dispute.counter_offer_percent,
+          counter_offer_amount: dispute.counter_offer_amount ? parseFloat(dispute.counter_offer_amount.toString()) : null,
+          seller_response_text: dispute.seller_response_text,
+          seller_responded_at: dispute.seller_responded_at?.toISOString() || null,
+          
+          // Resolution
+          resolution_type: dispute.resolution_type,
+          resolution_amount: dispute.resolution_amount ? parseFloat(dispute.resolution_amount.toString()) : null,
+          resolution_notes: dispute.resolution_notes,
+          resolved_by: dispute.resolved_by,
+          resolved_at: dispute.resolved_at?.toISOString() || null,
+          
+          // Deadline
+          seller_deadline: dispute.seller_deadline.toISOString(),
+          auto_escalated: dispute.auto_escalated,
+          
+          // Timestamps
+          created_at: dispute.created_at.toISOString(),
+          updated_at: dispute.updated_at.toISOString(),
+          
+          // Order info with full listing
+          order: {
+            id: dispute.orders.id,
+            amount: parseFloat(dispute.orders.amount.toString()),
+            seller_payout: dispute.orders.seller_payout ? parseFloat(dispute.orders.seller_payout.toString()) : null,
+            listing_title: dispute.orders.listing_title,
+            listing_image: dispute.orders.listing_image,
+            tracking_number: dispute.orders.tracking_number,
+            carrier: dispute.orders.carrier,
+            created_at: dispute.orders.created_at?.toISOString() || null,
+            shipped_at: dispute.orders.shipped_at?.toISOString() || null,
+            delivered_at: dispute.orders.delivered_at?.toISOString() || null,
+            // Full listing info for admin
+            listing: dispute.orders.listings ? {
+              id: dispute.orders.listings.id,
+              description: dispute.orders.listings.description,
+              price: parseFloat(dispute.orders.listings.price.toString()),
+              images: dispute.orders.listings.images.map(img => img.image_url),
+            } : null,
+          },
+          
+          // Users
+          buyer: {
+            id: dispute.users_disputes_buyer.id,
+            display_name: dispute.users_disputes_buyer.display_name,
+            email: dispute.users_disputes_buyer.email,
+            avatar_url: dispute.users_disputes_buyer.avatar_url,
+            rating: parseFloat(dispute.users_disputes_buyer.rating?.toString() || '0'),
+            total_purchases: dispute.users_disputes_buyer.total_purchases,
+          },
+          seller: {
+            id: dispute.users_disputes_seller.id,
+            display_name: dispute.users_disputes_seller.display_name,
+            email: dispute.users_disputes_seller.email,
+            avatar_url: dispute.users_disputes_seller.avatar_url,
+            rating: parseFloat(dispute.users_disputes_seller.rating?.toString() || '0'),
+            total_sales: dispute.users_disputes_seller.total_sales,
+            is_verified: dispute.users_disputes_seller.is_verified,
+          },
+          
+          // Images
+          buyer_images: dispute.dispute_images.filter(img => img.uploaded_by === 'buyer').map(img => ({
+            id: img.id,
+            url: img.image_url,
+            created_at: img.created_at.toISOString(),
+          })),
+          seller_images: dispute.dispute_images.filter(img => img.uploaded_by === 'seller').map(img => ({
+            id: img.id,
+            url: img.image_url,
+            created_at: img.created_at.toISOString(),
+          })),
+        },
+      });
+    } catch (error: any) {
+      console.error('❌ Get admin dispute detail error:', error);
+      res.status(500).json({ error: 'Failed to get dispute' });
     }
-
-    res.json({
-      dispute: {
-        id: dispute.id,
-        order_id: dispute.order_id,
-        status: dispute.status,
-        
-        // Buyer's claim
-        reason_type: dispute.reason_type,
-        reason_text: dispute.reason_text,
-        requested_refund_percent: dispute.requested_refund_percent,
-        requested_refund_amount: parseFloat(dispute.requested_refund_amount.toString()),
-        
-        // Seller's response
-        seller_response_type: dispute.seller_response_type,
-        counter_offer_percent: dispute.counter_offer_percent,
-        counter_offer_amount: dispute.counter_offer_amount ? parseFloat(dispute.counter_offer_amount.toString()) : null,
-        seller_response_text: dispute.seller_response_text,
-        seller_responded_at: dispute.seller_responded_at?.toISOString() || null,
-        
-        // Resolution
-        resolution_type: dispute.resolution_type,
-        resolution_amount: dispute.resolution_amount ? parseFloat(dispute.resolution_amount.toString()) : null,
-        resolution_notes: dispute.resolution_notes,
-        resolved_by: dispute.resolved_by,
-        resolved_at: dispute.resolved_at?.toISOString() || null,
-        
-        // Deadline
-        seller_deadline: dispute.seller_deadline.toISOString(),
-        auto_escalated: dispute.auto_escalated,
-        
-        // Timestamps
-        created_at: dispute.created_at.toISOString(),
-        updated_at: dispute.updated_at.toISOString(),
-        
-        // Order info with full listing
-        order: {
-          id: dispute.orders.id,
-          amount: parseFloat(dispute.orders.amount.toString()),
-          seller_payout: dispute.orders.seller_payout ? parseFloat(dispute.orders.seller_payout.toString()) : null,
-          listing_title: dispute.orders.listing_title,
-          listing_image: dispute.orders.listing_image,
-          tracking_number: dispute.orders.tracking_number,
-          carrier: dispute.orders.carrier,
-          created_at: dispute.orders.created_at?.toISOString() || null,
-          shipped_at: dispute.orders.shipped_at?.toISOString() || null,
-          delivered_at: dispute.orders.delivered_at?.toISOString() || null,
-          // Full listing info for admin
-          listing: dispute.orders.listings ? {
-            id: dispute.orders.listings.id,
-            description: dispute.orders.listings.description,
-            price: parseFloat(dispute.orders.listings.price.toString()),
-            images: dispute.orders.listings.images.map(img => img.image_url),
-          } : null,
-        },
-        
-        // Users
-        buyer: {
-          id: dispute.users_disputes_buyer.id,
-          display_name: dispute.users_disputes_buyer.display_name,
-          email: dispute.users_disputes_buyer.email,
-          avatar_url: dispute.users_disputes_buyer.avatar_url,
-          rating: parseFloat(dispute.users_disputes_buyer.rating?.toString() || '0'),
-          total_purchases: dispute.users_disputes_buyer.total_purchases,
-        },
-        seller: {
-          id: dispute.users_disputes_seller.id,
-          display_name: dispute.users_disputes_seller.display_name,
-          email: dispute.users_disputes_seller.email,
-          avatar_url: dispute.users_disputes_seller.avatar_url,
-          rating: parseFloat(dispute.users_disputes_seller.rating?.toString() || '0'),
-          total_sales: dispute.users_disputes_seller.total_sales,
-          is_verified: dispute.users_disputes_seller.is_verified,
-        },
-        
-        // Images
-        buyer_images: dispute.dispute_images.filter(img => img.uploaded_by === 'buyer').map(img => ({
-          id: img.id,
-          url: img.image_url,
-          created_at: img.created_at.toISOString(),
-        })),
-        seller_images: dispute.dispute_images.filter(img => img.uploaded_by === 'seller').map(img => ({
-          id: img.id,
-          url: img.image_url,
-          created_at: img.created_at.toISOString(),
-        })),
-      },
-    });
-  } catch (error: any) {
-    console.error('❌ Get admin dispute detail error:', error);
-    res.status(500).json({ error: 'Failed to get dispute' });
   }
-}
 
   /**
    * Auto-escalate expired disputes (called by cron job)
@@ -1842,7 +1897,6 @@ static async getAdminDisputeDetail(req: Request, res: Response) {
               id: true,
               display_name: true,
               email: true,
-              push_token: true,
             },
           },
           users_disputes_seller: {
@@ -1887,6 +1941,18 @@ static async getAdminDisputeDetail(req: Request, res: Response) {
           },
         });
 
+        // PUSH: Notify buyer
+        try {
+          await sendPushNotification(
+            buyer.id,
+            'Dispute Auto-Escalated',
+            `Your dispute for "${listingTitle}" has been escalated for review.`,
+            { type: 'dispute_escalated', dispute_id: dispute.id }
+          );
+        } catch (pushErr) {
+          console.error('[DISPUTE] Push notification failed:', pushErr);
+        }
+
         // Notify seller
         await prisma.notifications.create({
           data: {
@@ -1899,6 +1965,18 @@ static async getAdminDisputeDetail(req: Request, res: Response) {
             related_id: dispute.id,
           },
         });
+
+        // PUSH: Notify seller
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Dispute Auto-Escalated',
+            `Your dispute for "${listingTitle}" has been escalated. Respond promptly.`,
+            { type: 'dispute_escalated', dispute_id: dispute.id }
+          );
+        } catch (pushErr) {
+          console.error('[DISPUTE] Push notification failed:', pushErr);
+        }
 
         // Send branded email to admin
         try {

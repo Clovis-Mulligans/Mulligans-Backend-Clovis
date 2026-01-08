@@ -1,7 +1,9 @@
 // src/services/verificationService.ts
 // Handles verified seller status checks
+// UPDATED: Added push notifications
 
 import { PrismaClient } from '@prisma/client';
+import { sendPushNotification } from '../controllers/pushNotificationController';
 
 const prisma = new PrismaClient();
 
@@ -20,7 +22,7 @@ const CRITERIA = {
 // Called by cron job daily
 // ============================================
 export async function updateVerificationStatus(): Promise<void> {
-  console.log('🔄 Running verification status check...');
+  console.log('[VERIFY] Running verification status check...');
 
   try {
     const now = new Date();
@@ -39,7 +41,7 @@ export async function updateVerificationStatus(): Promise<void> {
       select: { id: true, display_name: true },
     });
 
-    console.log(`✅ Found ${qualifiedUsers.length} users who qualify for verification`);
+    console.log(`[VERIFY] Found ${qualifiedUsers.length} users who qualify for verification`);
 
     // Grant verification
     for (const user of qualifiedUsers) {
@@ -58,12 +60,24 @@ export async function updateVerificationStatus(): Promise<void> {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: user.id,
           type: 'account',
-          title: 'You\'re now a Verified Seller! ✅',
+          title: 'You\'re now a Verified Seller!',
           message: 'Congratulations! Your profile now displays the verified badge, and your listings will appear higher in search results.',
         },
       });
 
-      console.log(`🎉 Verified: ${user.display_name || user.id}`);
+      // PUSH: Notify user of verification
+      try {
+        await sendPushNotification(
+          user.id,
+          'You\'re now a Verified Seller!',
+          'Congratulations! Your profile now displays the verified badge.',
+          { type: 'account', action: 'verified' }
+        );
+      } catch (pushErr) {
+        console.error('[VERIFY] Push notification failed:', pushErr);
+      }
+
+      console.log(`[VERIFY] Verified: ${user.display_name || user.id}`);
     }
 
     // Find users who SHOULD LOSE verification
@@ -78,7 +92,7 @@ export async function updateVerificationStatus(): Promise<void> {
       select: { id: true, display_name: true },
     });
 
-    console.log(`⚠️ Found ${unqualifiedUsers.length} users who no longer qualify`);
+    console.log(`[VERIFY] Found ${unqualifiedUsers.length} users who no longer qualify`);
 
     // Remove verification
     for (const user of unqualifiedUsers) {
@@ -102,12 +116,24 @@ export async function updateVerificationStatus(): Promise<void> {
         },
       });
 
-      console.log(`❌ Unverified: ${user.display_name || user.id}`);
+      // PUSH: Notify user of status change
+      try {
+        await sendPushNotification(
+          user.id,
+          'Verified Status Update',
+          'Your verified seller status has been paused. Check your profile for details.',
+          { type: 'account', action: 'unverified' }
+        );
+      } catch (pushErr) {
+        console.error('[VERIFY] Push notification failed:', pushErr);
+      }
+
+      console.log(`[VERIFY] Unverified: ${user.display_name || user.id}`);
     }
 
-    console.log('✅ Verification status check complete');
+    console.log('[VERIFY] Verification status check complete');
   } catch (error: any) {
-    console.error('❌ Verification check failed:', error.message);
+    console.error('[VERIFY] Verification check failed:', error.message);
   }
 }
 

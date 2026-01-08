@@ -715,6 +715,18 @@ if (order.disputes) {
         },
       });
 
+      // PUSH: Notify buyer of delivery
+      try {
+        await sendPushNotification(
+          order.buyer_id,
+          'Item Delivered!',
+          `"${listingTitle}" has been delivered. You have ${ESCROW_RELEASE_DAYS} days to confirm.`,
+          { type: 'delivered', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
+
       console.log('✅ Order marked as delivered:', orderId);
       console.log(`📅 Escrow release scheduled for: ${escrowReleaseAt.toISOString()}`);
 
@@ -853,6 +865,18 @@ if (order.disputes) {
         },
       });
 
+      // PUSH: Notify seller of payment
+      try {
+        await sendPushNotification(
+          seller.id,
+          'Payment Released!',
+          `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
+          { type: 'payout', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
+
       console.log('✅ Receipt confirmed, escrow released for order:', orderId);
 
       res.json({ 
@@ -962,6 +986,18 @@ if (order.disputes) {
         },
       });
 
+       // PUSH: Notify buyer of refund
+      try {
+        await sendPushNotification(
+          order.buyer_id,
+          'Refund Processed',
+          `Your order for "${listingTitle}" has been refunded.`,
+          { type: 'refund', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
+
       // Notify seller
       await prisma.notifications.create({
         data: {
@@ -974,6 +1010,18 @@ if (order.disputes) {
           related_id: orderId,
         },
       });
+
+      // PUSH: Notify seller
+      try {
+        await sendPushNotification(
+          order.seller_id,
+          'Item Reported Lost',
+          `"${listingTitle}" was reported as lost. Buyer has been refunded.`,
+          { type: 'order_issue', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
 
       console.log('✅ Order reported as lost, buyer refunded:', orderId);
 
@@ -1205,6 +1253,18 @@ if (order.disputes) {
         },
       });
 
+      // PUSH: Notify other party
+      try {
+        await sendPushNotification(
+          otherUser?.id || '',
+          'Order Cancelled',
+          notificationMessage.substring(0, 100),
+          { type: 'order_cancelled', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
+
       console.log('✅ Order cancelled:', orderId);
       
       res.json({ 
@@ -1328,6 +1388,18 @@ if (order.disputes) {
         },
       });
 
+       // PUSH: Notify seller of dispute
+      try {
+        await sendPushNotification(
+          order.seller_id,
+          'Dispute Opened',
+          `A dispute has been opened for "${listingTitle}". Payment is on hold.`,
+          { type: 'dispute', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
+
       console.log('✅ Dispute opened:', orderId);
       res.json({ success: true, order: updatedOrder });
     } catch (error: any) {
@@ -1438,6 +1510,18 @@ if (order.disputes) {
           related_id: orderId,
         },
       });
+
+       // PUSH: Notify seller
+      try {
+        await sendPushNotification(
+          seller.id,
+          'Payment Released!',
+          `£${payoutAmount} for "${listingTitle}" has been transferred.`,
+          { type: 'payout', order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[ORDER] Push notification failed:', pushErr);
+      }
 
       // ✅ Send escrow released EMAIL to seller
       const sellerEmailRecord = await prisma.users.findUnique({

@@ -6,6 +6,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { Shippo } from 'shippo';
+import { sendPushNotification } from './pushNotificationController';
 
 const prisma = new PrismaClient();
 
@@ -464,6 +465,18 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       },
     });
 
+    // PUSH: Notify buyer
+    try {
+      await sendPushNotification(
+        order.buyer_id,
+        'Shipping Label Created',
+        `The seller is preparing to ship your order. Tracking: ${transaction.trackingNumber}`,
+        { type: 'shipping', order_id: orderId }
+      );
+    } catch (pushErr) {
+      console.error('[SHIP] Push notification failed:', pushErr);
+    }
+
     res.json({
       success: true,
       data: {
@@ -635,6 +648,18 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
       },
     });
 
+    // PUSH: Notify buyer item shipped
+    try {
+      await sendPushNotification(
+        order.buyer_id,
+        'Your Order Has Shipped!',
+        `"${order.listings?.title || 'Your item'}" is on its way! Tracking: ${order.tracking_number}`,
+        { type: 'shipped', order_id: orderId }
+      );
+    } catch (pushErr) {
+      console.error('[SHIP] Push notification failed:', pushErr);
+    }
+
     res.json({
       success: true,
       data: {
@@ -742,6 +767,18 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
               related_id: order.id,
             },
           });
+
+          // PUSH: Notify buyer of delivery
+          try {
+            await sendPushNotification(
+              order.buyer_id,
+              'Your Order Has Been Delivered!',
+              `"${listingTitle}" has arrived. Confirm receipt or report any issues.`,
+              { type: 'delivered', order_id: order.id }
+            );
+          } catch (pushErr) {
+            console.error('[SHIP] Push notification failed:', pushErr);
+          }
           
           console.log(`📅 Escrow release scheduled for order ${order.id}: ${escrowReleaseAt?.toISOString()}`);
         }
