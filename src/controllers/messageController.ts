@@ -366,41 +366,46 @@ export class MessageController {
       const senderName = sender?.display_name || 'Someone';
       const listingTitle = conversation.listings?.title || 'an item';
 
-      // ✅ CREATE NOTIFICATION FOR RECIPIENT
-      try {
-        const listingImage = conversation.listings?.images?.[0]?.image_url || null;
+      // ✅ SAFETY CHECK: Never notify the sender themselves
+      if (receiverId && receiverId !== senderId) {
+        // ✅ CREATE NOTIFICATION FOR RECIPIENT
+        try {
+          const listingImage = conversation.listings?.images?.[0]?.image_url || null;
 
-        await prisma.notifications.create({
-          data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            user_id: receiverId,
-            type: 'message',
-            title: 'New Message',
-            message: `${senderName} sent you a message about ${listingTitle}`,
-            image_url: listingImage,           // ✅ Listing image for display
-            related_id: conversationId,         // ✅ Conversation ID for navigation
-            related_user_id: senderId,          // Who sent the message
-            is_read: false,
-            created_at: new Date(),
-          },
-        });
-        
-        console.log(`📬 Created message notification for user ${receiverId}`);
-      } catch (notifError) {
-        // Don't fail the message send if notification creation fails
-        console.error('Failed to create notification:', notifError);
-      }
+          await prisma.notifications.create({
+            data: {
+              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              user_id: receiverId,
+              type: 'message',
+              title: 'New Message',
+              message: `${senderName} sent you a message about ${listingTitle}`,
+              image_url: listingImage,           // ✅ Listing image for display
+              related_id: conversationId,         // ✅ Conversation ID for navigation
+              related_user_id: senderId,          // Who sent the message
+              is_read: false,
+              created_at: new Date(),
+            },
+          });
+          
+          console.log(`📬 Created message notification for user ${receiverId}`);
+        } catch (notifError) {
+          // Don't fail the message send if notification creation fails
+          console.error('Failed to create notification:', notifError);
+        }
 
-      // ✅ SEND PUSH NOTIFICATION
-      try {
-        await sendPushNotification(
-          receiverId,
-          `💬 ${senderName}`,
-          content.length > 50 ? content.substring(0, 50) + '...' : content,
-          { type: 'message', conversation_id: conversationId }
-        );
-      } catch (pushErr) {
-        console.error('Push notification failed:', pushErr);
+        // ✅ SEND PUSH NOTIFICATION
+        try {
+          await sendPushNotification(
+            receiverId,
+            `💬 ${senderName}`,
+            content.length > 50 ? content.substring(0, 50) + '...' : content,
+            { type: 'message', conversation_id: conversationId }
+          );
+        } catch (pushErr) {
+          console.error('Push notification failed:', pushErr);
+        }
+      } else {
+        console.log(`⚠️ Skipped self-notification: senderId=${senderId}, receiverId=${receiverId}`);
       }
 
       res.status(201).json({ message });

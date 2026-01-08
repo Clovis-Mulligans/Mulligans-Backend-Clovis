@@ -40,10 +40,10 @@ export const savePushToken = async (req: Request, res: Response) => {
       },
     });
 
-    console.log(`✅ Push token saved for user ${userId}`);
+    console.log('[PUSH] Token saved for user:', userId);
     res.json({ success: true, message: 'Push token saved' });
   } catch (error) {
-    console.error('❌ Save push token error:', error);
+    console.error('[PUSH] Save token error:', error);
     res.status(500).json({ error: 'Failed to save push token' });
   }
 };
@@ -67,10 +67,10 @@ export const removePushToken = async (req: Request, res: Response) => {
       },
     });
 
-    console.log(`✅ Push token removed for user ${userId}`);
+    console.log('[PUSH] Token removed for user:', userId);
     res.json({ success: true, message: 'Push token removed' });
   } catch (error) {
-    console.error('❌ Remove push token error:', error);
+    console.error('[PUSH] Remove token error:', error);
     res.status(500).json({ error: 'Failed to remove push token' });
   }
 };
@@ -84,7 +84,9 @@ export const sendPushNotification = async (
   title: string,
   body: string,
   data?: Record<string, any>
-) => {
+): Promise<boolean> => {
+  console.log('[PUSH] Attempting to send notification to user:', userId);
+  
   try {
     // Get user's push token
     const user = await prisma.users.findUnique({
@@ -92,19 +94,23 @@ export const sendPushNotification = async (
       select: { push_token: true, display_name: true },
     });
 
+    console.log('[PUSH] User lookup result:', user?.display_name || 'not found', 'token:', user?.push_token ? 'EXISTS' : 'NULL');
+
     if (!user?.push_token) {
-      console.log(`⚠️ No push token for user ${userId}`);
+      console.log('[PUSH] No push token for user:', userId);
       return false;
     }
 
     // Send via Expo Push API
     const message = {
       to: user.push_token,
-      sound: 'default',
+      sound: 'default' as const,
       title,
       body,
       data: data || {},
     };
+
+    console.log('[PUSH] Sending to Expo API:', { to: user.push_token, title, body });
 
     const response = await fetch(EXPO_PUSH_URL, {
       method: 'POST',
@@ -117,16 +123,17 @@ export const sendPushNotification = async (
     });
 
     const result: any = await response.json();
+    console.log('[PUSH] Expo API response:', JSON.stringify(result));
 
     if (result.data?.[0]?.status === 'ok') {
-      console.log(`📱 Push notification sent to ${user.display_name || userId}`);
+      console.log('[PUSH] SUCCESS - Notification sent to:', user.display_name || userId);
       return true;
     } else {
-      console.error('❌ Push notification failed:', result);
+      console.error('[PUSH] FAILED - Expo response:', JSON.stringify(result));
       return false;
     }
   } catch (error) {
-    console.error('❌ Send push notification error:', error);
+    console.error('[PUSH] ERROR sending notification:', error);
     return false;
   }
 };
@@ -139,9 +146,12 @@ export const sendPushNotificationBatch = async (
   title: string,
   body: string,
   data?: Record<string, any>
-) => {
+): Promise<number> => {
+  console.log('[PUSH] Batch sending to', userIds.length, 'users');
   const results = await Promise.all(
     userIds.map(userId => sendPushNotification(userId, title, body, data))
   );
-  return results.filter(Boolean).length;
+  const successCount = results.filter(Boolean).length;
+  console.log('[PUSH] Batch complete:', successCount, 'of', userIds.length, 'succeeded');
+  return successCount;
 };
