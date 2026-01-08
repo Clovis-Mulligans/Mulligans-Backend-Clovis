@@ -1,5 +1,5 @@
 // src/controllers/messageController.ts
-// ✅ UPDATED: Now creates notifications when messages are sent, with correct image_url and conversation_id
+// Handles messaging between users with notifications
 
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
@@ -284,7 +284,7 @@ export class MessageController {
 
   /**
    * Send a message
-   * ✅ UPDATED: Now creates notification for recipient with listing image and conversation ID
+   * Creates notification for recipient with listing image and conversation ID
    */
   static async sendMessage(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -305,7 +305,7 @@ export class MessageController {
           OR: [{ buyer_id: senderId }, { seller_id: senderId }],
         },
         include: {
-          // ✅ Get listing details for notification
+          // Get listing details for notification
           listings: {
             select: {
               id: true,
@@ -329,7 +329,7 @@ export class MessageController {
           ? conversation.seller_id
           : conversation.buyer_id;
 
-      // ✅ Get sender info for notification message
+      // Get sender info for notification message
       const sender = await prisma.users.findUnique({
         where: { id: senderId },
         select: { display_name: true },
@@ -366,9 +366,9 @@ export class MessageController {
       const senderName = sender?.display_name || 'Someone';
       const listingTitle = conversation.listings?.title || 'an item';
 
-      // ✅ SAFETY CHECK: Never notify the sender themselves
+      // SAFETY CHECK: Never notify the sender themselves
       if (receiverId && receiverId !== senderId) {
-        // ✅ CREATE NOTIFICATION FOR RECIPIENT
+        // CREATE NOTIFICATION FOR RECIPIENT
         try {
           const listingImage = conversation.listings?.images?.[0]?.image_url || null;
 
@@ -379,33 +379,34 @@ export class MessageController {
               type: 'message',
               title: 'New Message',
               message: `${senderName} sent you a message about ${listingTitle}`,
-              image_url: listingImage,           // ✅ Listing image for display
-              related_id: conversationId,         // ✅ Conversation ID for navigation
-              related_user_id: senderId,          // Who sent the message
+              image_url: listingImage,
+              related_id: conversationId,
+              related_user_id: senderId,
               is_read: false,
               created_at: new Date(),
             },
           });
           
-          console.log(`📬 Created message notification for user ${receiverId}`);
+          console.log('[MSG] Created notification for user:', receiverId);
         } catch (notifError) {
           // Don't fail the message send if notification creation fails
-          console.error('Failed to create notification:', notifError);
+          console.error('[MSG] Failed to create notification:', notifError);
         }
 
-        // ✅ SEND PUSH NOTIFICATION
+        // SEND PUSH NOTIFICATION
         try {
+          console.log('[MSG] Sending push notification to:', receiverId);
           await sendPushNotification(
             receiverId,
-            `💬 ${senderName}`,
+            `New message from ${senderName}`,
             content.length > 50 ? content.substring(0, 50) + '...' : content,
             { type: 'message', conversation_id: conversationId }
           );
         } catch (pushErr) {
-          console.error('Push notification failed:', pushErr);
+          console.error('[MSG] Push notification failed:', pushErr);
         }
       } else {
-        console.log(`⚠️ Skipped self-notification: senderId=${senderId}, receiverId=${receiverId}`);
+        console.log('[MSG] Skipped self-notification: senderId=' + senderId + ', receiverId=' + receiverId);
       }
 
       res.status(201).json({ message });
