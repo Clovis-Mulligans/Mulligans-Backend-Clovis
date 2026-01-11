@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mulligans Admin - Dispute Management</title>
+  <title>Mulligans Admin - Dispute & Report Management</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * {
@@ -169,6 +169,57 @@
       background: #E5E7EB;
     }
 
+    /* ==================== SECTION TOGGLE ==================== */
+    .section-toggle {
+      display: flex;
+      gap: 12px;
+      padding: 16px 24px;
+      background: white;
+      border-bottom: 1px solid #E5E7EB;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .section-btn {
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 2px solid #E5E7EB;
+      background: white;
+      color: #6B7280;
+      transition: all 0.2s;
+    }
+
+    .section-btn:hover {
+      border-color: #1DC690;
+      color: #1DC690;
+    }
+
+    .section-btn.active {
+      background: #1DC690;
+      border-color: #1DC690;
+      color: white;
+    }
+
+    .section-btn .badge {
+      background: rgba(255,255,255,0.2);
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+
+    .section-btn.active .badge {
+      background: rgba(255,255,255,0.3);
+    }
+
+    .section-btn:not(.active) .badge {
+      background: #FEE2E2;
+      color: #991B1B;
+    }
+
     /* ==================== STATS CARDS ==================== */
     .stats-bar {
       display: grid;
@@ -203,6 +254,8 @@
     .stat-icon.yellow { background: #FEF3C7; }
     .stat-icon.green { background: #D1FAE5; }
     .stat-icon.blue { background: #DBEAFE; }
+    .stat-icon.purple { background: #EDE9FE; }
+    .stat-icon.orange { background: #FFEDD5; }
 
     .stat-content h3 {
       font-size: 28px;
@@ -231,6 +284,15 @@
       padding: 0 24px 24px;
       max-width: 1400px;
       margin: 0 auto;
+    }
+
+    /* Hide sections */
+    .section-content {
+      display: none;
+    }
+
+    .section-content.active {
+      display: block;
     }
 
     /* Tabs */
@@ -450,12 +512,11 @@
     .status-badge {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       padding: 4px 10px;
-      border-radius: 20px;
+      border-radius: 12px;
       font-size: 12px;
-      font-weight: 500;
-      flex-shrink: 0;
+      font-weight: 600;
     }
 
     .status-badge.escalated {
@@ -473,49 +534,127 @@
       color: #1E40AF;
     }
 
-    .status-badge.admin_resolved,
     .status-badge.resolved,
-    .status-badge.accepted {
+    .status-badge.admin_resolved {
       background: #D1FAE5;
       color: #065F46;
     }
 
-    .urgency-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    .urgency-tag.auto {
+    .status-badge.pending {
       background: #FEF3C7;
       color: #92400E;
     }
 
-    .urgency-tag.high-value {
-      background: #F3E8FF;
-      color: #7C3AED;
+    .status-badge.reviewed {
+      background: #DBEAFE;
+      color: #1E40AF;
     }
 
-    /* Empty State */
-    .empty-state {
-      text-align: center;
-      padding: 60px 20px;
-      color: #6B7280;
+    .status-badge.dismissed {
+      background: #F3F4F6;
+      color: #374151;
     }
 
-    .empty-state-icon {
-      font-size: 48px;
-      margin-bottom: 16px;
+    /* ==================== REPORT CARDS ==================== */
+    .report-card {
+      display: flex;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #E5E7EB;
+      cursor: pointer;
+      transition: background 0.2s;
+      gap: 16px;
     }
 
-    .empty-state h3 {
+    .report-card:hover {
+      background: #F9FAFB;
+    }
+
+    .report-card:last-child {
+      border-bottom: none;
+    }
+
+    .report-priority {
+      width: 4px;
+      align-self: stretch;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .report-priority.scam { background: #DC2626; }
+    .report-priority.inappropriate { background: #F59E0B; }
+    .report-priority.other { background: #6B7280; }
+
+    .report-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #F3F4F6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 18px;
+      font-weight: 600;
+      color: #6B7280;
+      flex-shrink: 0;
+    }
+
+    .report-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .report-title {
+      font-weight: 600;
       color: #111827;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
+    }
+
+    .report-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: #6B7280;
+      flex-wrap: wrap;
+    }
+
+    .report-reason {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .report-reason.scam {
+      background: #FEE2E2;
+      color: #991B1B;
+    }
+
+    .report-reason.inappropriate {
+      background: #FEF3C7;
+      color: #92400E;
+    }
+
+    .report-reason.other {
+      background: #F3F4F6;
+      color: #374151;
+    }
+
+    .report-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .report-age {
+      font-size: 12px;
+      color: #9CA3AF;
     }
 
     /* ==================== MODAL ==================== */
@@ -525,13 +664,12 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.5);
+      background: rgba(0, 0, 0, 0.6);
       display: none;
-      align-items: flex-start;
+      align-items: center;
       justify-content: center;
-      padding: 20px;
       z-index: 200;
-      overflow-y: auto;
+      padding: 20px;
     }
 
     .modal-overlay.active {
@@ -543,8 +681,10 @@
       border-radius: 16px;
       width: 100%;
       max-width: 900px;
-      margin: 40px 0;
+      max-height: 90vh;
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
 
     .modal-header {
@@ -553,42 +693,40 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      position: sticky;
-      top: 0;
-      background: white;
-      z-index: 10;
     }
 
     .modal-header h2 {
       font-size: 18px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 12px;
+      font-weight: 700;
     }
 
     .modal-close {
-      background: none;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
       border: none;
-      font-size: 24px;
+      background: #F3F4F6;
       cursor: pointer;
-      color: #6B7280;
-      padding: 4px;
-      line-height: 1;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .modal-close:hover {
-      color: #111827;
+      background: #E5E7EB;
     }
 
     .modal-body {
       padding: 24px;
+      overflow-y: auto;
+      flex: 1;
     }
 
-    /* Detail Sections */
+    /* ==================== DISPUTE DETAIL MODAL ==================== */
     .detail-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(2, 1fr);
       gap: 24px;
     }
 
@@ -596,16 +734,10 @@
       margin-bottom: 24px;
     }
 
-    .detail-section.full-width {
-      grid-column: 1 / -1;
-    }
-
     .detail-section h3 {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       color: #6B7280;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
       margin-bottom: 12px;
       display: flex;
       align-items: center;
@@ -621,7 +753,7 @@
     .detail-row {
       display: flex;
       justify-content: space-between;
-      padding: 10px 0;
+      padding: 8px 0;
       border-bottom: 1px solid #E5E7EB;
     }
 
@@ -637,109 +769,41 @@
     .detail-value {
       font-weight: 500;
       color: #111827;
-      font-size: 14px;
       text-align: right;
     }
 
-    /* Timeline */
-    .timeline {
-      position: relative;
-      padding-left: 24px;
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
 
-    .timeline::before {
-      content: '';
-      position: absolute;
-      left: 7px;
-      top: 8px;
-      bottom: 8px;
-      width: 2px;
-      background: #E5E7EB;
-    }
-
-    .timeline-item {
-      position: relative;
-      padding-bottom: 20px;
-    }
-
-    .timeline-item:last-child {
-      padding-bottom: 0;
-    }
-
-    .timeline-dot {
-      position: absolute;
-      left: -24px;
-      top: 4px;
-      width: 16px;
-      height: 16px;
+    .user-avatar {
+      width: 40px;
+      height: 40px;
       border-radius: 50%;
       background: #E5E7EB;
-      border: 3px solid white;
-      z-index: 1;
-    }
-
-    .timeline-dot.active {
-      background: #1DC690;
-    }
-
-    .timeline-dot.warning {
-      background: #F59E0B;
-    }
-
-    .timeline-dot.error {
-      background: #DC2626;
-    }
-
-    .timeline-content h4 {
-      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-weight: 600;
-      color: #111827;
-      margin-bottom: 2px;
-    }
-
-    .timeline-content p {
-      font-size: 13px;
       color: #6B7280;
     }
 
-    .timeline-content .timeline-note {
-      background: #F3F4F6;
-      padding: 8px 12px;
-      border-radius: 6px;
-      margin-top: 8px;
-      font-size: 13px;
-      font-style: italic;
-      color: #374151;
+    .user-details h4 {
+      font-weight: 600;
+      color: #111827;
     }
 
-    /* Claim/Response Text */
-    .claim-text {
-      background: #FEF2F2;
-      border: 1px solid #FECACA;
-      border-radius: 8px;
-      padding: 12px;
-      font-style: italic;
-      color: #991B1B;
-      margin-top: 8px;
-      font-size: 14px;
+    .user-details p {
+      font-size: 12px;
+      color: #6B7280;
     }
 
-    .response-text {
-      background: #F0FDF4;
-      border: 1px solid #BBF7D0;
-      border-radius: 8px;
-      padding: 12px;
-      font-style: italic;
-      color: #166534;
-      margin-top: 8px;
-      font-size: 14px;
-    }
-
-    /* Evidence Images */
     .evidence-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 12px;
       margin-top: 12px;
     }
 
@@ -749,26 +813,39 @@
       object-fit: cover;
       border-radius: 8px;
       cursor: pointer;
-      transition: transform 0.2s, opacity 0.2s;
+      transition: transform 0.2s;
     }
 
     .evidence-image:hover {
       transform: scale(1.05);
-      opacity: 0.9;
     }
 
-    /* Resolution Form */
+    .response-box {
+      background: white;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+      border: 1px solid #E5E7EB;
+    }
+
+    .response-box p {
+      font-size: 14px;
+      color: #374151;
+      line-height: 1.5;
+    }
+
+    /* ==================== RESOLUTION FORM ==================== */
     .resolution-form {
-      background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+      background: #F9FAFB;
       border-radius: 12px;
       padding: 20px;
       margin-top: 24px;
     }
 
     .resolution-form h3 {
-      color: #92400E;
-      margin-bottom: 16px;
       font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
     }
 
     .resolution-options {
@@ -779,17 +856,17 @@
     }
 
     .resolution-option {
-      padding: 16px;
-      border: 2px solid #FDE68A;
+      background: white;
+      border: 2px solid #E5E7EB;
       border-radius: 12px;
+      padding: 16px;
+      text-align: center;
       cursor: pointer;
       transition: all 0.2s;
-      text-align: center;
-      background: white;
     }
 
     .resolution-option:hover {
-      border-color: #F59E0B;
+      border-color: #1DC690;
     }
 
     .resolution-option.selected {
@@ -890,6 +967,78 @@
       padding: 16px;
     }
 
+    /* User card for reports */
+    .user-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: white;
+      border-radius: 8px;
+      border: 1px solid #E5E7EB;
+    }
+
+    .user-card-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #1DC690;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 18px;
+    }
+
+    .user-card-info h4 {
+      font-weight: 600;
+      color: #111827;
+    }
+
+    .user-card-info p {
+      font-size: 13px;
+      color: #6B7280;
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid #E5E7EB;
+    }
+
+    .btn-dismiss {
+      background: #F3F4F6;
+      color: #374151;
+      flex: 1;
+    }
+
+    .btn-dismiss:hover {
+      background: #E5E7EB;
+    }
+
+    .btn-warn {
+      background: #F59E0B;
+      color: white;
+      flex: 1;
+    }
+
+    .btn-warn:hover {
+      background: #D97706;
+    }
+
+    .btn-ban {
+      background: #DC2626;
+      color: white;
+      flex: 1;
+    }
+
+    .btn-ban:hover {
+      background: #B91C1C;
+    }
+
     /* Image Modal */
     .image-modal {
       position: fixed;
@@ -939,6 +1088,17 @@
       to { transform: rotate(360deg); }
     }
 
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #6B7280;
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
     /* ==================== RESPONSIVE ==================== */
     @media (max-width: 1024px) {
       .stats-bar {
@@ -946,6 +1106,10 @@
       }
 
       .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .resolution-options {
         grid-template-columns: 1fr;
       }
     }
@@ -999,33 +1163,28 @@
         justify-content: space-between;
       }
 
+      .section-toggle {
+        flex-wrap: wrap;
+      }
+
+      .section-btn {
+        flex: 1;
+        min-width: 140px;
+      }
+
       .dispute-card {
         flex-wrap: wrap;
-        gap: 12px;
       }
 
-      .dispute-main {
-        order: 2;
-        flex-basis: 100%;
-      }
-
-      .dispute-info {
-        order: 3;
-        flex-direction: row;
-        justify-content: space-between;
-        flex-basis: 100%;
-      }
-
-      .resolution-options {
-        grid-template-columns: 1fr;
+      .dispute-image {
+        width: 48px;
+        height: 48px;
       }
 
       .modal {
-        margin: 20px 0;
-      }
-
-      .modal-body {
-        padding: 16px;
+        max-height: 95vh;
+        border-radius: 12px 12px 0 0;
+        margin-top: auto;
       }
     }
   </style>
@@ -1036,7 +1195,7 @@
     <div class="login-card">
       <div class="login-logo">
         <h1>🏌️ MULLIGANS</h1>
-        <p>Dispute Management Admin</p>
+        <p>Admin Dashboard</p>
       </div>
       <div id="loginError" class="error-message"></div>
       <form id="loginForm">
@@ -1057,94 +1216,192 @@
     <header class="header">
       <div class="header-left">
         <h1>🏌️ MULLIGANS ADMIN</h1>
-        <span class="header-version">v2.0</span>
+        <span class="header-version">v3.0</span>
       </div>
       <button class="btn btn-logout" onclick="logout()">
         <span>Logout</span>
       </button>
     </header>
 
-    <!-- Stats Bar -->
-    <div class="stats-bar">
-      <div class="stat-card clickable" onclick="switchTab('attention')">
-        <div class="stat-icon red">🔴</div>
-        <div class="stat-content">
-          <h3 id="statAttention">0</h3>
-          <p>Needs Attention</p>
-        </div>
-      </div>
-      <div class="stat-card clickable" onclick="switchTab('progress')">
-        <div class="stat-icon yellow">🟡</div>
-        <div class="stat-content">
-          <h3 id="statProgress">0</h3>
-          <p>In Progress</p>
-        </div>
-      </div>
-      <div class="stat-card clickable" onclick="switchTab('history')">
-        <div class="stat-icon green">🟢</div>
-        <div class="stat-content">
-          <h3 id="statResolved">0</h3>
-          <p>Resolved</p>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon blue">💰</div>
-        <div class="stat-content">
-          <h3 id="statAtRisk">£0</h3>
-          <p>At Risk</p>
-        </div>
-      </div>
+    <!-- Section Toggle -->
+    <div class="section-toggle">
+      <button class="section-btn active" onclick="switchSection('disputes')" id="btnDisputes">
+        ⚖️ Disputes
+        <span class="badge" id="disputesBadge">0</span>
+      </button>
+      <button class="section-btn" onclick="switchSection('reports')" id="btnReports">
+        🚩 User Reports
+        <span class="badge" id="reportsBadge">0</span>
+      </button>
     </div>
 
-    <!-- Main Content -->
-    <main class="main-content">
-      <!-- Tabs -->
-      <div class="tabs-container">
-        <div class="tabs">
-          <div class="tab active" data-tab="attention" onclick="switchTab('attention')">
-            <span>🔴 Needs Attention</span>
-            <span class="tab-badge urgent" id="tabBadgeAttention">0</span>
+    <!-- ==================== DISPUTES SECTION ==================== -->
+    <div id="disputesSection" class="section-content active">
+      <!-- Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-card clickable" onclick="switchTab('attention')">
+          <div class="stat-icon red">🔴</div>
+          <div class="stat-content">
+            <h3 id="statAttention">0</h3>
+            <p>Needs Attention</p>
           </div>
-          <div class="tab" data-tab="progress" onclick="switchTab('progress')">
-            <span>🟡 In Progress</span>
-            <span class="tab-badge" id="tabBadgeProgress">0</span>
+        </div>
+        <div class="stat-card clickable" onclick="switchTab('progress')">
+          <div class="stat-icon yellow">🟡</div>
+          <div class="stat-content">
+            <h3 id="statProgress">0</h3>
+            <p>In Progress</p>
           </div>
-          <div class="tab" data-tab="history" onclick="switchTab('history')">
-            <span>🟢 History</span>
-            <span class="tab-badge" id="tabBadgeHistory">0</span>
+        </div>
+        <div class="stat-card clickable" onclick="switchTab('history')">
+          <div class="stat-icon green">🟢</div>
+          <div class="stat-content">
+            <h3 id="statResolved">0</h3>
+            <p>Resolved</p>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon blue">💰</div>
+          <div class="stat-content">
+            <h3 id="statAtRisk">£0</h3>
+            <p>At Risk</p>
           </div>
         </div>
       </div>
 
-      <!-- Toolbar -->
-      <div class="toolbar">
-        <div class="search-box">
-          <span>🔍</span>
-          <input type="text" id="searchInput" placeholder="Search by buyer, seller, or order ID..." oninput="handleSearch()">
+      <!-- Main Content -->
+      <main class="main-content">
+        <!-- Tabs -->
+        <div class="tabs-container">
+          <div class="tabs">
+            <div class="tab active" data-tab="attention" onclick="switchTab('attention')">
+              <span>🔴 Needs Attention</span>
+              <span class="tab-badge urgent" id="tabBadgeAttention">0</span>
+            </div>
+            <div class="tab" data-tab="progress" onclick="switchTab('progress')">
+              <span>🟡 In Progress</span>
+              <span class="tab-badge" id="tabBadgeProgress">0</span>
+            </div>
+            <div class="tab" data-tab="history" onclick="switchTab('history')">
+              <span>🟢 History</span>
+              <span class="tab-badge" id="tabBadgeHistory">0</span>
+            </div>
+          </div>
         </div>
-        <div class="toolbar-right">
-          <select class="sort-select" id="sortSelect" onchange="handleSort()">
-            <option value="newest">Newest First</option>
-            <option value="oldest">Oldest First</option>
-            <option value="highest">Highest Value</option>
-            <option value="lowest">Lowest Value</option>
-          </select>
-          <button class="btn btn-refresh" onclick="loadDisputes()">
-            🔄 Refresh
-          </button>
-        </div>
-      </div>
 
-      <!-- Disputes List -->
-      <div class="disputes-container">
-        <div id="disputesContent">
-          <div class="loading">
-            <div class="spinner"></div>
-            <p>Loading disputes...</p>
+        <!-- Toolbar -->
+        <div class="toolbar">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="searchInput" placeholder="Search by buyer, seller, or order ID..." oninput="handleSearch()">
+          </div>
+          <div class="toolbar-right">
+            <select class="sort-select" id="sortSelect" onchange="handleSort()">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="highest">Highest Value</option>
+              <option value="lowest">Lowest Value</option>
+            </select>
+            <button class="btn btn-refresh" onclick="loadDisputes()">
+              🔄 Refresh
+            </button>
+          </div>
+        </div>
+
+        <!-- Disputes List -->
+        <div class="disputes-container">
+          <div id="disputesContent">
+            <div class="loading">
+              <div class="spinner"></div>
+              <p>Loading disputes...</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- ==================== REPORTS SECTION ==================== -->
+    <div id="reportsSection" class="section-content">
+      <!-- Reports Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-card clickable" onclick="switchReportTab('pending')">
+          <div class="stat-icon orange">🟠</div>
+          <div class="stat-content">
+            <h3 id="statPendingReports">0</h3>
+            <p>Pending Reports</p>
+          </div>
+        </div>
+        <div class="stat-card clickable" onclick="switchReportTab('reviewed')">
+          <div class="stat-icon blue">🔵</div>
+          <div class="stat-content">
+            <h3 id="statReviewedReports">0</h3>
+            <p>Under Review</p>
+          </div>
+        </div>
+        <div class="stat-card clickable" onclick="switchReportTab('resolved')">
+          <div class="stat-icon green">🟢</div>
+          <div class="stat-content">
+            <h3 id="statResolvedReports">0</h3>
+            <p>Resolved</p>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon purple">📊</div>
+          <div class="stat-content">
+            <h3 id="statTotalReports">0</h3>
+            <p>Total Reports</p>
           </div>
         </div>
       </div>
-    </main>
+
+      <main class="main-content">
+        <div class="tabs-container">
+          <div class="tabs">
+            <div class="tab active" data-report-tab="pending" onclick="switchReportTab('pending')">
+              <span>🟠 Pending</span>
+              <span class="tab-badge urgent" id="reportTabPending">0</span>
+            </div>
+            <div class="tab" data-report-tab="reviewed" onclick="switchReportTab('reviewed')">
+              <span>🔵 Under Review</span>
+              <span class="tab-badge" id="reportTabReviewed">0</span>
+            </div>
+            <div class="tab" data-report-tab="resolved" onclick="switchReportTab('resolved')">
+              <span>🟢 Resolved</span>
+              <span class="tab-badge" id="reportTabResolved">0</span>
+            </div>
+            <div class="tab" data-report-tab="dismissed" onclick="switchReportTab('dismissed')">
+              <span>⚪ Dismissed</span>
+              <span class="tab-badge" id="reportTabDismissed">0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="reportSearchInput" placeholder="Search by username or email..." oninput="handleReportSearch()">
+          </div>
+          <div class="toolbar-right">
+            <select class="sort-select" id="reportSortSelect" onchange="handleReportSort()">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
+            <button class="btn btn-refresh" onclick="loadReports()">
+              🔄 Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="disputes-container">
+          <div id="reportsContent">
+            <div class="loading">
+              <div class="spinner"></div>
+              <p>Loading reports...</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
   </div>
 
   <!-- ==================== DISPUTE DETAIL MODAL ==================== -->
@@ -1155,6 +1412,21 @@
         <button class="modal-close" onclick="closeModal()">&times;</button>
       </div>
       <div class="modal-body" id="modalContent">
+        <div class="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== REPORT DETAIL MODAL ==================== -->
+  <div id="reportModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>🚩 Report Details</h2>
+        <button class="modal-close" onclick="closeReportModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="reportModalContent">
         <div class="loading">
           <div class="spinner"></div>
         </div>
@@ -1176,6 +1448,15 @@
     let currentDispute = null;
     let searchQuery = '';
     let sortBy = 'newest';
+    let currentSection = 'disputes';
+
+    // Reports state
+    let reports = [];
+    let reportStats = {};
+    let currentReportTab = 'pending';
+    let reportSearchQuery = '';
+    let reportSortBy = 'newest';
+    let currentReport = null;
 
     const API_BASE = '/admin';
 
@@ -1186,6 +1467,7 @@
         adminPassword = savedPassword;
         showApp();
         loadDisputes();
+        loadReports();
       }
 
       document.getElementById('loginForm').addEventListener('submit', handleLogin);
@@ -1203,21 +1485,20 @@
       errorDiv.style.display = 'none';
 
       try {
-        const response = await fetch(`${API_BASE}/verify`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
+        const response = await fetch(`${API_BASE}/disputes`, {
+          headers: {
+            'Authorization': `Admin ${password}`,
+          },
         });
-
-        const data = await response.json();
 
         if (response.ok) {
           adminPassword = password;
           sessionStorage.setItem('adminPassword', password);
           showApp();
           loadDisputes();
+          loadReports();
         } else {
-          errorDiv.textContent = data.error || 'Invalid password';
+          errorDiv.textContent = 'Invalid password. Please try again.';
           errorDiv.style.display = 'block';
         }
       } catch (error) {
@@ -1229,108 +1510,91 @@
       }
     }
 
-    function logout() {
-      adminPassword = '';
-      sessionStorage.removeItem('adminPassword');
-      document.getElementById('loginScreen').style.display = 'flex';
-      document.getElementById('appContainer').style.display = 'none';
-      document.getElementById('password').value = '';
-    }
-
     function showApp() {
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('appContainer').style.display = 'block';
     }
 
-    // ==================== DATA LOADING ====================
-    async function loadDisputes() {
-      try {
-        const response = await fetch(`${API_BASE}/disputes`, {
-          headers: { 'Authorization': `Admin ${adminPassword}` },
-        });
+    function logout() {
+      sessionStorage.removeItem('adminPassword');
+      adminPassword = '';
+      document.getElementById('loginScreen').style.display = 'flex';
+      document.getElementById('appContainer').style.display = 'none';
+      document.getElementById('password').value = '';
+    }
 
-        if (response.status === 401) {
-          logout();
-          return;
-        }
-
-        const data = await response.json();
-        disputes = data.disputes || [];
-        updateStats();
-        renderDisputes();
-      } catch (error) {
-        console.error('Failed to load disputes:', error);
+    // ==================== SECTION TOGGLE ====================
+    function switchSection(section) {
+      currentSection = section;
+      
+      document.querySelectorAll('.section-btn').forEach(btn => btn.classList.remove('active'));
+      document.getElementById(`btn${section.charAt(0).toUpperCase() + section.slice(1)}`).classList.add('active');
+      
+      document.querySelectorAll('.section-content').forEach(s => s.classList.remove('active'));
+      document.getElementById(`${section}Section`).classList.add('active');
+      
+      if (section === 'reports' && reports.length === 0) {
+        loadReports();
       }
     }
 
-    // ==================== STATS ====================
-    function updateStats() {
-      const attention = disputes.filter(d => d.status === 'escalated');
-      const progress = disputes.filter(d => ['open', 'counter_offered'].includes(d.status));
-      const resolved = disputes.filter(d => ['admin_resolved', 'resolved', 'accepted'].includes(d.status));
-      const atRisk = attention.reduce((sum, d) => sum + d.requested_refund_amount, 0);
+    // ==================== DISPUTES ====================
+    async function loadDisputes() {
+      const content = document.getElementById('disputesContent');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading disputes...</p></div>';
 
-      document.getElementById('statAttention').textContent = attention.length;
-      document.getElementById('statProgress').textContent = progress.length;
-      document.getElementById('statResolved').textContent = resolved.length;
-      document.getElementById('statAtRisk').textContent = `£${atRisk.toFixed(0)}`;
+      try {
+        const response = await fetch(`${API_BASE}/disputes`, {
+          headers: {
+            'Authorization': `Admin ${adminPassword}`,
+          },
+        });
 
-      document.getElementById('tabBadgeAttention').textContent = attention.length;
-      document.getElementById('tabBadgeProgress').textContent = progress.length;
-      document.getElementById('tabBadgeHistory').textContent = resolved.length;
+        if (!response.ok) throw new Error('Failed to fetch');
+
+        const data = await response.json();
+        disputes = data.disputes || [];
+
+        updateStats();
+        renderDisputes();
+        
+        // Update badge
+        const needsAttention = disputes.filter(d => d.status === 'escalated' || d.status === 'open').length;
+        document.getElementById('disputesBadge').textContent = needsAttention;
+      } catch (error) {
+        console.error('Load disputes error:', error);
+        content.innerHTML = '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Failed to load disputes</p></div>';
+      }
     }
 
-    // ==================== TABS & FILTERING ====================
+    function updateStats() {
+      const attention = disputes.filter(d => d.status === 'escalated' || d.status === 'open').length;
+      const progress = disputes.filter(d => d.status === 'counter_offered').length;
+      const resolved = disputes.filter(d => d.status === 'admin_resolved' || d.status === 'resolved').length;
+      const atRisk = disputes
+        .filter(d => !['admin_resolved', 'resolved'].includes(d.status))
+        .reduce((sum, d) => sum + Number(d.requested_refund_amount || 0), 0);
+
+      document.getElementById('statAttention').textContent = attention;
+      document.getElementById('statProgress').textContent = progress;
+      document.getElementById('statResolved').textContent = resolved;
+      document.getElementById('statAtRisk').textContent = `£${atRisk.toFixed(0)}`;
+
+      document.getElementById('tabBadgeAttention').textContent = attention;
+      document.getElementById('tabBadgeProgress').textContent = progress;
+      document.getElementById('tabBadgeHistory').textContent = resolved;
+    }
+
     function switchTab(tab) {
       currentTab = tab;
-      document.querySelectorAll('.tab').forEach(t => {
+      document.querySelectorAll('#disputesSection .tab').forEach(t => {
         t.classList.toggle('active', t.dataset.tab === tab);
       });
       renderDisputes();
     }
 
-    function getFilteredDisputes() {
-      let filtered = disputes;
-
-      // Filter by tab
-      if (currentTab === 'attention') {
-        filtered = filtered.filter(d => d.status === 'escalated');
-      } else if (currentTab === 'progress') {
-        filtered = filtered.filter(d => ['open', 'counter_offered'].includes(d.status));
-      } else if (currentTab === 'history') {
-        filtered = filtered.filter(d => ['admin_resolved', 'resolved', 'accepted'].includes(d.status));
-      }
-
-      // Search filter
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        filtered = filtered.filter(d => 
-          d.buyer.display_name.toLowerCase().includes(q) ||
-          d.seller.display_name.toLowerCase().includes(q) ||
-          d.order_id.toLowerCase().includes(q) ||
-          (d.order.listing_title || '').toLowerCase().includes(q)
-        );
-      }
-
-      // Sort
-      filtered.sort((a, b) => {
-        switch (sortBy) {
-          case 'oldest':
-            return new Date(a.created_at) - new Date(b.created_at);
-          case 'highest':
-            return b.requested_refund_amount - a.requested_refund_amount;
-          case 'lowest':
-            return a.requested_refund_amount - b.requested_refund_amount;
-          default: // newest
-            return new Date(b.created_at) - new Date(a.created_at);
-        }
-      });
-
-      return filtered;
-    }
-
     function handleSearch() {
-      searchQuery = document.getElementById('searchInput').value;
+      searchQuery = document.getElementById('searchInput').value.toLowerCase();
       renderDisputes();
     }
 
@@ -1339,109 +1603,110 @@
       renderDisputes();
     }
 
-    // ==================== RENDER DISPUTES ====================
     function renderDisputes() {
-      const filtered = getFilteredDisputes();
-      const container = document.getElementById('disputesContent');
+      const content = document.getElementById('disputesContent');
+      
+      let filtered = disputes;
+
+      // Tab filter
+      if (currentTab === 'attention') {
+        filtered = filtered.filter(d => d.status === 'escalated' || d.status === 'open');
+      } else if (currentTab === 'progress') {
+        filtered = filtered.filter(d => d.status === 'counter_offered');
+      } else if (currentTab === 'history') {
+        filtered = filtered.filter(d => d.status === 'admin_resolved' || d.status === 'resolved');
+      }
+
+      // Search filter
+      if (searchQuery) {
+        filtered = filtered.filter(d =>
+          d.buyer?.display_name?.toLowerCase().includes(searchQuery) ||
+          d.seller?.display_name?.toLowerCase().includes(searchQuery) ||
+          d.order_id?.toLowerCase().includes(searchQuery)
+        );
+      }
+
+      // Sort
+      filtered.sort((a, b) => {
+        if (sortBy === 'newest') return new Date(b.created_at) - new Date(a.created_at);
+        if (sortBy === 'oldest') return new Date(a.created_at) - new Date(b.created_at);
+        if (sortBy === 'highest') return Number(b.requested_refund_amount) - Number(a.requested_refund_amount);
+        if (sortBy === 'lowest') return Number(a.requested_refund_amount) - Number(b.requested_refund_amount);
+        return 0;
+      });
 
       if (filtered.length === 0) {
-        const emptyMessages = {
-          attention: { icon: '✅', title: 'All clear!', desc: 'No disputes need your attention right now.' },
-          progress: { icon: '📭', title: 'Nothing in progress', desc: 'No active disputes at the moment.' },
-          history: { icon: '📋', title: 'No history yet', desc: 'Resolved disputes will appear here.' },
-        };
-        const msg = emptyMessages[currentTab];
-        container.innerHTML = `
+        content.innerHTML = `
           <div class="empty-state">
-            <div class="empty-state-icon">${msg.icon}</div>
-            <h3>${msg.title}</h3>
-            <p>${msg.desc}</p>
+            <div class="empty-state-icon">📭</div>
+            <p>No disputes in this category</p>
           </div>
         `;
         return;
       }
 
-      container.innerHTML = filtered.map(d => {
-        const age = getAge(d.created_at);
-        const priority = getPriority(d);
-        const urgencyTags = getUrgencyTags(d);
-
+      content.innerHTML = filtered.map(d => {
+        const priority = d.status === 'escalated' ? 'high' : d.status === 'open' ? 'medium' : 'low';
         return `
           <div class="dispute-card" onclick="openDispute('${d.id}')">
             <div class="dispute-priority ${priority}"></div>
-            <img class="dispute-image" src="${d.order.listing_image || 'https://via.placeholder.com/56?text=No+Image'}" alt="">
+            <img class="dispute-image" src="${d.order?.listing_image || '/placeholder.png'}" alt="Item" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%23f3f4f6%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2230%22>🏷️</text></svg>'">
             <div class="dispute-main">
-              <div class="dispute-title">${escapeHtml(d.order.listing_title || 'Item')}</div>
+              <div class="dispute-title">${escapeHtml(d.order?.listing_title || 'Unknown Item')}</div>
               <div class="dispute-meta">
                 <div class="dispute-users">
-                  <span>${escapeHtml(d.buyer.display_name)}</span>
+                  <span>${escapeHtml(d.buyer?.display_name || 'Buyer')}</span>
                   <span class="dispute-arrow">→</span>
-                  <span>${escapeHtml(d.seller.display_name)}</span>
+                  <span>${escapeHtml(d.seller?.display_name || 'Seller')}</span>
                 </div>
-                <span class="status-badge ${d.status}">${formatStatus(d.status)}</span>
-                ${urgencyTags}
+                <span>•</span>
+                <span>${formatReasonType(d.reason_type)}</span>
               </div>
             </div>
             <div class="dispute-info">
-              <div class="dispute-amount">£${d.requested_refund_amount.toFixed(2)}</div>
-              <div class="dispute-age">${age}</div>
+              <span class="dispute-amount">£${Number(d.requested_refund_amount || 0).toFixed(2)}</span>
+              <span class="status-badge ${d.status}">${formatStatus(d.status)}</span>
+              <span class="dispute-age">${getAge(d.created_at)}</span>
             </div>
           </div>
         `;
       }).join('');
     }
 
-    function getPriority(dispute) {
-      if (dispute.status === 'escalated') return 'high';
-      if (dispute.requested_refund_amount > 100) return 'medium';
-      return 'low';
-    }
-
-    function getUrgencyTags(dispute) {
-      const tags = [];
-      if (dispute.auto_escalated) {
-        tags.push('<span class="urgency-tag auto">⏰ Auto-escalated</span>');
-      }
-      if (dispute.requested_refund_amount >= 100) {
-        tags.push('<span class="urgency-tag high-value">💎 High Value</span>');
-      }
-      return tags.join('');
-    }
-
-    // ==================== DISPUTE DETAIL ====================
     async function openDispute(id) {
-      document.getElementById('detailModal').classList.add('active');
-      document.getElementById('modalContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      const modal = document.getElementById('detailModal');
+      const content = document.getElementById('modalContent');
+      modal.classList.add('active');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
       try {
-        const response = await fetch(`/api/disputes/admin/${id}`, {
-          headers: { 'Authorization': `Admin ${adminPassword}` },
+        const response = await fetch(`${API_BASE}/disputes/${id}`, {
+          headers: {
+            'Authorization': `Admin ${adminPassword}`,
+          },
         });
 
-        if (response.status === 401) {
-          logout();
-          return;
-        }
+        if (!response.ok) throw new Error('Failed to fetch');
 
         const data = await response.json();
         currentDispute = data.dispute;
+
         renderDisputeDetail(currentDispute);
       } catch (error) {
-        console.error('Failed to load dispute:', error);
-        document.getElementById('modalContent').innerHTML = '<div class="empty-state"><p>Failed to load dispute details</p></div>';
+        console.error('Open dispute error:', error);
+        content.innerHTML = '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Failed to load dispute details</p></div>';
       }
     }
 
     function renderDisputeDetail(d) {
-      const canResolve = d.status === 'escalated';
-      const isResolved = ['admin_resolved', 'resolved', 'accepted'].includes(d.status);
+      const content = document.getElementById('modalContent');
+      const title = document.getElementById('modalTitle');
+      title.textContent = `Dispute: ${d.order?.listing_title || 'Order ' + d.order_id}`;
 
-      document.getElementById('modalTitle').innerHTML = `
-        Dispute Details
-        <span class="status-badge ${d.status}">${formatStatus(d.status)}</span>
-      `;
+      const isResolved = ['admin_resolved', 'resolved'].includes(d.status);
+      const canResolve = !isResolved;
 
-      document.getElementById('modalContent').innerHTML = `
+      content.innerHTML = `
         <div class="detail-grid">
           <!-- Order Info -->
           <div class="detail-section">
@@ -1449,145 +1714,141 @@
             <div class="detail-card">
               <div class="detail-row">
                 <span class="detail-label">Order ID</span>
-                <span class="detail-value" style="font-family: monospace; font-size: 12px;">${d.order_id}</span>
+                <span class="detail-value" style="font-family: monospace; font-size: 12px;">${escapeHtml(d.order_id)}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">Item</span>
-                <span class="detail-value">${escapeHtml(d.order.listing_title)}</span>
+                <span class="detail-value">${escapeHtml(d.order?.listing_title || 'Unknown')}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">Order Amount</span>
-                <span class="detail-value">£${d.order.amount.toFixed(2)}</span>
+                <span class="detail-value">£${d.order?.amount?.toFixed(2) || '0.00'}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Shipping</span>
+                <span class="detail-value">£${d.order?.shipping_cost?.toFixed(2) || '0.00'}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">Order Date</span>
-                <span class="detail-value">${formatDate(d.order.created_at)}</span>
+                <span class="detail-value">${formatDate(d.order?.created_at)}</span>
               </div>
             </div>
           </div>
 
-          <!-- Timeline -->
+          <!-- Dispute Info -->
           <div class="detail-section">
-            <h3>📅 Timeline</h3>
-            <div class="detail-card">
-              <div class="timeline">
-                <div class="timeline-item">
-                  <div class="timeline-dot active"></div>
-                  <div class="timeline-content">
-                    <h4>Dispute Opened</h4>
-                    <p>${formatDate(d.created_at)}</p>
-                  </div>
-                </div>
-                ${d.seller_responded_at ? `
-                  <div class="timeline-item">
-                    <div class="timeline-dot ${d.counter_offer_amount ? 'active' : 'warning'}"></div>
-                    <div class="timeline-content">
-                      <h4>Seller Responded</h4>
-                      <p>${formatDate(d.seller_responded_at)}</p>
-                      ${d.counter_offer_amount ? `<div class="timeline-note">Counter offer: £${d.counter_offer_amount.toFixed(2)}</div>` : '<div class="timeline-note">Rejected buyer\'s claim</div>'}
-                    </div>
-                  </div>
-                ` : d.status !== 'open' ? '' : `
-                  <div class="timeline-item">
-                    <div class="timeline-dot warning"></div>
-                    <div class="timeline-content">
-                      <h4>Awaiting Seller Response</h4>
-                      <p>Deadline: ${formatDate(d.seller_deadline)}</p>
-                    </div>
-                  </div>
-                `}
-                ${d.status === 'escalated' ? `
-                  <div class="timeline-item">
-                    <div class="timeline-dot error"></div>
-                    <div class="timeline-content">
-                      <h4>Escalated to Admin</h4>
-                      <p>${d.auto_escalated ? 'Auto-escalated (seller missed deadline)' : 'Buyer escalated'}</p>
-                    </div>
-                  </div>
-                ` : ''}
-                ${d.resolved_at ? `
-                  <div class="timeline-item">
-                    <div class="timeline-dot active"></div>
-                    <div class="timeline-content">
-                      <h4>Resolved</h4>
-                      <p>${formatDate(d.resolved_at)}</p>
-                    </div>
-                  </div>
-                ` : ''}
-              </div>
-            </div>
-          </div>
-
-          <!-- Buyer's Claim -->
-          <div class="detail-section">
-            <h3>👤 Buyer's Claim</h3>
+            <h3>⚠️ Dispute Information</h3>
             <div class="detail-card">
               <div class="detail-row">
-                <span class="detail-label">Buyer</span>
-                <span class="detail-value">${escapeHtml(d.buyer.display_name)}</span>
+                <span class="detail-label">Status</span>
+                <span class="detail-value"><span class="status-badge ${d.status}">${formatStatus(d.status)}</span></span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">Email</span>
-                <span class="detail-value" style="font-size: 12px;">${d.buyer.email}</span>
-              </div>
-              <div class="detail-row">
-                <span class="detail-label">Issue Type</span>
+                <span class="detail-label">Reason</span>
                 <span class="detail-value">${formatReasonType(d.reason_type)}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">Requested</span>
-                <span class="detail-value" style="color: #DC2626; font-weight: 600;">£${d.requested_refund_amount.toFixed(2)} (${d.requested_refund_percent}%)</span>
+                <span class="detail-label">Requested Refund</span>
+                <span class="detail-value" style="color: #DC2626; font-weight: 600;">£${d.requested_refund_amount?.toFixed(2) || '0.00'} (${d.requested_refund_percent}%)</span>
               </div>
-              ${d.reason_text ? `<div class="claim-text">"${escapeHtml(d.reason_text)}"</div>` : ''}
+              <div class="detail-row">
+                <span class="detail-label">Filed On</span>
+                <span class="detail-value">${formatDate(d.created_at)}</span>
+              </div>
+              ${d.auto_escalated ? `
+                <div class="detail-row">
+                  <span class="detail-label">Auto-Escalated</span>
+                  <span class="detail-value" style="color: #DC2626;">⚠️ Yes (seller did not respond)</span>
+                </div>
+              ` : ''}
             </div>
-            ${d.buyer_images && d.buyer_images.length > 0 ? `
-              <h4 style="margin-top: 12px; font-size: 13px; color: #6B7280;">📷 Buyer's Evidence (${d.buyer_images.length})</h4>
-              <div class="evidence-grid">
-                ${d.buyer_images.map(img => `
-                  <img class="evidence-image" src="${img.url}" onclick="openImage('${img.url}')" alt="Evidence">
-                `).join('')}
-              </div>
-            ` : ''}
           </div>
 
-          <!-- Seller's Response -->
+          <!-- Buyer Info -->
           <div class="detail-section">
-            <h3>🏪 Seller's Response</h3>
+            <h3>👤 Buyer</h3>
             <div class="detail-card">
-              <div class="detail-row">
-                <span class="detail-label">Seller</span>
-                <span class="detail-value">${escapeHtml(d.seller.display_name)}</span>
-              </div>
-              <div class="detail-row">
-                <span class="detail-label">Email</span>
-                <span class="detail-value" style="font-size: 12px;">${d.seller.email}</span>
-              </div>
-              ${d.seller_responded_at ? `
-                <div class="detail-row">
-                  <span class="detail-label">Response</span>
-                  <span class="detail-value" style="color: ${d.counter_offer_amount ? '#1DC690' : '#DC2626'};">
-                    ${d.counter_offer_amount ? `Counter: £${d.counter_offer_amount.toFixed(2)}` : 'Rejected'}
-                  </span>
+              <div class="user-info">
+                <div class="user-avatar">${(d.buyer?.display_name || 'B').charAt(0).toUpperCase()}</div>
+                <div class="user-details">
+                  <h4>${escapeHtml(d.buyer?.display_name || 'Unknown')}</h4>
+                  <p>${escapeHtml(d.buyer?.email || '')}</p>
                 </div>
-              ` : `
-                <div class="detail-row">
-                  <span class="detail-label">Status</span>
-                  <span class="detail-value" style="color: #F59E0B;">No response yet</span>
-                </div>
-              `}
-              ${d.seller_response_text ? `<div class="response-text">"${escapeHtml(d.seller_response_text)}"</div>` : ''}
+              </div>
             </div>
-            ${d.seller_images && d.seller_images.length > 0 ? `
-              <h4 style="margin-top: 12px; font-size: 13px; color: #6B7280;">📷 Seller's Evidence (${d.seller_images.length})</h4>
-              <div class="evidence-grid">
-                ${d.seller_images.map(img => `
-                  <img class="evidence-image" src="${img.url}" onclick="openImage('${img.url}')" alt="Evidence">
-                `).join('')}
+          </div>
+
+          <!-- Seller Info -->
+          <div class="detail-section">
+            <h3>🏪 Seller</h3>
+            <div class="detail-card">
+              <div class="user-info">
+                <div class="user-avatar">${(d.seller?.display_name || 'S').charAt(0).toUpperCase()}</div>
+                <div class="user-details">
+                  <h4>${escapeHtml(d.seller?.display_name || 'Unknown')}</h4>
+                  <p>${escapeHtml(d.seller?.email || '')}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Buyer's Claim -->
+        <div class="detail-section">
+          <h3>📝 Buyer's Claim</h3>
+          <div class="detail-card">
+            <p style="font-size: 14px; line-height: 1.6; color: #374151;">${escapeHtml(d.reason_text) || 'No description provided'}</p>
+            ${d.buyer_images && d.buyer_images.length > 0 ? `
+              <div style="margin-top: 16px;">
+                <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Evidence Photos (${d.buyer_images.length})</h4>
+                <div class="evidence-grid">
+                  ${d.buyer_images.map(img => `
+                    <img class="evidence-image" src="${img.url}" onclick="openImage('${img.url}')" alt="Buyer evidence">
+                  `).join('')}
+                </div>
               </div>
             ` : ''}
           </div>
         </div>
 
+        <!-- Seller's Response -->
+        ${d.seller_response_text || (d.seller_images && d.seller_images.length > 0) ? `
+          <div class="detail-section">
+            <h3>💬 Seller's Response</h3>
+            <div class="detail-card">
+              ${d.counter_offer_amount !== null ? `
+                <div style="background: #DBEAFE; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+                  <strong style="color: #1E40AF;">Counter Offer:</strong> 
+                  <span style="font-weight: 600; color: #1E40AF;">£${d.counter_offer_amount?.toFixed(2)} (${d.counter_offer_percent}%)</span>
+                </div>
+              ` : ''}
+              <p style="font-size: 14px; line-height: 1.6; color: #374151;">${escapeHtml(d.seller_response_text) || 'No response text'}</p>
+              ${d.seller_images && d.seller_images.length > 0 ? `
+                <div style="margin-top: 16px;">
+                  <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Seller's Photos (${d.seller_images.length})</h4>
+                  <div class="evidence-grid">
+                    ${d.seller_images.map(img => `
+                      <img class="evidence-image" src="${img.url}" onclick="openImage('${img.url}')" alt="Seller evidence">
+                    `).join('')}
+                  </div>
+                </div>
+              ` : ''}
+              ${d.seller_responded_at ? `
+                <p style="margin-top: 12px; font-size: 12px; color: #9CA3AF;">Responded: ${formatDate(d.seller_responded_at)}</p>
+              ` : ''}
+            </div>
+          </div>
+        ` : `
+          <div class="detail-section">
+            <h3>💬 Seller's Response</h3>
+            <div class="detail-card" style="text-align: center; color: #9CA3AF; padding: 24px;">
+              <p>No response from seller yet</p>
+              ${d.seller_deadline ? `<p style="margin-top: 8px; font-size: 13px;">Deadline: ${formatDate(d.seller_deadline)}</p>` : ''}
+            </div>
+          </div>
+        `}
+
+        <!-- Resolution (if resolved) -->
         ${isResolved ? `
           <div class="resolved-banner">
             <h3>✅ Resolution</h3>
@@ -1650,36 +1911,37 @@
             </div>
           </div>
         ` : ''}
+
         <!-- Original Listing -->
-          ${d.order.listing ? `
-          <div class="detail-section" style="grid-column: 1 / -1;">
-            <h3>🏷️ Original Listing</h3>
-            <div class="detail-card">
-              <div style="display: flex; gap: 16px; flex-wrap: wrap;">
-                <!-- Listing Images -->
-                <div style="flex: 0 0 auto;">
-                  <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Listing Photos (${d.order.listing.images?.length || 0})</h4>
-                  <div class="evidence-grid" style="grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); max-width: 500px;">
-                    ${d.order.listing.images?.map(img => `
-                      <img class="evidence-image" src="${img}" onclick="openImage('${img}')" alt="Listing photo" style="width: 100px; height: 100px; object-fit: cover;">
-                    `).join('') || '<span style="color: #9CA3AF; font-size: 13px;">No images available</span>'}
-                  </div>
+        ${d.order.listing ? `
+        <div class="detail-section" style="margin-top: 24px;">
+          <h3>🏷️ Original Listing</h3>
+          <div class="detail-card">
+            <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+              <!-- Listing Images -->
+              <div style="flex: 0 0 auto;">
+                <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Listing Photos (${d.order.listing.images?.length || 0})</h4>
+                <div class="evidence-grid" style="grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); max-width: 500px;">
+                  ${d.order.listing.images?.map(img => `
+                    <img class="evidence-image" src="${img}" onclick="openImage('${img}')" alt="Listing photo" style="width: 100px; height: 100px; object-fit: cover;">
+                  `).join('') || '<span style="color: #9CA3AF; font-size: 13px;">No images available</span>'}
                 </div>
-                <!-- Listing Description -->
-                <div style="flex: 1; min-width: 250px;">
-                  <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Description</h4>
-                  <div style="background: #F9FAFB; border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto;">
-                    <p style="font-size: 14px; color: #374151; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(d.order.listing.description) || 'No description available'}</p>
-                  </div>
-                  <div style="margin-top: 12px;">
-                    <span style="font-size: 12px; color: #6B7280;">Listed Price: </span>
-                    <span style="font-size: 14px; font-weight: 600; color: #1DC690;">£${d.order.listing.price?.toFixed(2) || 'N/A'}</span>
-                  </div>
+              </div>
+              <!-- Listing Description -->
+              <div style="flex: 1; min-width: 250px;">
+                <h4 style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">Description</h4>
+                <div style="background: #F9FAFB; border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto;">
+                  <p style="font-size: 14px; color: #374151; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(d.order.listing.description) || 'No description available'}</p>
+                </div>
+                <div style="margin-top: 12px;">
+                  <span style="font-size: 12px; color: #6B7280;">Listed Price: </span>
+                  <span style="font-size: 14px; font-weight: 600; color: #1DC690;">£${d.order.listing.price?.toFixed(2) || 'N/A'}</span>
                 </div>
               </div>
             </div>
           </div>
-          ` : ''}
+        </div>
+        ` : ''}
       `;
     }
 
@@ -1754,11 +2016,286 @@
       }
     }
 
+    // ==================== REPORTS ====================
+    async function loadReports() {
+      const content = document.getElementById('reportsContent');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading reports...</p></div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/reports`, {
+          headers: {
+            'Authorization': `Admin ${adminPassword}`,
+          },
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch reports');
+
+        const data = await response.json();
+        reports = data.reports || [];
+        reportStats = data.stats || {};
+
+        updateReportStats();
+        renderReports();
+        
+        document.getElementById('reportsBadge').textContent = reportStats.pending || 0;
+      } catch (error) {
+        console.error('Load reports error:', error);
+        content.innerHTML = '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Failed to load reports</p></div>';
+      }
+    }
+
+    function updateReportStats() {
+      document.getElementById('statPendingReports').textContent = reportStats.pending || 0;
+      document.getElementById('statReviewedReports').textContent = reportStats.reviewed || 0;
+      document.getElementById('statResolvedReports').textContent = reportStats.resolved || 0;
+      document.getElementById('statTotalReports').textContent = 
+        (reportStats.pending || 0) + (reportStats.reviewed || 0) + 
+        (reportStats.resolved || 0) + (reportStats.dismissed || 0);
+      
+      document.getElementById('reportTabPending').textContent = reportStats.pending || 0;
+      document.getElementById('reportTabReviewed').textContent = reportStats.reviewed || 0;
+      document.getElementById('reportTabResolved').textContent = reportStats.resolved || 0;
+      document.getElementById('reportTabDismissed').textContent = reportStats.dismissed || 0;
+    }
+
+    function switchReportTab(tab) {
+      currentReportTab = tab;
+      document.querySelectorAll('#reportsSection .tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.reportTab === tab);
+      });
+      renderReports();
+    }
+
+    function handleReportSearch() {
+      reportSearchQuery = document.getElementById('reportSearchInput').value.toLowerCase();
+      renderReports();
+    }
+
+    function handleReportSort() {
+      reportSortBy = document.getElementById('reportSortSelect').value;
+      renderReports();
+    }
+
+    function renderReports() {
+      const content = document.getElementById('reportsContent');
+      
+      let filtered = reports.filter(r => r.status === currentReportTab);
+      
+      if (reportSearchQuery) {
+        filtered = filtered.filter(r =>
+          r.reported_user?.display_name?.toLowerCase().includes(reportSearchQuery) ||
+          r.reported_user?.email?.toLowerCase().includes(reportSearchQuery) ||
+          r.reporter?.display_name?.toLowerCase().includes(reportSearchQuery)
+        );
+      }
+      
+      filtered.sort((a, b) => {
+        if (reportSortBy === 'newest') return new Date(b.created_at) - new Date(a.created_at);
+        if (reportSortBy === 'oldest') return new Date(a.created_at) - new Date(b.created_at);
+        return 0;
+      });
+
+      if (filtered.length === 0) {
+        content.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <p>No ${currentReportTab} reports</p>
+          </div>
+        `;
+        return;
+      }
+
+      content.innerHTML = filtered.map(r => `
+        <div class="report-card" onclick="openReport('${r.id}')">
+          <div class="report-priority ${r.reason === 'scam' ? 'scam' : r.reason === 'inappropriate_messages' ? 'inappropriate' : 'other'}"></div>
+          <div class="report-avatar">${(r.reported_user?.display_name || 'U').charAt(0).toUpperCase()}</div>
+          <div class="report-main">
+            <div class="report-title">${escapeHtml(r.reported_user?.display_name || 'Unknown User')}</div>
+            <div class="report-meta">
+              <span>Reported by: ${escapeHtml(r.reporter?.display_name || 'Unknown')}</span>
+              <span class="report-reason ${r.reason === 'scam' ? 'scam' : r.reason === 'inappropriate_messages' ? 'inappropriate' : 'other'}">
+                ${formatReportReason(r.reason)}
+              </span>
+            </div>
+          </div>
+          <div class="report-info">
+            <span class="status-badge ${r.status}">${r.status.charAt(0).toUpperCase() + r.status.slice(1)}</span>
+            <span class="report-age">${getAge(r.created_at)}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function openReport(id) {
+      const modal = document.getElementById('reportModal');
+      const content = document.getElementById('reportModalContent');
+      modal.classList.add('active');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/reports/${id}`, {
+          headers: {
+            'Authorization': `Admin ${adminPassword}`,
+          },
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch report');
+
+        const data = await response.json();
+        currentReport = data.report;
+        
+        content.innerHTML = `
+          <div class="detail-section">
+            <h3>🚩 Report Information</h3>
+            <div class="detail-card">
+              <div class="detail-row">
+                <span class="detail-label">Reason</span>
+                <span class="detail-value">
+                  <span class="report-reason ${currentReport.reason === 'scam' ? 'scam' : currentReport.reason === 'inappropriate_messages' ? 'inappropriate' : 'other'}">
+                    ${formatReportReason(currentReport.reason)}
+                  </span>
+                </span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Status</span>
+                <span class="detail-value">
+                  <span class="status-badge ${currentReport.status}">${currentReport.status.charAt(0).toUpperCase() + currentReport.status.slice(1)}</span>
+                </span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Reported On</span>
+                <span class="detail-value">${formatDate(currentReport.created_at)}</span>
+              </div>
+              ${currentReport.details ? `
+                <div class="detail-row">
+                  <span class="detail-label">Notes</span>
+                  <span class="detail-value">${escapeHtml(currentReport.details)}</span>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h3>👤 Reported User</h3>
+            <div class="user-card">
+              <div class="user-card-avatar">${(currentReport.reported_user?.display_name || 'U').charAt(0).toUpperCase()}</div>
+              <div class="user-card-info">
+                <h4>${escapeHtml(currentReport.reported_user?.display_name || 'Unknown')}</h4>
+                <p>${escapeHtml(currentReport.reported_user?.email || '')}</p>
+                <p style="font-size: 12px; margin-top: 4px;">
+                  Joined: ${formatDate(currentReport.reported_user?.created_at)} • 
+                  Sales: ${currentReport.reported_user?.total_sales || 0} •
+                  ${data.previousReports} previous reports
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h3>📝 Reporter</h3>
+            <div class="user-card">
+              <div class="user-card-avatar" style="background: #6B7280;">${(currentReport.reporter?.display_name || 'U').charAt(0).toUpperCase()}</div>
+              <div class="user-card-info">
+                <h4>${escapeHtml(currentReport.reporter?.display_name || 'Unknown')}</h4>
+                <p>${escapeHtml(currentReport.reporter?.email || '')}</p>
+              </div>
+            </div>
+          </div>
+
+          ${currentReport.status === 'pending' || currentReport.status === 'reviewed' ? `
+            <div class="action-buttons">
+              <button class="btn btn-dismiss" onclick="updateReportStatus('dismissed')">
+                ⚪ Dismiss
+              </button>
+              ${currentReport.status === 'pending' ? `
+                <button class="btn btn-warn" onclick="updateReportStatus('reviewed')">
+                  🔵 Mark as Reviewing
+                </button>
+              ` : ''}
+              <button class="btn btn-primary" style="flex: 1;" onclick="updateReportStatus('resolved')">
+                ✅ Mark Resolved
+              </button>
+              <button class="btn btn-ban" onclick="banUser()">
+                🚫 Ban User
+              </button>
+            </div>
+          ` : ''}
+        `;
+      } catch (error) {
+        console.error('Open report error:', error);
+        content.innerHTML = '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Failed to load report</p></div>';
+      }
+    }
+
+    async function updateReportStatus(status) {
+      if (!currentReport) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/reports/${currentReport.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Admin ${adminPassword}`,
+          },
+          body: JSON.stringify({ status }),
+        });
+
+        if (response.ok) {
+          alert(`Report marked as ${status}`);
+          closeReportModal();
+          loadReports();
+        } else {
+          alert('Failed to update report');
+        }
+      } catch (error) {
+        console.error('Update report error:', error);
+        alert('Failed to update report');
+      }
+    }
+
+    async function banUser() {
+      if (!currentReport) return;
+
+      const reason = prompt('Enter ban reason:');
+      if (!reason) return;
+
+      if (!confirm(`Are you sure you want to ban ${currentReport.reported_user?.display_name}? This will deactivate all their listings.`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/reports/${currentReport.id}/ban-user`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Admin ${adminPassword}`,
+          },
+          body: JSON.stringify({ reason }),
+        });
+
+        if (response.ok) {
+          alert('User banned successfully. All their listings have been deactivated.');
+          closeReportModal();
+          loadReports();
+        } else {
+          alert('Failed to ban user');
+        }
+      } catch (error) {
+        console.error('Ban user error:', error);
+        alert('Failed to ban user');
+      }
+    }
+
     // ==================== MODALS ====================
     function closeModal() {
       document.getElementById('detailModal').classList.remove('active');
       currentDispute = null;
       selectedResolution = null;
+    }
+
+    function closeReportModal() {
+      document.getElementById('reportModal').classList.remove('active');
+      currentReport = null;
     }
 
     function openImage(url) {
@@ -1805,6 +2342,15 @@
       return map[type] || type;
     }
 
+    function formatReportReason(reason) {
+      const map = {
+        'scam': '🚨 Scam/Fraud',
+        'inappropriate_messages': '💬 Inappropriate Messages',
+        'other': '📋 Other',
+      };
+      return map[reason] || reason;
+    }
+
     function formatDate(dateStr) {
       if (!dateStr) return '-';
       return new Date(dateStr).toLocaleDateString('en-GB', {
@@ -1842,6 +2388,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeModal();
+        closeReportModal();
         closeImageModal();
       }
     });

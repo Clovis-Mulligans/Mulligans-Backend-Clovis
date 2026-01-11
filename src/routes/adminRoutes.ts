@@ -5,6 +5,7 @@ import express from 'express';
 import path from 'path';
 import { adminAuth, verifyAdminPassword } from '../middleware/adminAuth';
 import { DisputeController } from '../controllers/disputeController';
+import { AdminReportsController } from '../controllers/adminReportsController';
 
 const router = express.Router();
 
@@ -141,4 +142,12 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
 // Resolve dispute
 router.put('/disputes/:id/resolve', adminAuth, DisputeController.adminResolveDispute);
 
+// Report management routes (MOVE THESE BEFORE EXPORT)
+router.get('/reports', adminAuth, AdminReportsController.getReports);
+router.get('/reports/:id', adminAuth, AdminReportsController.getReport);
+router.patch('/reports/:id', adminAuth, AdminReportsController.updateReport);
+router.post('/reports/:id/ban-user', adminAuth, AdminReportsController.banUser);
+
+
 export default router;
+
