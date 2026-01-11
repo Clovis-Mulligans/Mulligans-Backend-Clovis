@@ -397,16 +397,19 @@ export class UserController {
 
       console.log(`📥 User ${userId} requesting data download...`);
 
-      // Fetch all user data
+      // Fetch all user data with safe field selection
       const [
         user,
         listings,
-        orders,
-        reviews,
+        purchases,
+        sales,
+        reviewsWritten,
+        reviewsReceived,
         favorites,
-        messages,
+        messagesSent,
         conversations,
       ] = await Promise.all([
+        // User profile - exclude internal fields
         prisma.users.findUnique({
           where: { id: userId },
           select: {
@@ -436,37 +439,138 @@ export class UserController {
             updated_at: true,
           },
         }),
+
+        // User's listings
         prisma.listings.findMany({
           where: { seller_id: userId },
-          include: { images: true },
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            price: true,
+            category: true,
+            subcategory: true,
+            brand: true,
+            status: true,
+            views: true,
+            shipping_cost: true,
+            parcel_size: true,
+            specifications: true,
+            created_at: true,
+            updated_at: true,
+            images: {
+              select: {
+                id: true,
+                image_url: true,
+                display_order: true,
+              },
+            },
+          },
         }),
+
+        // Orders as buyer
         prisma.orders.findMany({
-          where: {
-            OR: [
-              { buyer_id: userId },
-              { seller_id: userId },
-            ],
+          where: { buyer_id: userId },
+          select: {
+            id: true,
+            listing_id: true,
+            amount: true,
+            shipping_cost: true,
+            status: true,
+            shipping_address: true,
+            tracking_number: true,
+            carrier: true,
+            created_at: true,
+            paid_at: true,
+            shipped_at: true,
+            delivered_at: true,
+            completed_at: true,
+            listings: {
+              select: {
+                title: true,
+                price: true,
+              },
+            },
           },
         }),
-        prisma.reviews.findMany({
-          where: {
-            OR: [
-              { reviewer_id: userId },
-              { reviewed_user_id: userId },
-            ],
+
+        // Orders as seller
+        prisma.orders.findMany({
+          where: { seller_id: userId },
+          select: {
+            id: true,
+            listing_id: true,
+            amount: true,
+            shipping_cost: true,
+            seller_payout: true,
+            status: true,
+            tracking_number: true,
+            carrier: true,
+            created_at: true,
+            paid_at: true,
+            shipped_at: true,
+            delivered_at: true,
+            completed_at: true,
+            listings: {
+              select: {
+                title: true,
+                price: true,
+              },
+            },
           },
         }),
+
+       // Reviews user has written
+prisma.reviews.findMany({
+  where: { reviewer_id: userId },
+  select: {
+    id: true,
+    rating: true,
+    review_type: true,
+    created_at: true,
+  },
+}),
+
+        // Reviews user has received
+prisma.reviews.findMany({
+  where: { reviewed_user_id: userId },
+  select: {
+    id: true,
+    rating: true,
+    review_type: true,
+    created_at: true,
+  },
+}),
+        // Favorites
         prisma.favorites.findMany({
           where: { user_id: userId },
-        }),
-        prisma.messages.findMany({
-          where: {
-            OR: [
-              { sender_id: userId },
-              { receiver_id: userId },
-            ],
+          select: {
+            listing_id: true,
+            created_at: true,
+            listings: {
+              select: {
+                title: true,
+                price: true,
+                status: true,
+              },
+            },
           },
         }),
+
+        // Messages sent by user
+        prisma.messages.findMany({
+          where: { sender_id: userId },
+          select: {
+            id: true,
+            content: true,
+            created_at: true,
+            conversation_id: true,
+          },
+          orderBy: { created_at: 'desc' },
+          take: 500,
+        }),
+
+        // Conversations user is part of
         prisma.conversations.findMany({
           where: {
             OR: [
@@ -474,48 +578,77 @@ export class UserController {
               { seller_id: userId },
             ],
           },
+          select: {
+            id: true,
+            created_at: true,
+            listings: {
+              select: {
+                title: true,
+              },
+            },
+          },
         }),
       ]);
 
       const userData = {
         export_date: new Date().toISOString(),
-        user_profile: user,
+        export_version: '1.0',
+        data_subject: 'Your Mulligans account data',
+        
+        profile: user,
+        
         listings: {
           count: listings.length,
-          data: listings,
+          items: listings,
         },
-        orders: {
-          count: orders.length,
-          data: orders,
+        
+        purchases: {
+          count: purchases.length,
+          description: 'Items you have bought',
+          items: purchases,
         },
-        reviews: {
-          count: reviews.length,
-          data: reviews,
+        
+        sales: {
+          count: sales.length,
+          description: 'Items you have sold',
+          items: sales,
         },
+        
+        reviews_written: {
+          count: reviewsWritten.length,
+          items: reviewsWritten,
+        },
+        
+        reviews_received: {
+          count: reviewsReceived.length,
+          items: reviewsReceived,
+        },
+        
         favorites: {
           count: favorites.length,
-          data: favorites,
+          items: favorites,
         },
-        messages: {
-          count: messages.length,
-          data: messages,
+        
+        messages_sent: {
+          count: messagesSent.length,
+          note: 'Limited to last 500 messages',
+          items: messagesSent,
         },
+        
         conversations: {
           count: conversations.length,
-          data: conversations,
+          items: conversations,
         },
       };
 
-      console.log(`✅ User data compiled: ${listings.length} listings, ${orders.length} orders`);
+      console.log(`✅ User data compiled: ${listings.length} listings, ${purchases.length} purchases, ${sales.length} sales`);
 
-      // Return as JSON for download
       res.json(userData);
     } catch (error) {
       console.error('❌ Download user data error:', error);
       res.status(500).json({ error: 'Failed to download user data' });
     }
   }
-
   /**
    * Get user statistics for profile page
    */
