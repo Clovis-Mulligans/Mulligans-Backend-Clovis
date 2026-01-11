@@ -257,6 +257,10 @@ model users {
   password_reset_code_expires                  DateTime?
   disputes_as_buyer                            disputes[]        @relation("disputes_buyer_idTousers")    // ✅ NEW
   disputes_as_seller                           disputes[]        @relation("disputes_seller_idTousers")   // ✅ NEW
+  reports_made     user_reports[] @relation("ReporterReports")
+  reports_received user_reports[] @relation("ReportedUserReports")
+  users_blocked    blocked_users[] @relation("BlockerBlocks")
+  blocked_by       blocked_users[] @relation("BlockedByBlocks")
 }
 
 model notifications {
@@ -360,6 +364,40 @@ model email_suppressions {
   @@index([email])
   @@index([reason])
   @@map("email_suppressions")
+}
+
+model user_reports {
+  id               String   @id @default(uuid())
+  reporter_id      String
+  reported_user_id String
+  reason           String
+  details          String?
+  conversation_id  String?
+  listing_id       String?
+  status           String   @default("pending") // pending, reviewed, resolved, dismissed
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  reporter      users  @relation("ReporterReports", fields: [reporter_id], references: [id])
+  reported_user users  @relation("ReportedUserReports", fields: [reported_user_id], references: [id])
+
+  @@index([reporter_id])
+  @@index([reported_user_id])
+  @@index([status])
+}
+
+model blocked_users {
+  id         String   @id @default(uuid())
+  blocker_id String
+  blocked_id String
+  created_at DateTime @default(now())
+
+  blocker users @relation("BlockerBlocks", fields: [blocker_id], references: [id])
+  blocked users @relation("BlockedByBlocks", fields: [blocked_id], references: [id])
+
+  @@unique([blocker_id, blocked_id])
+  @@index([blocker_id])
+  @@index([blocked_id])
 }
 
 // ============================================
