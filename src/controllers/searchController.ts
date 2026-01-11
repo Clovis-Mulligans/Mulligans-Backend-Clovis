@@ -234,7 +234,23 @@ export class SearchController {
         });
       }
 
-      // ✅ FIXED: 2. MATCH SUBCATEGORIES (strict matching)
+      // ✅ NEW: 2a. MATCH MAIN CATEGORIES (e.g., "Clubs", "Clothing", "Shoes")
+      for (const category of Object.keys(CATEGORIES)) {
+        if (strictMatch(query, category)) {
+          addSuggestion({
+            text: category,
+            type: 'category',
+            icon: category === 'Clubs' ? 'golf-outline' : 
+                  category === 'Clothing' ? 'shirt-outline' :
+                  category === 'Shoes' ? 'footsteps-outline' :
+                  category === 'Balls' ? 'ellipse-outline' :
+                  category === 'Accessories' ? 'bag-outline' : 'cube-outline',
+            filters: { category },
+          });
+        }
+      }
+
+      // ✅ FIXED: 2b. MATCH SUBCATEGORIES (strict matching)
       for (const [category, subcategories] of Object.entries(CATEGORIES)) {
         for (const subcategory of subcategories) {
           if (strictMatch(query, subcategory)) {
