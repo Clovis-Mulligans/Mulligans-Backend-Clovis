@@ -60,6 +60,10 @@ export class UserController {
   /**
    * Get current authenticated user's profile (/me endpoint)
    */
+ /**
+   * Get current authenticated user's profile (/me endpoint)
+   * ✅ UPDATED: Now includes payment status for bank details badge
+   */
   static async getCurrentUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const userId = req.user!.id;
@@ -89,6 +93,9 @@ export class UserController {
           clothing_size: true,
           shoe_size: true,
           glove_size: true,
+          // ✅ NEW: Include these for payment badge
+          total_sales: true,
+          stripe_connect_status: true,
         },
       });
 
@@ -98,8 +105,33 @@ export class UserController {
         return;
       }
 
-      console.log('✅ Current user data returned');
-      res.json(user);
+      // ✅ NEW: Check if user has active listings
+      const listingCount = await prisma.listings.count({
+        where: {
+          seller_id: userId,
+          status: 'active',
+        },
+      });
+
+      // ✅ NEW: Build response with payment status info
+      const response = {
+        ...user,
+        has_listings: listingCount > 0,
+        has_sales: (user.total_sales || 0) > 0,
+        // Needs bank details if has listings/sales but stripe not active
+        needs_bank_details: 
+          (listingCount > 0 || (user.total_sales || 0) > 0) && 
+          user.stripe_connect_status !== 'active',
+      };
+
+      console.log('✅ Current user data returned with payment status:', {
+        stripe_connect_status: user.stripe_connect_status,
+        has_listings: response.has_listings,
+        has_sales: response.has_sales,
+        needs_bank_details: response.needs_bank_details,
+      });
+      
+      res.json(response);
     } catch (error) {
       console.error('❌ Get current user error:', error);
       res.status(500).json({ error: 'Failed to get user' });
