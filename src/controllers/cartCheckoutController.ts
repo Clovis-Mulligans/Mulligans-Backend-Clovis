@@ -233,9 +233,11 @@ export class CartCheckoutController {
               },
               business_type: 'individual',
               business_profile: {
-                mcc: '5941',
+                mcc: '5699',
                 product_description: 'Selling golf equipment on Mulligans',
-                url: 'https://mulligans.uk.com',
+              },
+              individual: {
+                email: seller.email,
               },
               settings: {
                 payouts: {
