@@ -61,15 +61,12 @@ export class StripeConnectController {
           mcc: '5699',
           product_description: 'Selling golf equipment on Mulligans',
         },
-        individual: {
-          email: user.email,
-        },
         metadata: {
           user_id: userId,
           platform: 'mulligans',
         },
       });
-      
+
       // Save Connect ID to database
       await prisma.users.update({
         where: { id: userId },

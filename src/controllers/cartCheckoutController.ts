@@ -236,9 +236,6 @@ export class CartCheckoutController {
                 mcc: '5699',
                 product_description: 'Selling golf equipment on Mulligans',
               },
-              individual: {
-                email: seller.email,
-              },
               settings: {
                 payouts: {
                   schedule: {
