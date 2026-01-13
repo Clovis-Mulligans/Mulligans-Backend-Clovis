@@ -28,6 +28,7 @@ import { runEscrowJobs } from './services/escrowService';
 import { updateVerificationStatus } from './services/verificationService';
 import disputeRoutes from './routes/disputeRoutes';
 import adminRoutes from './routes/adminRoutes';
+import connectRedirectRoutes from './routes/connectRedirectRoutes';
 
 
 const app = express();
@@ -113,6 +114,7 @@ app.use('/api/shipping', shippingRoutes);
 app.use('/api/ses', sesRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/admin', adminRoutes);
+app.use('/connect', connectRedirectRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
