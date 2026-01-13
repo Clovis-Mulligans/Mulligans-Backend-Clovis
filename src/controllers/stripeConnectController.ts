@@ -57,6 +57,11 @@ export class StripeConnectController {
           transfers: { requested: true },
         },
         business_type: 'individual',
+        business_profile: {
+          mcc: '5941',
+          product_description: 'Selling golf equipment on Mulligans',
+          url: 'https://mulligans.uk.com',
+        },
         metadata: {
           user_id: userId,
           platform: 'mulligans',
