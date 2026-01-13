@@ -115,8 +115,8 @@ export class StripeConnectController {
 
       const accountLink = await stripe.accountLinks.create({
         account: user.stripe_connect_id,
-        refresh_url: refresh_url || 'https://mulligans.uk.com/connect/refresh',
-        return_url: return_url || 'https://mulligans.uk.com/connect/return',
+        refresh_url: refresh_url || 'mulligans://profile',
+return_url: return_url || 'mulligans://profile',
         type: 'account_onboarding',
       });
 
