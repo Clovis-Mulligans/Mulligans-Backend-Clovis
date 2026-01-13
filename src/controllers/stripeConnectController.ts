@@ -47,7 +47,7 @@ export class StripeConnectController {
 
       console.log('🔗 Creating Stripe Connect account for user:', userId);
 
-      // Create Express account
+     // Create Express account
       const account = await stripe.accounts.create({
         type: 'express',
         country: 'GB',
@@ -57,6 +57,10 @@ export class StripeConnectController {
           transfers: { requested: true },
         },
         business_type: 'individual',
+        business_profile: {
+          mcc: '5699',
+          product_description: 'Selling golf equipment on Mulligans',
+        },
         metadata: {
           user_id: userId,
           platform: 'mulligans',
