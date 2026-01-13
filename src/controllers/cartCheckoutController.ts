@@ -387,7 +387,7 @@ export class CartCheckoutController {
           escrow: 'true',
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
-        cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
+        cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}cart`,
       });
 
       console.log('[CART] Cart checkout session created:', session.id);
