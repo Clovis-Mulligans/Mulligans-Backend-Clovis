@@ -355,6 +355,9 @@ export class StripeController {
           console.log('📦 Processing single item checkout...');
           await StripeController.fulfillOrder(fullSession);
         }
+
+        // Immediately payout platform fee to bank account
+        await StripeController.payoutPlatformFee(fullSession);
         break;
 
       case 'payment_intent.succeeded':
@@ -611,6 +614,52 @@ export class StripeController {
     } catch (error) {
       console.error('❌ Error fulfilling order:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Payout platform fee to bank immediately after successful checkout
+   */
+  private static async payoutPlatformFee(session: Stripe.Checkout.Session) {
+    try {
+      const platformFee = session.metadata?.platform_fee;
+      
+      if (!platformFee) {
+        console.log('⚠️ No platform fee in metadata, skipping payout');
+        return;
+      }
+
+      const platformFeePence = Math.round(parseFloat(platformFee) * 100);
+      
+      if (platformFeePence <= 0) {
+        console.log('⚠️ Platform fee is zero, skipping payout');
+        return;
+      }
+
+      // Check available balance first
+      const balance = await stripe.balance.retrieve();
+      const availableGBP = balance.available.find(b => b.currency === 'gbp')?.amount || 0;
+
+      if (availableGBP < platformFeePence) {
+        console.log(`⚠️ Insufficient balance for fee payout. Available: ${availableGBP}, Needed: ${platformFeePence}`);
+        return;
+      }
+
+      // Create immediate payout to bank
+      const payout = await stripe.payouts.create({
+        amount: platformFeePence,
+        currency: 'gbp',
+        description: `Platform fee - ${session.id}`,
+        metadata: {
+          session_id: session.id,
+          type: 'platform_fee',
+        },
+      });
+
+      console.log(`✅ Platform fee payout created: £${platformFee} → ${payout.id}`);
+    } catch (error: any) {
+      // Don't throw - fee payout failure shouldn't break order processing
+      console.error('⚠️ Platform fee payout failed (non-critical):', error.message);
     }
   }
 }
