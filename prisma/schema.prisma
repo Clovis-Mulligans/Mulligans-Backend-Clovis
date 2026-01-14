@@ -161,6 +161,7 @@ model orders {
   disputed_at                   DateTime?
   seller_payout                 Decimal?          @db.Decimal(10, 2)
   label_url                     String?
+  label_cost                Decimal?          @db.Decimal(10, 2)
   shipping_cost                 Decimal?          @db.Decimal(10, 2)
   shippo_shipment_id            String?
   shippo_transaction_id         String?
