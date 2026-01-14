@@ -410,15 +410,18 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
 
     console.log('🏷️ Creating shipping label for order:', orderId, 'with rate:', rateId);
 
-    // ✅ NEW: First, fetch the rate to get the price
-    let labelCost = 0;
-    try {
-      const rate = await shippo.rates.get(rateId);
-      labelCost = parseFloat(rate.amount || '0');
-      console.log('💰 Label cost from rate:', labelCost);
-    } catch (rateError) {
-      console.warn('⚠️ Could not fetch rate price, will try to get from transaction');
-    }
+   // ✅ First, fetch the rate to get the price AND carrier
+let labelCost = 0;
+let carrierName = 'Unknown';
+try {
+  const rate = await shippo.rates.get(rateId);
+  labelCost = parseFloat(rate.amount || '0');
+  carrierName = rate.provider || 'Unknown';
+  console.log('💰 Label cost from rate:', labelCost);
+  console.log('📦 Carrier from rate:', carrierName);
+} catch (rateError) {
+  console.warn('⚠️ Could not fetch rate details, will try to get from transaction');
+}
 
     // Create transaction (purchase the label) using Shippo
     const transaction = await shippo.transactions.create({
@@ -448,7 +451,10 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
     }
 
     // Get carrier from rate info
-    const carrier = typeof transaction.rate === 'object' ? (transaction.rate as any)?.provider || 'Unknown' : 'Unknown';
+    // Use carrier from rate fetch, fallback to transaction
+const carrier = carrierName !== 'Unknown' 
+  ? carrierName 
+  : (typeof transaction.rate === 'object' ? (transaction.rate as any)?.provider || 'Unknown' : 'Unknown');
 
     // ✅ UPDATED: Update order with tracking info, label URL, AND label_cost
     await prisma.orders.update({
