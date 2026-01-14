@@ -2,6 +2,7 @@
 // Handles Shippo integration for shipping rates, labels, and tracking
 // ✅ UPDATED: Added escrow release date when order is delivered
 // ✅ FIXED: Corrected Shippo API key format
+// ✅ NEW: Saves label_cost to order for escrow deduction
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
@@ -345,6 +346,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
 // ============================================
 // CREATE SHIPPING LABEL
 // Creates a label and returns PDF URL
+// ✅ NEW: Saves label_cost to order for escrow deduction
 // POST /api/shipping/labels
 // ============================================
 export const createShippingLabel = async (req: AuthenticatedRequest, res: Response) => {
@@ -408,6 +410,16 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
 
     console.log('🏷️ Creating shipping label for order:', orderId, 'with rate:', rateId);
 
+    // ✅ NEW: First, fetch the rate to get the price
+    let labelCost = 0;
+    try {
+      const rate = await shippo.rates.get(rateId);
+      labelCost = parseFloat(rate.amount || '0');
+      console.log('💰 Label cost from rate:', labelCost);
+    } catch (rateError) {
+      console.warn('⚠️ Could not fetch rate price, will try to get from transaction');
+    }
+
     // Create transaction (purchase the label) using Shippo
     const transaction = await shippo.transactions.create({
       rate: rateId,
@@ -428,16 +440,25 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    // Get carrier from rate info
-    const carrier = typeof transaction.rate === 'object' ? transaction.rate?.provider || 'Unknown' : 'Unknown';
+    // ✅ NEW: Try to get label cost from transaction if we didn't get it from rate
+    if (labelCost === 0 && typeof transaction.rate === 'object' && transaction.rate !== null) {
+      const rateObj = transaction.rate as any;
+      labelCost = parseFloat(rateObj.amount || '0');
+      console.log('💰 Label cost from transaction.rate:', labelCost);
+    }
 
-    // Update order with tracking info and label URL
+    // Get carrier from rate info
+    const carrier = typeof transaction.rate === 'object' ? (transaction.rate as any)?.provider || 'Unknown' : 'Unknown';
+
+    // ✅ UPDATED: Update order with tracking info, label URL, AND label_cost
     await prisma.orders.update({
       where: { id: orderId },
       data: {
         tracking_number: transaction.trackingNumber,
         carrier: carrier,
         label_url: transaction.labelUrl,
+        label_cost: labelCost,  // ✅ NEW: Save label cost for escrow deduction
+        shippo_transaction_id: transaction.objectId,  // Save transaction ID
         status: 'to_ship', // Ensure status is to_ship after label created
         updated_at: new Date(),
       },
@@ -448,6 +469,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       trackingNumber: transaction.trackingNumber,
       carrier,
       labelUrl: transaction.labelUrl,
+      labelCost: labelCost,  // ✅ Log the label cost
     });
 
     // Create notification for buyer
@@ -485,6 +507,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
         labelUrl: transaction.labelUrl,
         carrier: carrier,
         transactionId: transaction.objectId,
+        labelCost: labelCost,  // ✅ Return label cost to frontend
       },
     });
   } catch (error: any) {

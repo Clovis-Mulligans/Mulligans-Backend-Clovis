@@ -3,7 +3,8 @@
 // - Auto-cancel unshipped orders after 5 days
 // - Auto-release funds 3 days after delivery (buyer has 3 days to raise issues)
 // - Flag potentially lost orders after 14 days
-// UPDATED: Added push notifications
+// ✅ UPDATED: Added push notifications
+// ✅ NEW: Deducts label_cost from seller payout at escrow release
 
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
@@ -215,6 +216,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
 // ============================================
 // AUTO-RELEASE ESCROW
 // Runs daily - releases funds for delivered orders after 3 days
+// ✅ NEW: Deducts label_cost from seller payout
 // ============================================
 export async function autoReleaseEscrow(): Promise<void> {
   console.log('[ESCROW] Running escrow release check...');
@@ -260,21 +262,64 @@ export async function autoReleaseEscrow(): Promise<void> {
 
         // Transfer funds to seller's Connect account
         if (seller.stripe_connect_id && order.seller_payout) {
-          const transferAmount = Math.round(parseFloat(order.seller_payout.toString()) * 100);
+          // ✅ NEW: Calculate actual payout by deducting label cost
+          const originalPayout = parseFloat(order.seller_payout.toString());
+          const labelCost = order.label_cost ? parseFloat(order.label_cost.toString()) : 0;
+          const actualPayout = originalPayout - labelCost;
+          
+          // ✅ Log the deduction
+          console.log(`[ESCROW] Payout calculation for order ${order.id}:`);
+          console.log(`  - Original seller payout: £${originalPayout.toFixed(2)}`);
+          console.log(`  - Label cost deducted: £${labelCost.toFixed(2)}`);
+          console.log(`  - Actual transfer amount: £${actualPayout.toFixed(2)}`);
+
+          // ✅ Safety check: Don't transfer negative or zero amounts
+          if (actualPayout <= 0) {
+            console.error(`[ESCROW] ❌ Cannot transfer £${actualPayout.toFixed(2)} - skipping order ${order.id}`);
+            
+            // Still mark as completed but notify about the issue
+            await prisma.orders.update({
+              where: { id: order.id },
+              data: {
+                status: 'completed',
+                completed_at: now,
+                updated_at: now,
+              },
+            });
+
+            // Notify seller about the issue
+            await prisma.notifications.create({
+              data: {
+                id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                user_id: seller.id,
+                type: 'payout',
+                title: 'Order Completed - No Payout Due',
+                message: `Order ${order.id} completed but shipping label cost (£${labelCost.toFixed(2)}) exceeded the payout amount.`,
+                related_id: order.id,
+              },
+            });
+
+            continue;
+          }
+
+          const transferAmountPence = Math.round(actualPayout * 100);
 
           try {
             const transfer = await stripe.transfers.create({
-              amount: transferAmount,
+              amount: transferAmountPence,
               currency: 'gbp',
               destination: seller.stripe_connect_id,
               metadata: {
                 order_id: order.id,
                 type: 'escrow_release',
+                original_payout: originalPayout.toFixed(2),
+                label_cost_deducted: labelCost.toFixed(2),
+                actual_payout: actualPayout.toFixed(2),
                 released_at: now.toISOString(),
               },
             });
 
-            console.log(`[ESCROW] Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)} to ${seller.stripe_connect_id}`);
+            console.log(`[ESCROW] ✅ Transfer ${transfer.id} created for £${actualPayout.toFixed(2)} to ${seller.stripe_connect_id}`);
           } catch (transferError: any) {
             console.error(`[ESCROW] Transfer failed for order ${order.id}:`, transferError.message);
             continue;
@@ -300,10 +345,21 @@ export async function autoReleaseEscrow(): Promise<void> {
           },
         });
 
-        // Notify seller
+        // ✅ UPDATED: Notify seller with label cost deduction info
         const listingImage = order.listings?.images?.[0]?.image_url || null;
         const listingTitle = order.listings?.title || 'Your item';
-        const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
+        
+        // Calculate amounts for notification
+        const originalPayout = parseFloat(order.seller_payout?.toString() || '0');
+        const labelCost = order.label_cost ? parseFloat(order.label_cost.toString()) : 0;
+        const actualPayout = originalPayout - labelCost;
+        const payoutAmount = actualPayout.toFixed(2);
+
+        // ✅ UPDATED: Include label cost in notification if applicable
+        let notificationMessage = `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`;
+        if (labelCost > 0) {
+          notificationMessage = `£${payoutAmount} for "${listingTitle}" has been transferred to your account (£${labelCost.toFixed(2)} label cost deducted).`;
+        }
 
         await prisma.notifications.create({
           data: {
@@ -311,7 +367,7 @@ export async function autoReleaseEscrow(): Promise<void> {
             user_id: seller.id,
             type: 'payout',
             title: 'Payment Released!',
-            message: `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
+            message: notificationMessage,
             image_url: listingImage,
             related_id: order.id,
           },
@@ -338,13 +394,15 @@ export async function autoReleaseEscrow(): Promise<void> {
         if (sellerEmailRecord?.email) {
           try {
             const salePrice = parseFloat(order.amount.toString()).toFixed(2);
-            const fees = (parseFloat(order.amount.toString()) - parseFloat(order.seller_payout?.toString() || '0')).toFixed(2);
+            // ✅ UPDATED: Calculate fees including label cost
+            const platformFee = parseFloat(order.amount.toString()) - originalPayout;
+            const totalFees = (platformFee + labelCost).toFixed(2);
             
             await sendEscrowReleased(sellerEmailRecord.email, {
               itemTitle: listingTitle,
               orderNumber: order.id,
               salePrice: salePrice,
-              fees: fees,
+              fees: totalFees,
               payoutAmount: payoutAmount,
             });
             console.log('[ESCROW] Escrow released email sent to seller:', sellerEmailRecord.email);
