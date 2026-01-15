@@ -29,6 +29,7 @@ import { updateVerificationStatus } from './services/verificationService';
 import disputeRoutes from './routes/disputeRoutes';
 import adminRoutes from './routes/adminRoutes';
 import connectRedirectRoutes from './routes/connectRedirectRoutes';
+import returnRoutes from './routes/returnRoutes';
 
 
 const app = express();
@@ -115,6 +116,7 @@ app.use('/api/ses', sesRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/admin', adminRoutes);
 app.use('/connect', connectRedirectRoutes);
+app.use('/api/returns', returnRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
