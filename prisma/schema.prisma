@@ -179,6 +179,7 @@ model orders {
   reviews                       reviews[]
   support_tickets               support_tickets[]
   disputes                      disputes?         // ✅ NEW: Link to dispute
+  return_requests         return_requests[]
 
   @@index([buyer_id])
   @@index([created_at])
@@ -262,6 +263,8 @@ model users {
   reports_received user_reports[] @relation("ReportedUserReports")
   users_blocked    blocked_users[] @relation("BlockerBlocks")
   blocked_by       blocked_users[] @relation("BlockedByBlocks")
+  return_requests_made    return_requests[] @relation("return_requester")
+return_labels_paid      return_requests[] @relation("return_payer")
 }
 
 model notifications {
@@ -411,6 +414,7 @@ model disputes {
   order_id                 String    @unique
   buyer_id                 String
   seller_id                String
+  return_requests         return_requests[]
   
   // Status: open → counter_offered → buyer_accepted/seller_accepted → resolved
   //         OR: open → escalated → admin_resolved
@@ -484,4 +488,43 @@ model dispute_images {
 
   @@index([dispute_id])
   @@map("dispute_images")
+}
+model return_requests {
+  id                      String    @id @default(cuid())
+  order_id                String
+  dispute_id              String?
+  requested_by            String
+  approved_by             String?
+  reason                  String    // dispute_ruling, mutual_agreement, wrong_item, buyer_remorse
+  status                  String    @default("pending") // pending, approved, awaiting_address, label_created, shipped, delivered, completed, cancelled
+  
+  // Return label info
+  return_label_url        String?
+  return_tracking_number  String?
+  return_carrier          String?
+  label_cost              Decimal?  @db.Decimal(10, 2)
+  paid_by                 String?   // buyer_id or seller_id
+  shippo_transaction_id   String?
+  
+  // Refund info
+  refund_amount           Decimal?  @db.Decimal(10, 2)
+  shipping_deducted       Decimal?  @db.Decimal(10, 2)
+  
+  // Timestamps
+  shipped_at              DateTime?
+  delivered_at            DateTime?
+  escrow_release_at       DateTime?
+  completed_at            DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+  
+  // Relations
+  orders                  orders    @relation(fields: [order_id], references: [id])
+  disputes                disputes? @relation(fields: [dispute_id], references: [id])
+  requester               users     @relation("return_requester", fields: [requested_by], references: [id])
+  payer                   users?    @relation("return_payer", fields: [paid_by], references: [id])
+  
+  @@index([order_id])
+  @@index([dispute_id])
+  @@index([status])
 }
