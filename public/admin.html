@@ -557,6 +557,121 @@
       color: #374151;
     }
 
+    /* Return Status Badges */
+    .status-badge.approved,
+    .status-badge.label_created {
+      background: #DBEAFE;
+      color: #1E40AF;
+    }
+
+    .status-badge.shipped {
+      background: #FEF3C7;
+      color: #92400E;
+    }
+
+    .status-badge.delivered {
+      background: #D1FAE5;
+      color: #065F46;
+    }
+
+    .status-badge.completed {
+      background: #D1FAE5;
+      color: #065F46;
+    }
+
+    .status-badge.cancelled,
+    .status-badge.expired {
+      background: #F3F4F6;
+      color: #374151;
+    }
+
+    .status-badge.awaiting_address {
+      background: #FEF3C7;
+      color: #92400E;
+    }
+
+    /* Return Cards */
+    .return-card {
+      display: flex;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #E5E7EB;
+      cursor: pointer;
+      transition: background 0.2s;
+      gap: 16px;
+    }
+
+    .return-card:hover {
+      background: #F9FAFB;
+    }
+
+    .return-card:last-child {
+      border-bottom: none;
+    }
+
+    .return-priority {
+      width: 4px;
+      align-self: stretch;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .return-priority.pending { background: #F59E0B; }
+    .return-priority.shipped { background: #3B82F6; }
+    .return-priority.delivered { background: #10B981; }
+    .return-priority.completed { background: #6B7280; }
+
+    .return-image {
+      width: 56px;
+      height: 56px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #F3F4F6;
+      flex-shrink: 0;
+    }
+
+    .return-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .return-title {
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .return-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: #6B7280;
+      flex-wrap: wrap;
+    }
+
+    .return-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .return-amount {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1DC690;
+    }
+
+    .return-age {
+      font-size: 12px;
+      color: #9CA3AF;
+    }
+
     .urgency-tag {
       display: inline-flex;
       align-items: center;
@@ -1334,6 +1449,10 @@
         🚩 User Reports
         <span class="badge" id="reportsBadge">0</span>
       </button>
+      <button class="section-btn" onclick="switchSection('returns')" id="btnReturns">
+        📦 Returns
+        <span class="badge" id="returnsBadge">0</span>
+      </button>
     </div>
 
     <!-- ==================== DISPUTES SECTION ==================== -->
@@ -1503,6 +1622,89 @@
         </div>
       </main>
     </div>
+
+    <!-- ==================== RETURNS SECTION ==================== -->
+    <div id="returnsSection" class="section-content">
+      <!-- Returns Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-card clickable" onclick="switchReturnTab('pending')">
+          <div class="stat-icon yellow">🟡</div>
+          <div class="stat-content">
+            <h3 id="statPendingReturns">0</h3>
+            <p>Pending / Labels</p>
+          </div>
+        </div>
+        <div class="stat-card clickable" onclick="switchReturnTab('in_transit')">
+          <div class="stat-icon blue">🔵</div>
+          <div class="stat-content">
+            <h3 id="statInTransitReturns">0</h3>
+            <p>In Transit</p>
+          </div>
+        </div>
+        <div class="stat-card clickable" onclick="switchReturnTab('delivered')">
+          <div class="stat-icon green">🟢</div>
+          <div class="stat-content">
+            <h3 id="statDeliveredReturns">0</h3>
+            <p>Delivered (Awaiting Refund)</p>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon purple">📊</div>
+          <div class="stat-content">
+            <h3 id="statTotalReturns">0</h3>
+            <p>Total Returns</p>
+          </div>
+        </div>
+      </div>
+
+      <main class="main-content">
+        <div class="tabs-container">
+          <div class="tabs">
+            <div class="tab active" data-return-tab="pending" onclick="switchReturnTab('pending')">
+              <span>🟡 Pending</span>
+              <span class="tab-badge urgent" id="returnTabPending">0</span>
+            </div>
+            <div class="tab" data-return-tab="in_transit" onclick="switchReturnTab('in_transit')">
+              <span>🔵 In Transit</span>
+              <span class="tab-badge" id="returnTabInTransit">0</span>
+            </div>
+            <div class="tab" data-return-tab="delivered" onclick="switchReturnTab('delivered')">
+              <span>🟢 Delivered</span>
+              <span class="tab-badge" id="returnTabDelivered">0</span>
+            </div>
+            <div class="tab" data-return-tab="completed" onclick="switchReturnTab('completed')">
+              <span>✅ Completed</span>
+              <span class="tab-badge" id="returnTabCompleted">0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="returnSearchInput" placeholder="Search by order ID or user..." oninput="handleReturnSearch()">
+          </div>
+          <div class="toolbar-right">
+            <select class="sort-select" id="returnSortSelect" onchange="handleReturnSort()">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
+            <button class="btn btn-refresh" onclick="loadReturns()">
+              🔄 Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="disputes-container">
+          <div id="returnsContent">
+            <div class="loading">
+              <div class="spinner"></div>
+              <p>Loading returns...</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
   </div>
 
   <!-- ==================== DISPUTE DETAIL MODAL ==================== -->
@@ -1535,6 +1737,21 @@
     </div>
   </div>
 
+  <!-- ==================== RETURN DETAIL MODAL ==================== -->
+  <div id="returnModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>📦 Return Details</h2>
+        <button class="modal-close" onclick="closeReturnModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="returnModalContent">
+        <div class="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ==================== IMAGE VIEWER MODAL ==================== -->
   <div id="imageModal" class="image-modal" onclick="closeImageModal()">
     <img id="imageModalImg" src="" alt="Evidence">
@@ -1559,6 +1776,14 @@
     let reportSortBy = 'newest';
     let currentReport = null;
 
+    // Returns state
+    let returns = [];
+    let returnStats = {};
+    let currentReturnTab = 'pending';
+    let returnSearchQuery = '';
+    let returnSortBy = 'newest';
+    let currentReturn = null;
+
     const API_BASE = '/admin';
 
     // ==================== INITIALIZATION ====================
@@ -1569,6 +1794,7 @@
         showApp();
         loadDisputes();
         loadReports();
+        loadReturns();
       }
 
       document.getElementById('loginForm').addEventListener('submit', handleLogin);
@@ -1600,6 +1826,7 @@
           showApp();
           loadDisputes();
           loadReports();
+          loadReturns();
         } else {
           errorDiv.textContent = data.error || 'Invalid password';
           errorDiv.style.display = 'block';
@@ -1638,6 +1865,9 @@
       
       if (section === 'reports' && reports.length === 0) {
         loadReports();
+      }
+      if (section === 'returns' && returns.length === 0) {
+        loadReturns();
       }
     }
 
@@ -2428,6 +2658,487 @@
       }
     }
 
+    // ==================== RETURNS - DATA LOADING ====================
+    async function loadReturns() {
+      try {
+        const response = await fetch(`${API_BASE}/returns?tab=${currentReturnTab}`, {
+          headers: { 'Authorization': `Admin ${adminPassword}` },
+        });
+
+        if (response.status === 401) {
+          logout();
+          return;
+        }
+
+        const data = await response.json();
+        returns = data.returns || [];
+        returnStats = data.stats || {};
+        updateReturnStats();
+        renderReturns();
+        
+        // Update badge
+        const needsAttention = returnStats.pending + returnStats.delivered;
+        document.getElementById('returnsBadge').textContent = needsAttention;
+      } catch (error) {
+        console.error('Failed to load returns:', error);
+      }
+    }
+
+    function updateReturnStats() {
+      document.getElementById('statPendingReturns').textContent = returnStats.pending || 0;
+      document.getElementById('statInTransitReturns').textContent = returnStats.in_transit || 0;
+      document.getElementById('statDeliveredReturns').textContent = returnStats.delivered || 0;
+      document.getElementById('statTotalReturns').textContent = returnStats.total || 0;
+
+      document.getElementById('returnTabPending').textContent = returnStats.pending || 0;
+      document.getElementById('returnTabInTransit').textContent = returnStats.in_transit || 0;
+      document.getElementById('returnTabDelivered').textContent = returnStats.delivered || 0;
+      document.getElementById('returnTabCompleted').textContent = returnStats.completed || 0;
+    }
+
+    function switchReturnTab(tab) {
+      currentReturnTab = tab;
+      document.querySelectorAll('#returnsSection .tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.returnTab === tab);
+      });
+      loadReturns();
+    }
+
+    function handleReturnSearch() {
+      returnSearchQuery = document.getElementById('returnSearchInput').value;
+      renderReturns();
+    }
+
+    function handleReturnSort() {
+      returnSortBy = document.getElementById('returnSortSelect').value;
+      renderReturns();
+    }
+
+    function getFilteredReturns() {
+      let filtered = returns;
+
+      // Search filter
+      if (returnSearchQuery) {
+        const q = returnSearchQuery.toLowerCase();
+        filtered = filtered.filter(r => 
+          r.order_id.toLowerCase().includes(q) ||
+          r.requester.display_name.toLowerCase().includes(q) ||
+          (r.order.listing_title || '').toLowerCase().includes(q)
+        );
+      }
+
+      // Sort
+      filtered.sort((a, b) => {
+        if (returnSortBy === 'oldest') {
+          return new Date(a.created_at) - new Date(b.created_at);
+        }
+        return new Date(b.created_at) - new Date(a.created_at);
+      });
+
+      return filtered;
+    }
+
+    function renderReturns() {
+      const filtered = getFilteredReturns();
+      const container = document.getElementById('returnsContent');
+
+      if (filtered.length === 0) {
+        const emptyMessages = {
+          pending: { icon: '✅', title: 'All clear!', desc: 'No pending returns right now.' },
+          in_transit: { icon: '📭', title: 'None in transit', desc: 'No returns being shipped at the moment.' },
+          delivered: { icon: '✅', title: 'All processed', desc: 'No returns awaiting refund.' },
+          completed: { icon: '📋', title: 'No history yet', desc: 'Completed returns will appear here.' },
+        };
+        const msg = emptyMessages[currentReturnTab] || emptyMessages.pending;
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">${msg.icon}</div>
+            <h3>${msg.title}</h3>
+            <p>${msg.desc}</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(r => {
+        const age = getAge(r.created_at);
+        const priority = getReturnPriority(r);
+
+        return `
+          <div class="return-card" onclick="openReturn('${r.id}')">
+            <div class="return-priority ${priority}"></div>
+            <img class="return-image" src="${r.order.listing_image || 'https://via.placeholder.com/56?text=No+Image'}" alt="">
+            <div class="return-main">
+              <div class="return-title">${escapeHtml(r.order.listing_title || 'Item')}</div>
+              <div class="return-meta">
+                <span>By: ${escapeHtml(r.requester.display_name)}</span>
+                <span class="status-badge ${r.status}">${formatReturnStatus(r.status)}</span>
+                ${r.return_tracking_number ? `<span>📦 ${r.return_tracking_number}</span>` : ''}
+              </div>
+            </div>
+            <div class="return-info">
+              <div class="return-amount">£${r.order.amount.toFixed(2)}</div>
+              <div class="return-age">${age}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function getReturnPriority(ret) {
+      if (ret.status === 'delivered') return 'delivered';
+      if (ret.status === 'shipped') return 'shipped';
+      if (['pending', 'approved', 'awaiting_address', 'label_created'].includes(ret.status)) return 'pending';
+      return 'completed';
+    }
+
+    function formatReturnStatus(status) {
+      const map = {
+        'pending': 'Pending',
+        'approved': 'Approved',
+        'awaiting_address': 'Awaiting Address',
+        'label_created': 'Label Created',
+        'shipped': 'Shipped',
+        'in_transit': 'In Transit',
+        'delivered': 'Delivered',
+        'completed': 'Completed',
+        'cancelled': 'Cancelled',
+        'expired': 'Expired',
+      };
+      return map[status] || status;
+    }
+
+    async function openReturn(id) {
+      const modal = document.getElementById('returnModal');
+      const content = document.getElementById('returnModalContent');
+      modal.classList.add('active');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/returns/${id}`, {
+          headers: { 'Authorization': `Admin ${adminPassword}` },
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch return');
+
+        const data = await response.json();
+        currentReturn = data.return;
+        
+        content.innerHTML = `
+          <div class="detail-grid">
+            <!-- Order Info -->
+            <div class="detail-section">
+              <h3>📦 Order Information</h3>
+              <div class="detail-card">
+                <div class="detail-row">
+                  <span class="detail-label">Order ID</span>
+                  <span class="detail-value" style="font-family: monospace; font-size: 11px;">${currentReturn.order_id}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Item</span>
+                  <span class="detail-value">${escapeHtml(currentReturn.order.listing_title)}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Order Amount</span>
+                  <span class="detail-value">£${currentReturn.order.amount.toFixed(2)}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Order Date</span>
+                  <span class="detail-value">${formatDate(currentReturn.order.created_at)}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Return Status -->
+            <div class="detail-section">
+              <h3>📋 Return Status</h3>
+              <div class="detail-card">
+                <div class="detail-row">
+                  <span class="detail-label">Status</span>
+                  <span class="detail-value">
+                    <span class="status-badge ${currentReturn.status}">${formatReturnStatus(currentReturn.status)}</span>
+                  </span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Reason</span>
+                  <span class="detail-value">${escapeHtml(currentReturn.reason || 'Not specified')}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Requested On</span>
+                  <span class="detail-value">${formatDate(currentReturn.created_at)}</span>
+                </div>
+                ${currentReturn.escrow_release_at ? `
+                  <div class="detail-row">
+                    <span class="detail-label">Auto-Refund At</span>
+                    <span class="detail-value" style="color: #F59E0B;">${formatDate(currentReturn.escrow_release_at)}</span>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- Shipping Info -->
+            <div class="detail-section">
+              <h3>🚚 Shipping Label</h3>
+              <div class="detail-card">
+                ${currentReturn.return_label_url ? `
+                  <div class="detail-row">
+                    <span class="detail-label">Carrier</span>
+                    <span class="detail-value">${currentReturn.return_carrier || 'N/A'}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Tracking</span>
+                    <span class="detail-value" style="font-family: monospace;">${currentReturn.return_tracking_number || 'N/A'}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Label Cost</span>
+                    <span class="detail-value">£${currentReturn.label_cost?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Paid By</span>
+                    <span class="detail-value">${currentReturn.payer?.display_name || 'N/A'}</span>
+                  </div>
+                  <div style="margin-top: 12px;">
+                    <a href="${currentReturn.return_label_url}" target="_blank" class="btn btn-primary" style="width: 100%;">
+                      🏷️ View/Print Label
+                    </a>
+                  </div>
+                ` : `
+                  <div class="empty-state" style="padding: 20px;">
+                    <p>No label created yet</p>
+                  </div>
+                `}
+              </div>
+            </div>
+
+            <!-- Users -->
+            <div class="detail-section">
+              <h3>👥 Users</h3>
+              <div class="detail-card">
+                <div class="detail-row">
+                  <span class="detail-label">Buyer</span>
+                  <span class="detail-value">${escapeHtml(currentReturn.buyer?.display_name || 'Unknown')}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Buyer Email</span>
+                  <span class="detail-value" style="font-size: 12px;">${currentReturn.buyer?.email || 'N/A'}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Seller</span>
+                  <span class="detail-value">${escapeHtml(currentReturn.seller?.display_name || 'Unknown')}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Seller Email</span>
+                  <span class="detail-value" style="font-size: 12px;">${currentReturn.seller?.email || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Timeline -->
+            <div class="detail-section full-width">
+              <h3>📅 Timeline</h3>
+              <div class="detail-card">
+                <div class="timeline">
+                  <div class="timeline-item">
+                    <div class="timeline-dot active"></div>
+                    <div class="timeline-content">
+                      <h4>Return Requested</h4>
+                      <p>${formatDate(currentReturn.created_at)}</p>
+                    </div>
+                  </div>
+                  ${currentReturn.return_label_url ? `
+                    <div class="timeline-item">
+                      <div class="timeline-dot active"></div>
+                      <div class="timeline-content">
+                        <h4>Label Created</h4>
+                        <p>Tracking: ${currentReturn.return_tracking_number || 'N/A'}</p>
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${currentReturn.shipped_at ? `
+                    <div class="timeline-item">
+                      <div class="timeline-dot active"></div>
+                      <div class="timeline-content">
+                        <h4>Shipped</h4>
+                        <p>${formatDate(currentReturn.shipped_at)}</p>
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${currentReturn.delivered_at ? `
+                    <div class="timeline-item">
+                      <div class="timeline-dot active"></div>
+                      <div class="timeline-content">
+                        <h4>Delivered</h4>
+                        <p>${formatDate(currentReturn.delivered_at)}</p>
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${currentReturn.completed_at ? `
+                    <div class="timeline-item">
+                      <div class="timeline-dot active"></div>
+                      <div class="timeline-content">
+                        <h4>Completed</h4>
+                        <p>${formatDate(currentReturn.completed_at)}</p>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            </div>
+
+            ${currentReturn.dispute ? `
+              <div class="detail-section full-width">
+                <h3>⚖️ Related Dispute</h3>
+                <div class="detail-card">
+                  <div class="detail-row">
+                    <span class="detail-label">Dispute Status</span>
+                    <span class="detail-value">
+                      <span class="status-badge ${currentReturn.dispute.status}">${formatStatus(currentReturn.dispute.status)}</span>
+                    </span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Issue Type</span>
+                    <span class="detail-value">${formatReasonType(currentReturn.dispute.reason_type)}</span>
+                  </div>
+                  ${currentReturn.dispute.requested_refund_amount ? `
+                    <div class="detail-row">
+                      <span class="detail-label">Requested Refund</span>
+                      <span class="detail-value">£${currentReturn.dispute.requested_refund_amount.toFixed(2)}</span>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            ` : ''}
+          </div>
+
+          ${currentReturn.status === 'delivered' && !currentReturn.stripe_refund_id ? `
+            <div class="resolution-form" style="background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);">
+              <h3 style="color: #065F46;">💰 Process Refund</h3>
+              <p style="margin-bottom: 16px; color: #065F46;">Item has been returned. Process the refund to complete this return.</p>
+              <div class="amount-input">
+                <label>Refund Amount:</label>
+                <span>£</span>
+                <input type="number" id="returnRefundAmount" step="0.01" min="0.01" max="${currentReturn.order.amount}" value="${currentReturn.order.amount.toFixed(2)}">
+                <span style="color: #6B7280; font-size: 13px;">of £${currentReturn.order.amount.toFixed(2)} max</span>
+              </div>
+              <div class="resolution-actions">
+                <button class="btn btn-cancel" onclick="closeReturnModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="processReturnRefund('${currentReturn.id}')">
+                  💰 Process Refund
+                </button>
+              </div>
+            </div>
+          ` : ''}
+
+          ${currentReturn.stripe_refund_id ? `
+            <div class="resolved-banner">
+              <h3>✅ Refund Processed</h3>
+              <div class="resolved-details">
+                <div class="detail-row">
+                  <span class="detail-label">Refund Amount</span>
+                  <span class="detail-value" style="color: #1DC690; font-weight: 600;">£${currentReturn.refund_amount?.toFixed(2) || currentReturn.order.amount.toFixed(2)}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Refund ID</span>
+                  <span class="detail-value" style="font-family: monospace; font-size: 11px;">${currentReturn.stripe_refund_id}</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Completed On</span>
+                  <span class="detail-value">${formatDate(currentReturn.completed_at)}</span>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Admin Actions -->
+          ${!currentReturn.stripe_refund_id && currentReturn.status !== 'completed' && currentReturn.status !== 'cancelled' ? `
+            <div class="action-buttons">
+              ${currentReturn.status !== 'delivered' ? `
+                <button class="btn btn-warn" onclick="updateReturnStatus('${currentReturn.id}', 'delivered')">
+                  📦 Mark Delivered
+                </button>
+              ` : ''}
+              <button class="btn btn-dismiss" onclick="updateReturnStatus('${currentReturn.id}', 'cancelled')">
+                ❌ Cancel Return
+              </button>
+            </div>
+          ` : ''}
+        `;
+      } catch (error) {
+        console.error('Open return error:', error);
+        content.innerHTML = '<div class="empty-state"><div class="empty-state-icon">❌</div><p>Failed to load return</p></div>';
+      }
+    }
+
+    async function processReturnRefund(returnId) {
+      const amount = parseFloat(document.getElementById('returnRefundAmount').value);
+      
+      if (!amount || amount <= 0) {
+        alert('Please enter a valid refund amount');
+        return;
+      }
+
+      if (!confirm(`Process refund of £${amount.toFixed(2)} for this return?`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/returns/${returnId}/refund`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Admin ${adminPassword}`,
+          },
+          body: JSON.stringify({ amount }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          alert(`Refund of £${data.amount.toFixed(2)} processed successfully!`);
+          closeReturnModal();
+          loadReturns();
+        } else {
+          alert(data.error || 'Failed to process refund');
+        }
+      } catch (error) {
+        console.error('Refund error:', error);
+        alert('Failed to process refund');
+      }
+    }
+
+    async function updateReturnStatus(returnId, status) {
+      const statusLabels = {
+        'delivered': 'Mark as Delivered',
+        'cancelled': 'Cancel Return',
+      };
+
+      if (!confirm(`Are you sure you want to ${statusLabels[status] || status}?`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/returns/${returnId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Admin ${adminPassword}`,
+          },
+          body: JSON.stringify({ status }),
+        });
+
+        if (response.ok) {
+          alert(`Return status updated to ${status}`);
+          closeReturnModal();
+          loadReturns();
+        } else {
+          alert('Failed to update return status');
+        }
+      } catch (error) {
+        console.error('Update return error:', error);
+        alert('Failed to update return status');
+      }
+    }
+
     // ==================== MODALS ====================
     function closeModal() {
       document.getElementById('detailModal').classList.remove('active');
@@ -2438,6 +3149,11 @@
     function closeReportModal() {
       document.getElementById('reportModal').classList.remove('active');
       currentReport = null;
+    }
+
+    function closeReturnModal() {
+      document.getElementById('returnModal').classList.remove('active');
+      currentReturn = null;
     }
 
     function openImage(url) {
@@ -2531,6 +3247,7 @@
       if (e.key === 'Escape') {
         closeModal();
         closeReportModal();
+        closeReturnModal();
         closeImageModal();
       }
     });
