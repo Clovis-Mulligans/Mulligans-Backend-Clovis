@@ -393,6 +393,11 @@ export class OrderController {
           },
           // ✅ NEW: Include dispute data for resolution display
           disputes: true,
+          // ✅ NEW: Include return request data
+          return_requests: {
+            orderBy: { created_at: 'desc' },
+            take: 1,
+          },
         },
       });
 
@@ -402,6 +407,7 @@ export class OrderController {
 
       const isBuyer = order.buyer_id === userId;
       const isSeller = order.seller_id === userId;
+      
 
      // ✅ Format dispute data
 let disputeData = null;
@@ -440,6 +446,27 @@ if (order.disputes) {
         };
       }
   }
+
+  // ✅ Format return request data
+      let returnRequestData = null;
+      if (order.return_requests && order.return_requests.length > 0) {
+        const r = order.return_requests[0];
+        returnRequestData = {
+          id: r.id,
+          status: r.status,
+          reason: r.reason,
+          refund_amount: r.refund_amount ? parseFloat(r.refund_amount.toString()) : null,
+          return_label_url: r.return_label_url,
+          return_tracking_number: r.return_tracking_number,
+          return_carrier: r.return_carrier,
+          label_cost: r.label_cost ? parseFloat(r.label_cost.toString()) : null,
+          shipping_deducted: r.shipping_deducted ? parseFloat(r.shipping_deducted.toString()) : null,
+          shipped_at: r.shipped_at?.toISOString() || null,
+          delivered_at: r.delivered_at?.toISOString() || null,
+          escrow_release_at: r.escrow_release_at?.toISOString() || null,
+          created_at: r.created_at?.toISOString() || null,
+        };
+      }
 
       const formattedOrder = {
         id: order.id,
@@ -515,6 +542,8 @@ if (order.disputes) {
         days_until_release: order.escrow_release_at ? 
           Math.max(0, Math.ceil((order.escrow_release_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
           null,
+          // ✅ NEW: Return request data
+        return_request: returnRequestData,
       };
 
       res.json({ order: formattedOrder });

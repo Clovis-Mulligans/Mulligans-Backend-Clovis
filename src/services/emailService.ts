@@ -196,6 +196,41 @@ export async function sendEscrowReleased(sellerEmail: string, data: Record<strin
 }
 
 // ============================================
+// RETURN EMAILS
+// ============================================
+
+export async function sendReturnAddressNeeded(
+  sellerEmail: string,
+  data: {
+    sellerName: string;
+    itemTitle: string;
+    orderNumber: string;
+    buyerName: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('return-address-needed', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    buyerName: data.buyerName,
+  });
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    subject: `⚠️ Action Required: Complete Stripe Setup for Return - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send return address needed email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Return address needed email sent to ${sellerEmail}`);
+}
+
+// ============================================
 // DISPUTE EMAILS
 // ============================================
 
@@ -554,4 +589,111 @@ export async function sendDisputeEmail(
   }
 
   console.log(`✅ Dispute email sent to ${to}`);
+}
+
+// ============================================
+// RETURN EMAILS
+// ============================================
+
+export async function sendReturnLabelCreated(
+  recipientEmail: string,
+  data: {
+    recipientName: string;
+    itemTitle: string;
+    carrier: string;
+    trackingNumber: string;
+    message: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('return-label-created', {
+    recipientName: data.recipientName,
+    itemTitle: data.itemTitle,
+    carrier: data.carrier,
+    trackingNumber: data.trackingNumber,
+    message: data.message,
+  });
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: recipientEmail,
+    subject: `🏷️ Return Label Created - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send return label created email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Return label created email sent to ${recipientEmail}`);
+}
+
+export async function sendReturnShipped(
+  sellerEmail: string,
+  data: {
+    sellerName: string;
+    itemTitle: string;
+    carrier: string;
+    trackingNumber: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('return-shipped', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    carrier: data.carrier,
+    trackingNumber: data.trackingNumber,
+  });
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    subject: `📦 Return Item Shipped - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send return shipped email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Return shipped email sent to ${sellerEmail}`);
+}
+
+export async function sendReturnRefundProcessed(
+  buyerEmail: string,
+  data: {
+    buyerName: string;
+    itemTitle: string;
+    refundAmount: string;
+    shippingDeducted?: string;
+    orderNumber: string;
+  }
+): Promise<void> {
+  // Build shipping note if there was a deduction
+  let shippingNote = '';
+  if (data.shippingDeducted && parseFloat(data.shippingDeducted) > 0) {
+    shippingNote = `<p style="margin: 8px 0 0 0; font-size: 12px; color: #065f46;">(£${data.shippingDeducted} return shipping deducted)</p>`;
+  }
+
+  const html = loadTemplate('return-refund-processed', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    refundAmount: data.refundAmount,
+    shippingNote: shippingNote,
+    orderNumber: data.orderNumber,
+  });
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    subject: `✅ Refund Processed - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send refund processed email:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Refund processed email sent to ${buyerEmail}`);
 }

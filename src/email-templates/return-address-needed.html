@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Action Required: Complete Stripe Setup - Mulligans</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+          <!-- Blue Header with Logo -->
+          <tr>
+            <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
+              <img src="https://mulligans-golf-images-mvp.s3.eu-west-2.amazonaws.com/email-assets/EmailMainHeaderLogo" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px;">
+              <h1 style="margin: 0 0 20px 0; color: #DC2626; font-size: 24px; font-weight: bold; text-align: center;">⚠️ Action Required</h1>
+              
+              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{sellerName}},</p>
+              
+              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">A return has been approved for <strong>"{{itemTitle}}"</strong>, but we need your return address to create the shipping label.</p>
+              
+              <!-- Warning Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #fef2f2; border-radius: 8px; border: 1px solid #fecaca; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 8px 0; font-size: 16px; font-weight: 600; color: #991b1b;">Your Stripe account is missing address details</p>
+                    <p style="margin: 0; font-size: 14px; color: #991b1b; line-height: 1.6;">Please complete your Stripe account setup so we can generate a return label with your address.</p>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Order Details -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Item</p>
+                    <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #111827;">{{itemTitle}}</p>
+                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Order Number</p>
+                    <p style="margin: 0 0 16px 0; font-size: 16px; font-weight: 600; color: #111827;">#{{orderNumber}}</p>
+                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Buyer</p>
+                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">{{buyerName}}</p>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- CTA Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 30px;">
+                <tr>
+                  <td align="center">
+                    <a href="https://dashboard.stripe.com/account" style="display: inline-block; padding: 14px 32px; background-color: #DC2626; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">Complete Stripe Setup</a>
+                  </td>
+                </tr>
+              </table>
+              
+              <p style="margin: 0; color: #6B7280; font-size: 14px; text-align: center; line-height: 1.6;">Once your address is set up, the return label will be created automatically and you'll receive another email with tracking details.</p>
+            </td>
+          </tr>
+          <!-- Blue Footer -->
+          <tr>
+            <td style="padding: 30px 40px; background-color: #1C4670;">
+              <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
+              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">© 2025 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligansgolf.carrd.co/#privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

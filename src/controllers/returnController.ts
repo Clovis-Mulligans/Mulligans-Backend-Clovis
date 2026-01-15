@@ -8,6 +8,7 @@ import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
+import { sendReturnAddressNeeded } from '../services/emailService';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -208,6 +209,9 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
     // Calculate refund amount (100% minus return shipping will be calculated later)
     const refundAmount = parseFloat(order.listing_price?.toString() || order.amount.toString());
 
+    // Get listing title for notifications
+    const listingTitle = order.listing_title || order.listings?.title || 'Item';
+
     // Create return request
     const returnRequest = await prisma.return_requests.create({
       data: {
@@ -221,9 +225,35 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
       },
     });
 
+    // If awaiting address, also notify seller specifically
+    if (initialStatus === 'awaiting_address' && !isSeller) {
+      await prisma.notifications.create({
+        data: {
+          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: order.seller_id,
+          type: 'return_address_needed',
+          title: '⚠️ Action Required: Return Address Needed',
+          message: `Please complete your Stripe setup to receive the returned "${listingTitle}".`,
+          image_url: order.listing_image,
+          related_id: returnRequest.id,
+        },
+      });
+
+      // Send email to seller
+      try {
+        await sendReturnAddressNeeded(seller.email, {
+          sellerName: seller.display_name || 'Seller',
+          itemTitle: listingTitle,
+          orderNumber: orderId.slice(-8).toUpperCase(),
+          buyerName: order.users_orders_buyer_idTousers.display_name || 'Buyer',
+        });
+      } catch (emailErr) {
+        console.error('[RETURN] Failed to send address needed email:', emailErr);
+      }
+    }
+
     // Notify the other party
     const otherUserId = isBuyer ? order.seller_id : order.buyer_id;
-    const listingTitle = order.listing_title || order.listings?.title || 'Item';
 
     await prisma.notifications.create({
       data: {
