@@ -180,6 +180,11 @@ model orders {
   support_tickets               support_tickets[]
   disputes                      disputes?         // ✅ NEW: Link to dispute
   return_requests         return_requests[]
+  stripe_transfer_id         String?        // ✅ NEW: Track Stripe transfer to prevent double payment
+  refunded_at                DateTime?      // ✅ NEW: Track refund details  
+  refund_amount              Decimal?          @db.Decimal(10, 2)
+  stripe_refund_id           String?
+  lost_notification_sent_at  DateTime?        // ✅ NEW: Track lost notification to prevent spam
 
   @@index([buyer_id])
   @@index([created_at])
@@ -314,6 +319,7 @@ model support_tickets {
   subject    String
   message    String
   status     String                  @default("open")
+  priority   String                  @default("normal")
   created_at DateTime                @default(now())
   updated_at DateTime                @updatedAt
   images     support_ticket_images[]
@@ -457,6 +463,12 @@ model disputes {
   // ============================================
   created_at               DateTime  @default(now())
   updated_at               DateTime  @updatedAt
+
+  // ============================================
+  // ESCALATION TRACKING
+  // ============================================
+  escalated_at              DateTime?
+  escalation_reason         String?
   
   // ============================================
   // RELATIONS
@@ -517,6 +529,12 @@ model return_requests {
   completed_at            DateTime?
   created_at              DateTime  @default(now())
   updated_at              DateTime  @updatedAt
+
+   // ✅ NEW: Track Stripe refund ID
+  stripe_refund_id           String?
+  
+  // ✅ NEW: Auto-cancel if buyer doesn't ship within 5 days
+  return_ship_deadline       DateTime?
   
   // Relations
   orders                  orders    @relation(fields: [order_id], references: [id])

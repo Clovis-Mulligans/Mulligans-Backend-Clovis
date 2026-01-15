@@ -2,13 +2,19 @@
 // Handles return label purchases and return flow
 // ✅ Buyer pays: Deducted from refund
 // ✅ Seller pays: Charged via Stripe upfront
+// ✅ Full notifications: In-app, Push, and Email
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
-import { sendReturnAddressNeeded } from '../services/emailService';
+import { 
+  sendReturnAddressNeeded,
+  sendReturnLabelCreated,
+  sendReturnShipped,
+  sendReturnRefundProcessed,
+} from '../services/emailService';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -225,8 +231,9 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
       },
     });
 
-    // If awaiting address, also notify seller specifically
+    // If awaiting address, notify seller specifically
     if (initialStatus === 'awaiting_address' && !isSeller) {
+      // In-app notification
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -239,7 +246,19 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
         },
       });
 
-      // Send email to seller
+      // Push notification
+      try {
+        await sendPushNotification(
+          order.seller_id,
+          '⚠️ Action Required',
+          `Complete your Stripe setup to receive the returned "${listingTitle}"`,
+          { type: 'return_address_needed', return_id: returnRequest.id, order_id: orderId }
+        );
+      } catch (pushErr) {
+        console.error('[RETURN] Push notification failed:', pushErr);
+      }
+
+      // Email notification
       try {
         await sendReturnAddressNeeded(seller.email, {
           sellerName: seller.display_name || 'Seller',
@@ -252,9 +271,10 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
       }
     }
 
-    // Notify the other party
+    // Notify the other party about return approval
     const otherUserId = isBuyer ? order.seller_id : order.buyer_id;
 
+    // In-app notification
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -269,7 +289,7 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
       },
     });
 
-    // Send push notification
+    // Push notification
     try {
       await sendPushNotification(
         otherUserId,
@@ -279,21 +299,6 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
-    }
-
-    // If awaiting address, also notify seller specifically
-    if (initialStatus === 'awaiting_address' && !isSeller) {
-      await prisma.notifications.create({
-        data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          user_id: order.seller_id,
-          type: 'return_address_needed',
-          title: '⚠️ Action Required: Return Address Needed',
-          message: `Please complete your Stripe setup to receive the returned "${listingTitle}".`,
-          image_url: order.listing_image,
-          related_id: returnRequest.id,
-        },
-      });
     }
 
     res.json({
@@ -499,14 +504,20 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       });
     }
 
-    // Get return request
+    // Get return request with seller email
     const returnRequest = await prisma.return_requests.findUnique({
       where: { id: returnId },
       include: {
         orders: {
           include: {
             listings: true,
-            users_orders_seller_idTousers: true,
+            users_orders_seller_idTousers: {
+              select: {
+                id: true,
+                display_name: true,
+                email: true,
+              },
+            },
           },
         },
       },
@@ -598,9 +609,11 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       newRefundAmount,
     });
 
-    // Notify seller
+    // Get info for notifications
     const listingTitle = returnRequest.orders.listing_title || 'Item';
-    
+    const seller = returnRequest.orders.users_orders_seller_idTousers;
+
+    // In-app notification to seller
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -613,15 +626,31 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       },
     });
 
+    // Push notification to seller
     try {
       await sendPushNotification(
         returnRequest.orders.seller_id,
         'Return Label Created',
         `Buyer is returning "${listingTitle}". Tracking: ${transaction.trackingNumber}`,
-        { type: 'return_shipped', return_id: returnId }
+        { type: 'return_label_created', return_id: returnId }
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
+    }
+
+    // Email to seller
+    try {
+      if (seller?.email) {
+        await sendReturnLabelCreated(seller.email, {
+          recipientName: seller.display_name || 'Seller',
+          itemTitle: listingTitle,
+          carrier: carrierName,
+          trackingNumber: transaction.trackingNumber || '',
+          message: `The buyer has created a return label and will be sending back "${listingTitle}". Keep an eye out for the delivery.`,
+        });
+      }
+    } catch (emailErr) {
+      console.error('[RETURN] Email failed:', emailErr);
     }
 
     res.json({
@@ -659,14 +688,20 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       });
     }
 
-    // Get return request
+    // Get return request with buyer email
     const returnRequest = await prisma.return_requests.findUnique({
       where: { id: returnId },
       include: {
         orders: {
           include: {
             listings: true,
-            users_orders_buyer_idTousers: true,
+            users_orders_buyer_idTousers: {
+              select: {
+                id: true,
+                display_name: true,
+                email: true,
+              },
+            },
           },
         },
       },
@@ -793,9 +828,11 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       labelCost,
     });
 
-    // Notify buyer
+    // Get info for notifications
     const listingTitle = returnRequest.orders.listing_title || 'Item';
-    
+    const buyer = returnRequest.orders.users_orders_buyer_idTousers;
+
+    // In-app notification to buyer
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -808,6 +845,7 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       },
     });
 
+    // Push notification to buyer
     try {
       await sendPushNotification(
         returnRequest.orders.buyer_id,
@@ -817,6 +855,21 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
+    }
+
+    // Email to buyer
+    try {
+      if (buyer?.email) {
+        await sendReturnLabelCreated(buyer.email, {
+          recipientName: buyer.display_name || 'there',
+          itemTitle: listingTitle,
+          carrier: carrierName,
+          trackingNumber: transaction.trackingNumber || '',
+          message: `The seller has purchased a return label for "${listingTitle}". Please print the label and ship the item back to receive your refund.`,
+        });
+      }
+    } catch (emailErr) {
+      console.error('[RETURN] Email failed:', emailErr);
     }
 
     res.json({
@@ -848,7 +901,17 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
     const returnRequest = await prisma.return_requests.findUnique({
       where: { id: returnId },
       include: {
-        orders: true,
+        orders: {
+          include: {
+            users_orders_seller_idTousers: {
+              select: {
+                id: true,
+                display_name: true,
+                email: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -880,7 +943,11 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
       },
     });
 
-    // Notify seller
+    // Get info for notifications
+    const listingTitle = returnRequest.orders.listing_title || 'Item';
+    const seller = returnRequest.orders.users_orders_seller_idTousers;
+
+    // In-app notification to seller
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -893,6 +960,7 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
       },
     });
 
+    // Push notification to seller
     try {
       await sendPushNotification(
         returnRequest.orders.seller_id,
@@ -902,6 +970,20 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
+    }
+
+    // Email to seller
+    try {
+      if (seller?.email) {
+        await sendReturnShipped(seller.email, {
+          sellerName: seller.display_name || 'Seller',
+          itemTitle: listingTitle,
+          carrier: returnRequest.return_carrier || 'Carrier',
+          trackingNumber: returnRequest.return_tracking_number || '',
+        });
+      }
+    } catch (emailErr) {
+      console.error('[RETURN] Email failed:', emailErr);
     }
 
     res.json({
@@ -930,7 +1012,17 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
     const returnRequest = await prisma.return_requests.findUnique({
       where: { id: returnId },
       include: {
-        orders: true,
+        orders: {
+          include: {
+            users_orders_buyer_idTousers: {
+              select: {
+                id: true,
+                display_name: true,
+                email: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -960,19 +1052,25 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
       },
     });
 
-    // Notify buyer
+    // Get info for notifications
+    const listingTitle = returnRequest.orders.listing_title || 'Item';
+    const buyer = returnRequest.orders.users_orders_buyer_idTousers;
+    const refundAmount = returnRequest.refund_amount?.toFixed(2) || '0.00';
+
+    // In-app notification to buyer
     await prisma.notifications.create({
       data: {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         user_id: returnRequest.orders.buyer_id,
         type: 'return_delivered',
         title: 'Return Received',
-        message: `The seller has confirmed receipt of your return. Your refund of £${returnRequest.refund_amount?.toFixed(2)} will be processed in ${RETURN_ESCROW_DAYS} days.`,
+        message: `The seller has confirmed receipt of your return. Your refund of £${refundAmount} will be processed in ${RETURN_ESCROW_DAYS} days.`,
         image_url: returnRequest.orders.listing_image,
         related_id: returnId,
       },
     });
 
+    // Push notification to buyer
     try {
       await sendPushNotification(
         returnRequest.orders.buyer_id,
@@ -982,6 +1080,21 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
+    }
+
+    // Email to buyer
+    try {
+      if (buyer?.email) {
+        await sendReturnRefundProcessed(buyer.email, {
+          buyerName: buyer.display_name || 'there',
+          itemTitle: listingTitle,
+          refundAmount: refundAmount,
+          shippingDeducted: returnRequest.shipping_deducted?.toFixed(2) || undefined,
+          orderNumber: returnRequest.order_id.slice(-8).toUpperCase(),
+        });
+      }
+    } catch (emailErr) {
+      console.error('[RETURN] Email failed:', emailErr);
     }
 
     res.json({

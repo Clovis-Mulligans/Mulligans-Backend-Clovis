@@ -30,6 +30,7 @@ import disputeRoutes from './routes/disputeRoutes';
 import adminRoutes from './routes/adminRoutes';
 import connectRedirectRoutes from './routes/connectRedirectRoutes';
 import returnRoutes from './routes/returnRoutes';
+import testRoutes from './routes/testRoutes';
 
 
 const app = express();
@@ -95,6 +96,12 @@ app.use((req, res, next) => {
 });
 
 app.use(express.urlencoded({ extended: true }));
+
+// Add BEFORE other routes (and only in development!)
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/test', testRoutes);
+  console.log('⚠️ Test routes enabled at /api/test');
+}
 
 // Routes - auth has stricter rate limiting
 app.use('/api/auth', authLimiter, authRoutes);
