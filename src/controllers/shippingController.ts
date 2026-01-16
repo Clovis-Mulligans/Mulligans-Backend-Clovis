@@ -470,6 +470,32 @@ const carrier = carrierName !== 'Unknown'
       },
     });
 
+    // ✅ NEW: Also update ALL related orders from the same transaction (multi-item cart checkout)
+    // These orders share the same stripe_payment_intent_id and seller_id
+    if (order.stripe_payment_intent_id) {
+      const relatedOrdersResult = await prisma.orders.updateMany({
+        where: {
+          stripe_payment_intent_id: order.stripe_payment_intent_id,
+          seller_id: order.seller_id,
+          id: { not: orderId },  // Don't update the primary order again
+          status: { in: ['paid', 'to_ship'] },  // Only update orders that haven't shipped yet
+        },
+        data: {
+          tracking_number: transaction.trackingNumber,
+          carrier: carrier,
+          label_url: transaction.labelUrl,
+          label_cost: 0,  // Only primary order gets the label cost
+          shippo_transaction_id: transaction.objectId,
+          status: 'to_ship',
+          updated_at: new Date(),
+        },
+      });
+      
+      if (relatedOrdersResult.count > 0) {
+        console.log(`✅ Also updated ${relatedOrdersResult.count} related orders with same tracking info`);
+      }
+    }
+
     console.log('✅ Shipping label created:', {
       orderId,
       trackingNumber: transaction.trackingNumber,
@@ -661,6 +687,27 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
       },
     });
 
+    // ✅ NEW: Also mark ALL related orders as shipped (multi-item cart checkout)
+    if (order.stripe_payment_intent_id) {
+      const relatedOrdersResult = await prisma.orders.updateMany({
+        where: {
+          stripe_payment_intent_id: order.stripe_payment_intent_id,
+          seller_id: order.seller_id,
+          id: { not: orderId },
+          status: 'to_ship',
+        },
+        data: {
+          status: 'in_transit',
+          shipped_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+      
+      if (relatedOrdersResult.count > 0) {
+        console.log(`✅ Also marked ${relatedOrdersResult.count} related orders as shipped`);
+      }
+    }
+
     // Notify buyer
     // ✅ FIX: Add image_url and use consistent type
     const listingImage = order.listings?.images?.[0]?.image_url || null;
@@ -755,9 +802,9 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
             break;
         }
 
-        // Update order
-        await prisma.orders.update({
-          where: { id: order.id },
+        // Update ALL orders with this tracking number (multi-item shipments)
+        await prisma.orders.updateMany({
+          where: { tracking_number: trackingNumber },
           data: {
             status: newStatus,
             delivered_at: deliveredAt,
