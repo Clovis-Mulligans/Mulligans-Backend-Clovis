@@ -14,8 +14,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 });
 
 // Platform fee calculation (same as cart checkout)
-const PLATFORM_FEE_PERCENT = 0.07; // 7%
-const PLATFORM_FEE_FIXED = 0.99; // £0.99
+const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
+const PLATFORM_FEE_FIXED = 0.99; // £0.99 per item
 const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
@@ -168,7 +168,7 @@ export class NativePaymentController {
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
       const shippingTotal = Math.ceil(orderQuantity / 5) * shippingCost;
-      const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + PLATFORM_FEE_FIXED;
+      const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
       const grandTotal = itemTotal + shippingTotal + platformFee;
 
       const totalAmountPence = Math.round(grandTotal * 100);
@@ -298,7 +298,8 @@ export class NativePaymentController {
         itemsMetadata.push(`${listing.id}:${quantity}`);
       }
 
-      const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + PLATFORM_FEE_FIXED;
+      const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
+const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * totalQuantity);
       const grandTotal = itemsTotal + shippingTotal + platformFee;
       const totalAmountPence = Math.round(grandTotal * 100);
 
