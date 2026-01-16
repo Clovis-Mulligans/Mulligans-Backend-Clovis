@@ -11,7 +11,7 @@ const CART_EXPIRY_HOURS = 72;
 const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 
 // Buyer protection fee
-const BUYER_PROTECTION_PERCENTAGE = 0.07; // 7%
+const BUYER_PROTECTION_PERCENTAGE = 0.075; // 7.5%
 const BUYER_PROTECTION_FIXED = 0.99; // £0.99
 
 // ============================================
@@ -200,11 +200,13 @@ export const CartController = {
       // ✅ Calculate totals (using line totals which include quantity)
       const itemsTotal = sellers.reduce((sum, s) => sum + s.subtotal, 0);
       const shippingTotal = sellers.reduce((sum, s) => sum + (s.shipping_cost || 0), 0);
-      const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_PERCENTAGE) + BUYER_PROTECTION_FIXED;
-      const grandTotal = itemsTotal + shippingTotal + buyerProtectionFee;
-
-      // ✅ Total items count (sum of quantities)
+      
+      // ✅ Total items count (sum of quantities) - moved up for fee calculation
       const totalItemCount = itemsWithAvailability.reduce((sum, item) => sum + item.quantity, 0);
+      
+      // ✅ FIXED: £0.99 fee applies PER ITEM, not per cart
+      const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_PERCENTAGE) + (BUYER_PROTECTION_FIXED * totalItemCount);
+      const grandTotal = itemsTotal + shippingTotal + buyerProtectionFee;
 
       // Generate warnings for items in multiple carts
       const warnings = itemsWithAvailability

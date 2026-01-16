@@ -27,7 +27,7 @@ interface AuthenticatedRequest extends Request {
 }
 
 // Platform fee calculation
-const PLATFORM_FEE_PERCENT = 0.07; // 7%
+const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
 
 // Escrow constants
@@ -284,7 +284,8 @@ export class CartCheckoutController {
         (sum, item) => sum + (item.quantity || 1),
         0
       );
-      const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + PLATFORM_FEE_FIXED;
+      // ✅ FIXED: £0.99 fee applies PER ITEM, not per cart
+const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * totalQuantity);
       const grandTotal = itemsTotal + shippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);
@@ -384,10 +385,13 @@ export class CartCheckoutController {
           grand_total: grandTotal.toFixed(2),
           item_count: cartItems.length.toString(),
           total_quantity: totalQuantity.toString(),
-          listing_ids: cartItems.map((item) => item.listing_id).join(','),
-          listing_quantities: JSON.stringify(listingQuantities),
-          seller_breakdown: JSON.stringify(sellerBreakdown),
-          first_item_image: cartItems[0]?.listings.images[0]?.image_url || '',
+          // ✅ FIXED: Truncate listing_ids to stay under 500 char limit
+          listing_ids: cartItems.map((item) => item.listing_id).join(',').substring(0, 490),
+          // ✅ FIXED: Store quantities separately, truncated
+          listing_quantities: JSON.stringify(listingQuantities).substring(0, 490),
+          // ✅ FIXED: Simplified seller breakdown (just IDs and totals)
+          seller_ids: Object.keys(sellerGroups).join(',').substring(0, 490),
+          first_item_image: (cartItems[0]?.listings.images[0]?.image_url || '').substring(0, 490),
           escrow: 'true',
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
@@ -429,8 +433,76 @@ export class CartCheckoutController {
       const buyerId = metadata.buyer_id;
       const listingIds = metadata.listing_ids.split(',');
       const listingQuantities = JSON.parse(metadata.listing_quantities || '{}');
-      const sellerBreakdown = JSON.parse(metadata.seller_breakdown);
+      // ✅ Reconstruct seller breakdown from database instead of metadata
+      const sellerIds = (metadata.seller_ids || '').split(',').filter(Boolean);
       const firstItemImage = metadata.first_item_image || null;
+
+      // Fetch listings to reconstruct seller breakdown
+      const listings = await prisma.listings.findMany({
+        where: { id: { in: listingIds } },
+        include: {
+          images: {
+            take: 1,
+            orderBy: { display_order: 'asc' },
+          },
+          users: {
+            select: {
+              id: true,
+              stripe_connect_id: true,
+            },
+          },
+        },
+      });
+
+      // Build sellerBreakdown from fetched listings
+      const sellerBreakdown: {
+        seller_id: string;
+        seller_connect_id: string | null;
+        subtotal: number;
+        shipping_total: number;
+        cart_items: { listing_id: string; quantity: number; selected_size: string | null }[];
+        first_image: string | null;
+      }[] = [];
+
+      // Group listings by seller
+      const sellerMap: Record<string, typeof sellerBreakdown[0]> = {};
+      
+      for (const listing of listings) {
+        const sellerId = listing.seller_id;
+        const quantity = listingQuantities[listing.id] || 1;
+        // Parse selected_size from metadata if stored, otherwise null
+        const selectedSize = null; // Will be populated from cart_items if needed
+        
+        if (!sellerMap[sellerId]) {
+          sellerMap[sellerId] = {
+            seller_id: sellerId,
+            seller_connect_id: listing.users?.stripe_connect_id || null,
+            subtotal: 0,
+            shipping_total: 0,
+            cart_items: [],
+            first_image: listing.images[0]?.image_url || null,
+          };
+        }
+        
+        const price = parseFloat(listing.price.toString());
+        const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
+        
+        sellerMap[sellerId].subtotal += price * quantity;
+        sellerMap[sellerId].shipping_total = Math.max(
+          sellerMap[sellerId].shipping_total,
+          Math.ceil(quantity / 5) * shippingCost
+        );
+        sellerMap[sellerId].cart_items.push({
+          listing_id: listing.id,
+          quantity,
+          selected_size: selectedSize,
+        });
+      }
+
+      // Convert map to array
+      for (const sellerId of Object.keys(sellerMap)) {
+        sellerBreakdown.push(sellerMap[sellerId]);
+      }
       const grandTotal = metadata.grand_total;
       const shippingTotal = metadata.shipping_total || '0';
       const totalQuantity = parseInt(metadata.total_quantity || '0');
@@ -599,8 +671,8 @@ export class CartCheckoutController {
         const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
         const listing_ids = (cart_items || []).map((item: any) => item.listing_id);
 
-        const sellerSubtotal = parseFloat(subtotal);
-        const sellerShipping = parseFloat(shipping_total || '0');
+        const sellerSubtotal = subtotal;
+        const sellerShipping = shipping_total || 0;
         console.log('[CART] Seller payout scheduled (after escrow):', {
           seller_id,
           subtotal: sellerSubtotal.toFixed(2),
@@ -632,7 +704,7 @@ export class CartCheckoutController {
               user_id: seller_id,
               type: 'payout',
               title: 'Congratulations on your sale!',
-              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. Add your bank details to receive payment after delivery.`,
+              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal.toFixed(2)}. Add your bank details to receive payment after delivery.`,
               image_url: sellerFirstImage,
               related_id: createdOrders[0]?.id,
             },
@@ -689,7 +761,7 @@ export class CartCheckoutController {
             
             await sendSaleNotification(sellerEmailRecord.email, {
               itemTitle: listing_ids.length === 1 ? createdOrders[0]?.title : `${listing_ids.length} items`,
-              salePrice: subtotal,
+              salePrice: subtotal.toFixed(2),
               orderNumber: createdOrders[0]?.id || 'N/A',
               buyerName: buyer?.display_name || 'Buyer',
               shippingAddress: shippingAddr,
