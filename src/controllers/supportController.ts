@@ -1,19 +1,11 @@
 // src/controllers/supportController.ts
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Service } from '../services/s3Service';
 import { v4 as uuidv4 } from 'uuid';
 import { sendEmail } from '../utils/email';
 
 const prisma = new PrismaClient();
-
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || 'eu-west-2',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
 
 export class SupportController {
   /**
@@ -73,28 +65,22 @@ export class SupportController {
         console.log(`📸 Uploading ${files.length} images...`);
         
         for (const file of files) {
-          const imageId = uuidv4();
-          const s3Key = `support/${ticketId}/${imageId}-${file.originalname}`;
-
-          await s3Client.send(
-            new PutObjectCommand({
-              Bucket: process.env.S3_BUCKET_NAME!,
-              Key: s3Key,
-              Body: file.buffer,
-              ContentType: file.mimetype,
-            })
+          const result = await S3Service.uploadSupportImage(
+            file.buffer,
+            file.mimetype,
+            file.originalname,
+            ticketId
           );
 
-          const imageUrl = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
-          imageUrls.push(imageUrl);
+          imageUrls.push(result.url);
 
           // Save to database
           await prisma.support_ticket_images.create({
             data: {
-              id: imageId,
+              id: uuidv4(),
               ticket_id: ticketId,
-              image_url: imageUrl,
-              s3_key: s3Key,
+              image_url: result.url,
+              s3_key: result.key,
             },
           });
         }

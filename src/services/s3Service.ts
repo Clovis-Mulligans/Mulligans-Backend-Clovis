@@ -40,6 +40,30 @@ export class S3Service {
     return { url, key };
   }
 
+  // ✅ NEW: Upload support ticket images to separate folder
+  static async uploadSupportImage(
+    file: Buffer,
+    mimetype: string,
+    originalName: string,
+    ticketId: string
+  ): Promise<UploadResult> {
+    const fileExtension = originalName.split('.').pop();
+    const key = `support/${ticketId}/${uuidv4()}.${fileExtension}`;
+
+    const command = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      Body: file,
+      ContentType: mimetype,
+    });
+
+    await s3Client.send(command);
+
+    const url = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${key}`;
+
+    return { url, key };
+  }
+
   static async deleteImage(key: string): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: BUCKET_NAME,
