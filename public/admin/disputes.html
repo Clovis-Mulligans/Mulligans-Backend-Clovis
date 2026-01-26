@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mulligans Admin - Disputes</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shared/styles.css">
+</head>
+<body>
+  <!-- ==================== LOGIN SCREEN ==================== -->
+  <div id="loginScreen" class="login-container">
+    <div class="login-card">
+      <div class="login-logo">
+        <h1>🏌️ MULLIGANS</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <div id="loginError" class="error-message"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="password">Admin Password</label>
+          <input type="password" id="password" placeholder="Enter admin password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" id="loginBtn" style="width: 100%;">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MAIN APP ==================== -->
+  <div id="appContainer" class="app-container">
+    <!-- Sidebar -->
+    <div id="sidebarContainer"></div>
+    
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <header class="main-header">
+        <h1 class="page-title">⚖️ Disputes</h1>
+        <div class="header-actions">
+          <button class="btn btn-ghost" onclick="loadDisputes()">🔄 Refresh</button>
+          <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+      </header>
+      
+      <main class="main-content">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card clickable" onclick="switchTab('attention')">
+            <div class="stat-icon red">🔴</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statAttention">0</div>
+              <div class="stat-label">Needs Attention</div>
+            </div>
+          </div>
+          <div class="stat-card clickable" onclick="switchTab('progress')">
+            <div class="stat-icon yellow">🟡</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statProgress">0</div>
+              <div class="stat-label">In Progress</div>
+            </div>
+          </div>
+          <div class="stat-card clickable" onclick="switchTab('history')">
+            <div class="stat-icon green">🟢</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statResolved">0</div>
+              <div class="stat-label">Resolved</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon blue">💰</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statAtRisk">£0</div>
+              <div class="stat-label">At Risk</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Tabs -->
+        <div class="tabs-container">
+          <div class="tabs">
+            <div class="tab active" data-tab="attention" onclick="switchTab('attention')">
+              <span>🔴 Needs Attention</span>
+              <span class="tab-badge urgent" id="tabBadgeAttention">0</span>
+            </div>
+            <div class="tab" data-tab="progress" onclick="switchTab('progress')">
+              <span>🟡 In Progress</span>
+              <span class="tab-badge" id="tabBadgeProgress">0</span>
+            </div>
+            <div class="tab" data-tab="history" onclick="switchTab('history')">
+              <span>🟢 History</span>
+              <span class="tab-badge" id="tabBadgeHistory">0</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Toolbar -->
+        <div class="toolbar">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="searchInput" placeholder="Search by buyer, seller, or order ID..." oninput="handleSearch()">
+          </div>
+          <div class="toolbar-right">
+            <select class="sort-select" id="sortSelect" onchange="handleSort()">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="highest">Highest Value</option>
+              <option value="lowest">Lowest Value</option>
+            </select>
+          </div>
+        </div>
+        
+        <!-- Disputes List -->
+        <div class="list-container">
+          <div id="disputesContent">
+            <div class="loading">
+              <div class="spinner"></div>
+              <p>Loading disputes...</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ==================== DISPUTE DETAIL MODAL ==================== -->
+  <div id="detailModal" class="modal-overlay">
+    <div class="modal" style="max-width: 900px;">
+      <div class="modal-header">
+        <h2 id="modalTitle">Dispute Details</h2>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modalContent">
+        <div class="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== IMAGE MODAL ==================== -->
+  <div id="imageModal" class="image-modal" onclick="closeImageModal()">
+    <img id="imageModalImg" src="" alt="Evidence">
+  </div>
+
+  <!-- Scripts -->
+  <script src="shared/auth.js"></script>
+  <script src="shared/helpers.js"></script>
+  <script src="shared/nav.js"></script>
+  <script>
+    // ==================== STATE ====================
+    let disputes = [];
+    let currentTab = 'attention';
+    let currentDispute = null;
+    let searchQuery = '';
+    let sortBy = 'newest';
+    let selectedResolution = null;
+
+    // ==================== INITIALIZATION ====================
+    function initPage() {
+      initNav();
+      loadDisputes();
+    }
+
+    // ==================== DATA LOADING ====================
+    async function loadDisputes() {
+      try {
+        const response = await apiRequest(`${API_BASE}/disputes`);
+
+        if (!response.ok) throw new Error('Failed to load');
+
+        const data = await response.json();
+        disputes = data.disputes || [];
+        updateStats();
+        renderDisputes();
+        
+        // Update nav badge
+        const needsAttention = disputes.filter(d => d.status === 'escalated').length;
+        updateNavBadge('disputes', needsAttention);
+      } catch (error) {
+        console.error('Failed to load disputes:', error);
+        document.getElementById('disputesContent').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">❌</div>
+            <h3>Failed to load disputes</h3>
+            <p>Please try refreshing the page</p>
+          </div>
+        `;
+      }
+    }
+
+    // ==================== STATS ====================
+    function updateStats() {
+      const attention = disputes.filter(d => d.status === 'escalated');
+      const progress = disputes.filter(d => ['open', 'counter_offered'].includes(d.status));
+      const resolved = disputes.filter(d => ['admin_resolved', 'resolved', 'accepted'].includes(d.status));
+      const atRisk = attention.reduce((sum, d) => sum + d.requested_refund_amount, 0);
+
+      document.getElementById('statAttention').textContent = attention.length;
+      document.getElementById('statProgress').textContent = progress.length;
+      document.getElementById('statResolved').textContent = resolved.length;
+      document.getElementById('statAtRisk').textContent = `£${atRisk.toFixed(0)}`;
+
+      document.getElementById('tabBadgeAttention').textContent = attention.length;
+      document.getElementById('tabBadgeProgress').textContent = progress.length;
+      document.getElementById('tabBadgeHistory').textContent = resolved.length;
+    }
+
+    // ==================== TABS & FILTERING ====================
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tab);
+      });
+      renderDisputes();
+    }
+
+    function getFilteredDisputes() {
+      let filtered = disputes;
+
+      // Filter by tab
+      if (currentTab === 'attention') {
+        filtered = filtered.filter(d => d.status === 'escalated');
+      } else if (currentTab === 'progress') {
+        filtered = filtered.filter(d => ['open', 'counter_offered'].includes(d.status));
+      } else if (currentTab === 'history') {
+        filtered = filtered.filter(d => ['admin_resolved', 'resolved', 'accepted'].includes(d.status));
+      }
+
+      // Search filter
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        filtered = filtered.filter(d => 
+          d.buyer.display_name.toLowerCase().includes(q) ||
+          d.seller.display_name.toLowerCase().includes(q) ||
+          d.order_id.toLowerCase().includes(q) ||
+          (d.order.listing_title || '').toLowerCase().includes(q)
+        );
+      }
+
+      // Sort
+      filtered.sort((a, b) => {
+        switch (sortBy) {
+          case 'oldest':
+            return new Date(a.created_at) - new Date(b.created_at);
+          case 'highest':
+            return b.requested_refund_amount - a.requested_refund_amount;
+          case 'lowest':
+            return a.requested_refund_amount - b.requested_refund_amount;
+          default: // newest
+            return new Date(b.created_at) - new Date(a.created_at);
+        }
+      });
+
+      return filtered;
+    }
+
+    function handleSearch() {
+      searchQuery = document.getElementById('searchInput').value;
+      renderDisputes();
+    }
+
+    function handleSort() {
+      sortBy = document.getElementById('sortSelect').value;
+      renderDisputes();
+    }
+
+    // ==================== RENDER ====================
+    function renderDisputes() {
+      const filtered = getFilteredDisputes();
+      const container = document.getElementById('disputesContent');
+
+      if (filtered.length === 0) {
+        const emptyMessages = {
+          attention: { icon: '✅', title: 'All clear!', desc: 'No disputes need your attention right now.' },
+          progress: { icon: '📭', title: 'Nothing in progress', desc: 'No active disputes at the moment.' },
+          history: { icon: '📋', title: 'No history yet', desc: 'Resolved disputes will appear here.' },
+        };
+        const msg = emptyMessages[currentTab];
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">${msg.icon}</div>
+            <h3>${msg.title}</h3>
+            <p>${msg.desc}</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(d => {
+        const age = getAge(d.created_at);
+        const priority = getPriority(d);
+        const urgencyTags = getUrgencyTags(d);
+
+        return `
+          <div class="list-item" onclick="openDispute('${d.id}')">
+            <div class="list-item-priority ${priority}"></div>
+            <img class="list-item-image" src="${d.order.listing_image || 'https://via.placeholder.com/48?text=No+Image'}" alt="">
+            <div class="list-item-main">
+              <div class="list-item-title">${escapeHtml(d.order.listing_title || 'Item')}</div>
+              <div class="list-item-meta">
+                <span>${escapeHtml(d.buyer.display_name)} → ${escapeHtml(d.seller.display_name)}</span>
+                <span class="status-badge ${d.status}">${formatStatus(d.status)}</span>
+                ${urgencyTags}
+              </div>
+            </div>
+            <div class="list-item-info">
+              <div class="list-item-amount">£${d.requested_refund_amount.toFixed(2)}</div>
+              <div class="list-item-age">${age}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==================== DISPUTE DETAIL ====================
+    async function openDispute(id) {
+      document.getElementById('detailModal').classList.add('active');
+      document.getElementById('modalContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await apiRequest(`/api/disputes/admin/${id}`);
+
+        if (!response.ok) throw new Error('Failed to load');
+
+        const data = await response.json();
+        currentDispute = data.dispute;
+        renderDisputeDetail(currentDispute);
+      } catch (error) {
+        console.error('Failed to load dispute:', error);
+        document.getElementById('modalContent').innerHTML = '<div class="empty-state"><p>Failed to load dispute details</p></div>';
+      }
+    }
+
+    function renderDisputeDetail(d) {
+      const canResolve = d.status === 'escalated';
+      const isResolved = ['admin_resolved', 'resolved', 'accepted'].includes(d.status);
+
+      document.getElementById('modalTitle').innerHTML = `
+        Dispute Details
+        <span class="status-badge ${d.status}" style="margin-left: 12px;">${formatStatus(d.status)}</span>
+      `;
+
+      document.getElementById('modalContent').innerHTML = `
+        <div class="detail-grid">
+          <!-- Order Info -->
+          <div class="detail-section">
+            <h3>📦 Order Information</h3>
+            <div class="detail-card">
+              <div class="detail-row">
+                <span class="detail-label">Order ID</span>
+                <span class="detail-value" style="font-family: monospace; font-size: 11px;">${d.order_id}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Item</span>
+                <span class="detail-value">${escapeHtml(d.order.listing_title)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Order Amount</span>
+                <span class="detail-value">£${d.order.amount.toFixed(2)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Order Date</span>
+                <span class="detail-value">${formatDate(d.order.created_at)}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Timeline -->
+          <div class="detail-section">
+            <h3>📅 Timeline</h3>
+            <div class="detail-card">
+              <div class="timeline">
+                <div class="timeline-item">
+                  <div class="timeline-dot active"></div>
+                  <div class="timeline-content">
+                    <h4>Dispute Opened</h4>
+                    <p>${formatDate(d.created_at)}</p>
+                  </div>
+                </div>
+                ${d.seller_responded_at ? `
+                  <div class="timeline-item">
+                    <div class="timeline-dot ${d.counter_offer_amount ? 'active' : 'warning'}"></div>
+                    <div class="timeline-content">
+                      <h4>Seller Responded</h4>
+                      <p>${formatDate(d.seller_responded_at)}</p>
+                      ${d.counter_offer_amount ? `<div class="timeline-note">Counter offer: £${d.counter_offer_amount.toFixed(2)}</div>` : '<div class="timeline-note">Rejected buyer\'s claim</div>'}
+                    </div>
+                  </div>
+                ` : d.status !== 'open' ? '' : `
+                  <div class="timeline-item">
+                    <div class="timeline-dot warning"></div>
+                    <div class="timeline-content">
+                      <h4>Awaiting Seller Response</h4>
+                      <p>Deadline: ${formatDate(d.seller_deadline)}</p>
+                    </div>
+                  </div>
+                `}
+                ${d.status === 'escalated' ? `
+                  <div class="timeline-item">
+                    <div class="timeline-dot error"></div>
+                    <div class="timeline-content">
+                      <h4>Escalated to Admin</h4>
+                      <p>${d.auto_escalated ? 'Auto-escalated (seller missed deadline)' : 'Buyer escalated'}</p>
+                    </div>
+                  </div>
+                ` : ''}
+                ${d.resolved_at ? `
+                  <div class="timeline-item">
+                    <div class="timeline-dot active"></div>
+                    <div class="timeline-content">
+                      <h4>Resolved</h4>
+                      <p>${formatDate(d.resolved_at)}</p>
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+
+          <!-- Buyer's Claim -->
+          <div class="detail-section">
+            <h3>👤 Buyer's Claim</h3>
+            <div class="detail-card">
+              <div class="detail-row">
+                <span class="detail-label">Buyer</span>
+                <span class="detail-value">${escapeHtml(d.buyer.display_name)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Email</span>
+                <span class="detail-value" style="font-size: 12px;">${d.buyer.email}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Issue Type</span>
+                <span class="detail-value">${formatReasonType(d.reason_type)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Requested</span>
+                <span class="detail-value" style="color: var(--status-error); font-weight: 600;">£${d.requested_refund_amount.toFixed(2)} (${d.requested_refund_percent}%)</span>
+              </div>
+              ${d.reason_text ? `<div style="margin-top: 12px; padding: 12px; background: var(--bg-primary); border-radius: 8px; font-style: italic; color: var(--text-secondary);">"${escapeHtml(d.reason_text)}"</div>` : ''}
+            </div>
+            ${d.buyer_images && d.buyer_images.length > 0 ? `
+              <h4 style="margin-top: 12px; font-size: 13px; color: var(--text-muted);">📷 Buyer's Evidence (${d.buyer_images.length})</h4>
+              <div class="evidence-grid">
+                ${d.buyer_images.map(img => `
+                  <img class="evidence-image" src="${img.url}" onclick="openImage('${img.url}')" alt="Evidence">
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- Seller's Response -->
+          <div class="detail-section">
+            <h3>🏪 Seller's Response</h3>
+            <div class="detail-card">
+              <div class="detail-row">
+                <span class="detail-label">Seller</span>
+                <span class="detail-value">${escapeHtml(d.seller.display_name)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Email</span>
+                <span class="detail-value" style="font-size: 12px;">${d.seller.email}</span>
+              </div>
+              ${d.seller_responded_at ? `
+                <div class="detail-row">
+                  <span class="detail-label">Response</span>
+                  <span class="detail-value" style="color: ${d.counter_offer_amount ? 'var(--brand-green)' : 'var(--status-error)'};">
+                    ${d.counter_offer_amount ? `Counter: £${d.counter_offer_amount.toFixed(2)}` : 'Rejected'}
+                  </span>
+                </div>
+              ` : `
+                <div class="detail-row">
+                  <span class="detail-label">Status</span>
+                  <span class="detail-value" style="color: var(--status-warning);">No response yet</span>
+                </div>
+              `}
+              ${d.seller_response_text ? `<div style="margin-top: 12px; padding: 12px; background: var(--bg-primary); border-radius: 8px; font-style: italic; color: var(--text-secondary);">"${escapeHtml(d.seller_response_text)}"</div>` : ''}
+            </div>
+            ${d.seller_images && d.seller_images.length > 0 ? `
+              <h4 style="margin-top: 12px; font-size: 13px; color: var(--text-muted);">📷 Seller's Evidence (${d.seller_images.length})</h4>
+              <div class="evidence-grid">
+                ${d.seller_images.map(img => `
+                  <img class="evidence-image" src="${img.url}" onclick="openImage('${img.url}')" alt="Evidence">
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+
+        ${isResolved ? `
+          <div class="resolved-banner">
+            <h3>✅ Resolution</h3>
+            <div class="resolved-details">
+              <div class="detail-row">
+                <span class="detail-label">Decision</span>
+                <span class="detail-value">${formatResolutionType(d.resolution_type)}</span>
+              </div>
+              ${d.resolution_amount !== null ? `
+                <div class="detail-row">
+                  <span class="detail-label">Refund Amount</span>
+                  <span class="detail-value" style="color: var(--brand-green); font-weight: 600;">£${d.resolution_amount.toFixed(2)}</span>
+                </div>
+              ` : ''}
+              <div class="detail-row">
+                <span class="detail-label">Resolved On</span>
+                <span class="detail-value">${formatDate(d.resolved_at)}</span>
+              </div>
+              ${d.resolution_notes ? `
+                <div style="margin-top: 12px; padding: 12px; background: var(--bg-primary); border-radius: 8px;">
+                  <strong style="font-size: 12px; color: var(--text-muted);">Admin Notes:</strong>
+                  <p style="margin-top: 4px; font-size: 14px;">${escapeHtml(d.resolution_notes)}</p>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        ` : ''}
+
+        ${canResolve ? `
+          <div class="resolution-form">
+            <h3>⚖️ Make Your Decision</h3>
+            <div class="resolution-options">
+              <div class="resolution-option" data-type="full_refund" onclick="selectResolution('full_refund')">
+                <div class="resolution-option-title">Full Refund</div>
+                <div class="resolution-option-desc">£${d.order.amount.toFixed(2)} to buyer</div>
+              </div>
+              <div class="resolution-option" data-type="partial_refund" onclick="selectResolution('partial_refund')">
+                <div class="resolution-option-title">Partial Refund</div>
+                <div class="resolution-option-desc">Custom amount</div>
+              </div>
+              <div class="resolution-option" data-type="no_refund" onclick="selectResolution('no_refund')">
+                <div class="resolution-option-title">No Refund</div>
+                <div class="resolution-option-desc">Deny claim</div>
+              </div>
+            </div>
+            <div class="amount-input" id="amountInput" style="display: none;">
+              <label>Refund Amount:</label>
+              <span>£</span>
+              <input type="number" id="resolutionAmount" step="0.01" min="0.01" max="${d.order.amount}" value="${d.requested_refund_amount.toFixed(2)}">
+              <span style="color: var(--text-muted); font-size: 13px;">of £${d.order.amount.toFixed(2)} max</span>
+            </div>
+            <div class="resolution-notes">
+              <textarea id="resolutionNotes" placeholder="Explain your decision (this will be shown to both parties)..."></textarea>
+            </div>
+            <div class="resolution-actions">
+              <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+              <button class="btn btn-warning" id="resolveBtn" onclick="resolveDispute()">
+                ⚖️ Submit Decision
+              </button>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Original Listing -->
+        ${d.order.listing ? `
+        <div class="detail-section full-width" style="margin-top: 20px;">
+          <h3>🏷️ Original Listing</h3>
+          <div class="detail-card">
+            <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+              <div style="flex: 0 0 auto;">
+                <h4 style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">Listing Photos (${d.order.listing.images?.length || 0})</h4>
+                <div class="evidence-grid" style="grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); max-width: 400px;">
+                  ${d.order.listing.images?.map(img => `
+                    <img class="evidence-image" src="${img}" onclick="openImage('${img}')" alt="Listing photo" style="width: 80px; height: 80px;">
+                  `).join('') || '<span style="color: var(--text-muted); font-size: 13px;">No images</span>'}
+                </div>
+              </div>
+              <div style="flex: 1; min-width: 250px;">
+                <h4 style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">Description</h4>
+                <div style="background: var(--bg-primary); border-radius: 8px; padding: 12px; max-height: 150px; overflow-y: auto;">
+                  <p style="font-size: 14px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap;">${escapeHtml(d.order.listing.description) || 'No description'}</p>
+                </div>
+                <div style="margin-top: 12px;">
+                  <span style="font-size: 12px; color: var(--text-muted);">Listed Price: </span>
+                  <span style="font-size: 14px; font-weight: 600; color: var(--brand-green);">£${d.order.listing.price?.toFixed(2) || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+      `;
+    }
+
+    // ==================== RESOLUTION ====================
+    function selectResolution(type) {
+      selectedResolution = type;
+      document.querySelectorAll('.resolution-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.type === type);
+      });
+      document.getElementById('amountInput').style.display = type === 'partial_refund' ? 'flex' : 'none';
+    }
+
+    async function resolveDispute() {
+      if (!selectedResolution) {
+        alert('Please select a resolution type');
+        return;
+      }
+
+      const notes = document.getElementById('resolutionNotes').value.trim();
+      if (!notes) {
+        alert('Please provide notes explaining your decision');
+        return;
+      }
+
+      let amount = null;
+      if (selectedResolution === 'partial_refund') {
+        amount = parseFloat(document.getElementById('resolutionAmount').value);
+        if (isNaN(amount) || amount <= 0) {
+          alert('Please enter a valid refund amount');
+          return;
+        }
+        if (amount > currentDispute.order.amount) {
+          alert('Refund amount cannot exceed order amount');
+          return;
+        }
+      }
+
+      const btn = document.getElementById('resolveBtn');
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+
+      try {
+        const response = await apiRequest(`${API_BASE}/disputes/${currentDispute.id}/resolve`, {
+          method: 'PUT',
+          body: {
+            resolutionType: selectedResolution,
+            resolutionAmount: amount,
+            resolutionNotes: notes,
+          },
+        });
+
+        if (response.ok) {
+          alert('✅ Dispute resolved successfully!\n\nBoth buyer and seller have been notified.');
+          closeModal();
+          loadDisputes();
+        } else {
+          const data = await response.json();
+          alert('Error: ' + (data.error || 'Failed to resolve dispute'));
+        }
+      } catch (error) {
+        console.error('Resolution error:', error);
+        alert('Connection error. Please try again.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⚖️ Submit Decision';
+      }
+    }
+
+    // ==================== MODAL ====================
+    function closeModal() {
+      document.getElementById('detailModal').classList.remove('active');
+      currentDispute = null;
+      selectedResolution = null;
+    }
+  </script>
+</body>
+</html>

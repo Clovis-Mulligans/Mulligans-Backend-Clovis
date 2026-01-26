@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mulligans Admin - Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shared/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* Dashboard specific styles */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    
+    @media (max-width: 1200px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .welcome-banner {
+      background: linear-gradient(135deg, var(--brand-green) 0%, var(--brand-blue) 100%);
+      border-radius: 16px;
+      padding: 24px 32px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 4px 20px rgba(29, 198, 144, 0.3);
+    }
+    
+    .welcome-text h2 {
+      font-size: 24px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 8px;
+    }
+    
+    .welcome-text p {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+    
+    .welcome-stats {
+      display: flex;
+      gap: 32px;
+    }
+    
+    .welcome-stat {
+      text-align: center;
+    }
+    
+    .welcome-stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: white;
+    }
+    
+    .welcome-stat-label {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.7);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .attention-section {
+      margin-bottom: 24px;
+    }
+    
+    .attention-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    
+    @media (max-width: 900px) {
+      .attention-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .attention-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .attention-card:hover {
+      border-color: var(--brand-green);
+      transform: translateY(-2px);
+    }
+    
+    .attention-card.urgent {
+      border-color: var(--status-error);
+      background: rgba(239, 68, 68, 0.05);
+    }
+    
+    .attention-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    
+    .attention-icon.disputes { background: rgba(239, 68, 68, 0.15); }
+    .attention-icon.reports { background: rgba(249, 115, 22, 0.15); }
+    .attention-icon.returns { background: rgba(59, 130, 246, 0.15); }
+    
+    .attention-content h3 {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    
+    .attention-content p {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+    
+    .attention-arrow {
+      margin-left: auto;
+      color: var(--text-muted);
+      font-size: 20px;
+    }
+    
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .activity-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .activity-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg-primary);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .activity-item:hover {
+      background: var(--bg-tertiary);
+    }
+    
+    .activity-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+    
+    .activity-icon.dispute { background: rgba(239, 68, 68, 0.15); }
+    .activity-icon.report { background: rgba(249, 115, 22, 0.15); }
+    .activity-icon.return { background: rgba(59, 130, 246, 0.15); }
+    .activity-icon.order { background: rgba(16, 185, 129, 0.15); }
+    
+    .activity-content {
+      flex: 1;
+    }
+    
+    .activity-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    
+    .activity-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    
+    .activity-time {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <!-- ==================== LOGIN SCREEN ==================== -->
+  <div id="loginScreen" class="login-container">
+    <div class="login-card">
+      <div class="login-logo">
+        <h1>🏌️ MULLIGANS</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <div id="loginError" class="error-message"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="password">Admin Password</label>
+          <input type="password" id="password" placeholder="Enter admin password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" id="loginBtn" style="width: 100%;">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MAIN APP ==================== -->
+  <div id="appContainer" class="app-container">
+    <!-- Sidebar -->
+    <div id="sidebarContainer"></div>
+    
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <header class="main-header">
+        <button class="btn btn-ghost" onclick="toggleSidebar()" style="display: none;">☰</button>
+        <h1 class="page-title">Dashboard</h1>
+        <div class="header-actions">
+          <button class="btn btn-ghost" onclick="refreshDashboard()">🔄 Refresh</button>
+          <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+      </header>
+      
+      <main class="main-content">
+        <!-- Welcome Banner -->
+        <div class="welcome-banner">
+          <div class="welcome-text">
+            <h2>Welcome back! 👋</h2>
+            <p>Here's what's happening with Mulligans today.</p>
+          </div>
+          <div class="welcome-stats">
+            <div class="welcome-stat">
+              <div class="welcome-stat-value" id="todayOrders">-</div>
+              <div class="welcome-stat-label">Orders Today</div>
+            </div>
+            <div class="welcome-stat">
+              <div class="welcome-stat-value" id="todayRevenue">-</div>
+              <div class="welcome-stat-label">Revenue Today</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Needs Attention -->
+        <div class="attention-section">
+          <div class="section-header">
+            <h2 class="section-title">🔔 Needs Attention</h2>
+          </div>
+          <div class="attention-grid">
+            <a href="disputes.html" class="attention-card" id="attentionDisputes">
+              <div class="attention-icon disputes">⚖️</div>
+              <div class="attention-content">
+                <h3 id="escalatedDisputes">0</h3>
+                <p>Escalated Disputes</p>
+              </div>
+              <span class="attention-arrow">→</span>
+            </a>
+            <a href="reports.html" class="attention-card" id="attentionReports">
+              <div class="attention-icon reports">🚩</div>
+              <div class="attention-content">
+                <h3 id="pendingReports">0</h3>
+                <p>Pending Reports</p>
+              </div>
+              <span class="attention-arrow">→</span>
+            </a>
+            <a href="returns.html" class="attention-card" id="attentionReturns">
+              <div class="attention-icon returns">📦</div>
+              <div class="attention-content">
+                <h3 id="pendingReturns">0</h3>
+                <p>Returns to Process</p>
+              </div>
+              <span class="attention-arrow">→</span>
+            </a>
+          </div>
+        </div>
+        
+        <!-- Platform Stats -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon green">👥</div>
+            <div class="stat-content">
+              <div class="stat-value" id="totalUsers">-</div>
+              <div class="stat-label">Total Users</div>
+              <div class="stat-change up" id="usersChange">-</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon blue">📦</div>
+            <div class="stat-content">
+              <div class="stat-value" id="totalListings">-</div>
+              <div class="stat-label">Active Listings</div>
+              <div class="stat-change up" id="listingsChange">-</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon purple">🛒</div>
+            <div class="stat-content">
+              <div class="stat-value" id="totalOrders">-</div>
+              <div class="stat-label">Total Orders</div>
+              <div class="stat-change up" id="ordersChange">-</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon yellow">💰</div>
+            <div class="stat-content">
+              <div class="stat-value" id="totalGMV">-</div>
+              <div class="stat-label">Total GMV</div>
+              <div class="stat-change up" id="gmvChange">-</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Charts Row -->
+        <div class="chart-grid">
+          <!-- Orders Chart -->
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">📈 Orders (Last 7 Days)</h3>
+            </div>
+            <div class="card-body">
+              <div class="chart-container">
+                <canvas id="ordersChart"></canvas>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Revenue Chart -->
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">💷 Revenue (Last 7 Days)</h3>
+            </div>
+            <div class="card-body">
+              <div class="chart-container">
+                <canvas id="revenueChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Second Row -->
+        <div class="dashboard-grid">
+          <!-- Quick Actions -->
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">⚡ Quick Actions</h3>
+            </div>
+            <div class="card-body">
+              <div class="quick-actions">
+                <a href="disputes.html?filter=escalated" class="quick-action">
+                  <div class="quick-action-icon">🔴</div>
+                  <div class="quick-action-text">
+                    <h4>View Escalated</h4>
+                    <p>Disputes needing decision</p>
+                  </div>
+                </a>
+                <a href="reports.html?filter=pending" class="quick-action">
+                  <div class="quick-action-icon">🟠</div>
+                  <div class="quick-action-text">
+                    <h4>Review Reports</h4>
+                    <p>User reports to check</p>
+                  </div>
+                </a>
+                <a href="returns.html?filter=delivered" class="quick-action">
+                  <div class="quick-action-icon">💰</div>
+                  <div class="quick-action-text">
+                    <h4>Process Refunds</h4>
+                    <p>Delivered returns</p>
+                  </div>
+                </a>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Recent Activity -->
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">🕐 Recent Activity</h3>
+            </div>
+            <div class="card-body">
+              <div class="activity-list" id="activityList">
+                <div class="loading">
+                  <div class="spinner"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Signups Chart -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <h3 class="card-title">👥 User Signups (Last 30 Days)</h3>
+          </div>
+          <div class="card-body">
+            <div class="chart-container" style="height: 200px;">
+              <canvas id="signupsChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Image Modal -->
+  <div id="imageModal" class="image-modal" onclick="closeImageModal()">
+    <img id="imageModalImg" src="" alt="Image">
+  </div>
+
+  <!-- Scripts -->
+  <script src="shared/auth.js"></script>
+  <script src="shared/helpers.js"></script>
+  <script src="shared/nav.js"></script>
+  <script>
+    // ==================== DASHBOARD STATE ====================
+    let dashboardData = {};
+    let ordersChart, revenueChart, signupsChart;
+
+    // ==================== INITIALIZATION ====================
+    function initPage() {
+      initNav();
+      loadDashboardData();
+    }
+
+    async function loadDashboardData() {
+      try {
+        // Load platform stats
+        await loadPlatformStats();
+        
+        // Load attention items
+        await loadAttentionItems();
+        
+        // Load charts
+        await loadChartData();
+        
+        // Load recent activity
+        await loadRecentActivity();
+        
+      } catch (error) {
+        console.error('Failed to load dashboard:', error);
+      }
+    }
+
+    function refreshDashboard() {
+      loadDashboardData();
+      loadNavBadges();
+    }
+
+    // ==================== PLATFORM STATS ====================
+    async function loadPlatformStats() {
+      try {
+        const response = await apiRequest(`${API_BASE}/stats`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Update stat cards
+          document.getElementById('totalUsers').textContent = formatNumber(data.totalUsers || 0);
+          document.getElementById('totalListings').textContent = formatNumber(data.totalListings || 0);
+          document.getElementById('totalOrders').textContent = formatNumber(data.totalOrders || 0);
+          document.getElementById('totalGMV').textContent = formatCurrency(data.totalGMV || 0);
+          
+          // Update welcome stats
+          document.getElementById('todayOrders').textContent = formatNumber(data.todayOrders || 0);
+          document.getElementById('todayRevenue').textContent = formatCurrency(data.todayRevenue || 0);
+          
+          // Update change indicators
+          updateChangeIndicator('usersChange', data.usersChange);
+          updateChangeIndicator('listingsChange', data.listingsChange);
+          updateChangeIndicator('ordersChange', data.ordersChange);
+          updateChangeIndicator('gmvChange', data.gmvChange, true);
+        } else {
+          // Use placeholder data for demo
+          setPlaceholderStats();
+        }
+      } catch (error) {
+        console.error('Failed to load stats:', error);
+        setPlaceholderStats();
+      }
+    }
+
+    function setPlaceholderStats() {
+      document.getElementById('totalUsers').textContent = '-';
+      document.getElementById('totalListings').textContent = '-';
+      document.getElementById('totalOrders').textContent = '-';
+      document.getElementById('totalGMV').textContent = '-';
+      document.getElementById('todayOrders').textContent = '-';
+      document.getElementById('todayRevenue').textContent = '-';
+    }
+
+    function updateChangeIndicator(elementId, change, isCurrency = false) {
+      const element = document.getElementById(elementId);
+      if (!element || change === undefined) return;
+      
+      const isPositive = change >= 0;
+      element.className = `stat-change ${isPositive ? 'up' : 'down'}`;
+      element.innerHTML = `${isPositive ? '↑' : '↓'} ${isCurrency ? formatCurrency(Math.abs(change)) : Math.abs(change)} this week`;
+    }
+
+    // ==================== ATTENTION ITEMS ====================
+    async function loadAttentionItems() {
+      try {
+        // Load disputes
+        const disputesRes = await apiRequest(`${API_BASE}/disputes`);
+        if (disputesRes.ok) {
+          const data = await disputesRes.json();
+          const escalated = (data.disputes || []).filter(d => d.status === 'escalated').length;
+          document.getElementById('escalatedDisputes').textContent = escalated;
+          
+          const card = document.getElementById('attentionDisputes');
+          if (escalated > 0) card.classList.add('urgent');
+          else card.classList.remove('urgent');
+          
+          updateNavBadge('disputes', escalated);
+        }
+
+        // Load reports
+        const reportsRes = await apiRequest(`${API_BASE}/reports`);
+        if (reportsRes.ok) {
+          const data = await reportsRes.json();
+          const pending = data.stats?.pending || 0;
+          document.getElementById('pendingReports').textContent = pending;
+          
+          const card = document.getElementById('attentionReports');
+          if (pending > 0) card.classList.add('urgent');
+          else card.classList.remove('urgent');
+          
+          updateNavBadge('reports', pending);
+        }
+
+        // Load returns
+        const returnsRes = await apiRequest(`${API_BASE}/returns?tab=pending`);
+        if (returnsRes.ok) {
+          const data = await returnsRes.json();
+          const pending = (data.stats?.pending || 0) + (data.stats?.delivered || 0);
+          document.getElementById('pendingReturns').textContent = pending;
+          
+          const card = document.getElementById('attentionReturns');
+          if (pending > 0) card.classList.add('urgent');
+          else card.classList.remove('urgent');
+          
+          updateNavBadge('returns', pending);
+        }
+      } catch (error) {
+        console.error('Failed to load attention items:', error);
+      }
+    }
+
+    // ==================== CHARTS ====================
+    async function loadChartData() {
+      try {
+        const response = await apiRequest(`${API_BASE}/stats/charts`);
+        
+        let chartData;
+        if (response.ok) {
+          chartData = await response.json();
+        } else {
+          // Use demo data
+          chartData = generateDemoChartData();
+        }
+        
+        renderOrdersChart(chartData.orders || []);
+        renderRevenueChart(chartData.revenue || []);
+        renderSignupsChart(chartData.signups || []);
+        
+      } catch (error) {
+        console.error('Failed to load chart data:', error);
+        const demoData = generateDemoChartData();
+        renderOrdersChart(demoData.orders);
+        renderRevenueChart(demoData.revenue);
+        renderSignupsChart(demoData.signups);
+      }
+    }
+
+    function generateDemoChartData() {
+      const labels7Days = [];
+      const labels30Days = [];
+      const now = new Date();
+      
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        labels7Days.push(d.toLocaleDateString('en-GB', { weekday: 'short' }));
+      }
+      
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        labels30Days.push(d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
+      }
+      
+      return {
+        orders: {
+          labels: labels7Days,
+          data: [3, 5, 2, 8, 4, 6, 7]
+        },
+        revenue: {
+          labels: labels7Days,
+          data: [150, 280, 95, 420, 185, 310, 375]
+        },
+        signups: {
+          labels: labels30Days,
+          data: Array.from({ length: 30 }, () => Math.floor(Math.random() * 10) + 1)
+        }
+      };
+    }
+
+    function renderOrdersChart(data) {
+      const ctx = document.getElementById('ordersChart')?.getContext('2d');
+      if (!ctx) return;
+      
+      if (ordersChart) ordersChart.destroy();
+      
+      ordersChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: data.labels || [],
+          datasets: [{
+            label: 'Orders',
+            data: data.data || [],
+            backgroundColor: 'rgba(29, 198, 144, 0.8)',
+            borderColor: '#1DC690',
+            borderWidth: 1,
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94A3B8' }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94A3B8' }
+            }
+          }
+        }
+      });
+    }
+
+    function renderRevenueChart(data) {
+      const ctx = document.getElementById('revenueChart')?.getContext('2d');
+      if (!ctx) return;
+      
+      if (revenueChart) revenueChart.destroy();
+      
+      revenueChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.labels || [],
+          datasets: [{
+            label: 'Revenue (£)',
+            data: data.data || [],
+            borderColor: '#278AB0',
+            backgroundColor: 'rgba(39, 138, 176, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointBackgroundColor: '#278AB0',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { 
+                color: '#94A3B8',
+                callback: (value) => '£' + value
+              }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94A3B8' }
+            }
+          }
+        }
+      });
+    }
+
+    function renderSignupsChart(data) {
+      const ctx = document.getElementById('signupsChart')?.getContext('2d');
+      if (!ctx) return;
+      
+      if (signupsChart) signupsChart.destroy();
+      
+      signupsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.labels || [],
+          datasets: [{
+            label: 'Signups',
+            data: data.data || [],
+            borderColor: '#1DC690',
+            backgroundColor: 'rgba(29, 198, 144, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94A3B8' }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { 
+                color: '#94A3B8',
+                maxTicksLimit: 10
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // ==================== RECENT ACTIVITY ====================
+    async function loadRecentActivity() {
+      const container = document.getElementById('activityList');
+      
+      try {
+        // Combine recent disputes, reports, returns
+        const activities = [];
+        
+        // Load recent disputes
+        const disputesRes = await apiRequest(`${API_BASE}/disputes`);
+        if (disputesRes.ok) {
+          const data = await disputesRes.json();
+          (data.disputes || []).slice(0, 3).forEach(d => {
+            activities.push({
+              type: 'dispute',
+              title: `Dispute: ${d.order?.listing_title || 'Unknown Item'}`,
+              meta: `${d.buyer?.display_name} vs ${d.seller?.display_name}`,
+              time: d.created_at,
+              link: `disputes.html?id=${d.id}`
+            });
+          });
+        }
+
+        // Load recent reports
+        const reportsRes = await apiRequest(`${API_BASE}/reports`);
+        if (reportsRes.ok) {
+          const data = await reportsRes.json();
+          (data.reports || []).slice(0, 2).forEach(r => {
+            activities.push({
+              type: 'report',
+              title: `Report: ${r.reported_user?.display_name || 'Unknown User'}`,
+              meta: formatReportReason(r.reason),
+              time: r.created_at,
+              link: `reports.html?id=${r.id}`
+            });
+          });
+        }
+
+        // Sort by time
+        activities.sort((a, b) => new Date(b.time) - new Date(a.time));
+
+        if (activities.length === 0) {
+          container.innerHTML = `
+            <div class="empty-state" style="padding: 20px;">
+              <div class="empty-state-icon">✨</div>
+              <p>No recent activity</p>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = activities.slice(0, 5).map(activity => `
+          <a href="${activity.link}" class="activity-item">
+            <div class="activity-icon ${activity.type}">
+              ${activity.type === 'dispute' ? '⚖️' : activity.type === 'report' ? '🚩' : '📦'}
+            </div>
+            <div class="activity-content">
+              <div class="activity-title">${escapeHtml(activity.title)}</div>
+              <div class="activity-meta">${escapeHtml(activity.meta)}</div>
+            </div>
+            <div class="activity-time">${getAge(activity.time)}</div>
+          </a>
+        `).join('');
+
+      } catch (error) {
+        console.error('Failed to load activity:', error);
+        container.innerHTML = `
+          <div class="empty-state" style="padding: 20px;">
+            <div class="empty-state-icon">⚠️</div>
+            <p>Failed to load activity</p>
+          </div>
+        `;
+      }
+    }
+  </script>
+</body>
+</html>
