@@ -163,7 +163,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     console.log('📦 Getting Shippo rates for order:', orderId);
     console.log('📍 Seller postcode:', sellerPostcode);
     console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
-    console.log('📦 Parcel size:', parcelSize, parcelConfig);
+    console.log('🛡️ Insurance value:', order.insured_value?.toString() || order.amount.toString());
 
     // Determine city based on postcode prefix for rate estimation
     const getEstimatedCity = (postcode: string): string => {
@@ -244,6 +244,14 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
         weight: parcelConfig.weight,
         massUnit: 'kg',
       }],
+      // ✅ INSURANCE: Add XCover insurance via Shippo
+      extra: {
+        insurance: {
+          amount: order.insured_value?.toString() || order.amount.toString(),
+          currency: 'GBP',
+          content: 'Golf equipment',
+        },
+      },
       async: false,
     });
 
