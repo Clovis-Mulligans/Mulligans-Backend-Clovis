@@ -284,8 +284,8 @@ export class CartCheckoutController {
         (sum, item) => sum + (item.quantity || 1),
         0
       );
-      // ✅ FIXED: £0.99 fee applies PER ITEM, not per cart
-const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * totalQuantity);
+      // £0.99 fee applies PER SELLER (not per item)
+const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Object.keys(sellerGroups).length);
       const grandTotal = itemsTotal + shippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);
@@ -627,7 +627,7 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
                 quantity: orderQuantity,
                 selected_size: selectedSize,
                 shipping_cost: orderShipping,
-                seller_payout: (itemPrice * orderQuantity) + orderShipping,
+                seller_payout: itemPrice * orderQuantity,
                 listing_title: listing.title,
                 listing_image: listingImage,
                 listing_price: itemPrice,

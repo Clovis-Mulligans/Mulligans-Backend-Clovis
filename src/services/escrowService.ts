@@ -361,6 +361,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
 // AUTO-RELEASE ESCROW
 // Runs daily - releases funds for delivered orders after 3 days
 // ✅ BULLETPROOF: Checks for disputes AND returns before releasing
+// ✅ FIXED: Groups orders by tracking_number to prevent double shipping charges
 // ============================================
 export async function autoReleaseEscrow(): Promise<void> {
   console.log('[ESCROW] Running escrow release check...');
@@ -369,7 +370,6 @@ export async function autoReleaseEscrow(): Promise<void> {
     const now = new Date();
 
     // Query orders ready for release
-    // Note: We do additional safety checks in the loop
     const ordersToRelease = await prisma.orders.findMany({
       where: {
         status: 'delivered',
@@ -409,63 +409,119 @@ export async function autoReleaseEscrow(): Promise<void> {
 
     console.log(`[ESCROW] Found ${ordersToRelease.length} orders to check for escrow release`);
 
+    if (ordersToRelease.length === 0) {
+      console.log('[ESCROW] No orders to release');
+      return;
+    }
+
+    // ============================================
+    // GROUP ORDERS BY TRACKING NUMBER
+    // Orders shipped together should be paid out together
+    // ============================================
+    const ordersByTracking: { [key: string]: typeof ordersToRelease } = {};
+    
     for (const order of ordersToRelease) {
+      // Use tracking_number if available, otherwise use order.id as fallback
+      // This handles legacy orders without tracking numbers
+      const groupKey = order.tracking_number || `single_${order.id}`;
+      
+      if (!ordersByTracking[groupKey]) {
+        ordersByTracking[groupKey] = [];
+      }
+      ordersByTracking[groupKey].push(order);
+    }
+
+    console.log(`[ESCROW] Grouped into ${Object.keys(ordersByTracking).length} tracking groups`);
+
+    // ============================================
+    // PROCESS EACH TRACKING GROUP
+    // ============================================
+    for (const [trackingKey, orders] of Object.entries(ordersByTracking)) {
+      const isMultiOrderGroup = !trackingKey.startsWith('single_');
+      const firstOrder = orders[0];
+      const seller = firstOrder.users_orders_seller_idTousers;
+      
+      console.log(`[ESCROW] Processing group "${trackingKey}" with ${orders.length} order(s)`);
+
       try {
-        console.log(`[ESCROW] Processing order ${order.id} for escrow release`);
+        // ✅ SAFETY CHECK 1: Re-verify ALL orders in group still ready
+        let allOrdersReady = true;
+        for (const order of orders) {
+          const freshOrder = await prisma.orders.findUnique({
+            where: { id: order.id },
+            select: { 
+              status: true, 
+              stripe_transfer_id: true,
+              escrow_release_at: true,
+            },
+          });
 
-        // ✅ SAFETY CHECK 1: Re-verify order status hasn't changed
-        const freshOrder = await prisma.orders.findUnique({
-          where: { id: order.id },
-          select: { 
-            status: true, 
-            stripe_transfer_id: true,
-            escrow_release_at: true,
-          },
-        });
+          if (freshOrder?.status !== 'delivered') {
+            console.log(`[ESCROW] ⚠️ Order ${order.id} status changed to ${freshOrder?.status}, skipping group`);
+            allOrdersReady = false;
+            break;
+          }
 
-        if (freshOrder?.status !== 'delivered') {
-          console.log(`[ESCROW] ⚠️ Order ${order.id} status changed to ${freshOrder?.status}, skipping`);
-          continue;
+          if (freshOrder?.stripe_transfer_id) {
+            console.log(`[ESCROW] ⚠️ Order ${order.id} already has transfer, skipping group`);
+            allOrdersReady = false;
+            break;
+          }
         }
 
-        if (freshOrder?.stripe_transfer_id) {
-          console.log(`[ESCROW] ⚠️ Order ${order.id} already has transfer ${freshOrder.stripe_transfer_id}, skipping`);
-          continue;
+        if (!allOrdersReady) continue;
+
+        // ✅ SAFETY CHECK 2: Check for active disputes on ANY order in group
+        let hasDispute = false;
+        for (const order of orders) {
+          if (await hasBlockingDispute(order.id)) {
+            console.log(`[ESCROW] ⚠️ Order ${order.id} has active dispute, skipping group`);
+            hasDispute = true;
+            break;
+          }
         }
+        if (hasDispute) continue;
 
-        // ✅ SAFETY CHECK 2: Check for active disputes
-        if (await hasBlockingDispute(order.id)) {
-          console.log(`[ESCROW] ⚠️ Order ${order.id} has active dispute, skipping escrow release`);
-          continue;
+        // ✅ SAFETY CHECK 3: Check for active returns on ANY order in group
+        let hasReturn = false;
+        for (const order of orders) {
+          if (await hasBlockingReturn(order.id)) {
+            console.log(`[ESCROW] ⚠️ Order ${order.id} has active return, skipping group`);
+            hasReturn = true;
+            break;
+          }
         }
+        if (hasReturn) continue;
 
-        // ✅ SAFETY CHECK 3: Check for active returns
-        if (await hasBlockingReturn(order.id)) {
-          console.log(`[ESCROW] ⚠️ Order ${order.id} has active return, skipping escrow release`);
-          continue;
-        }
+        console.log(`[ESCROW] ✅ Group "${trackingKey}" passed all safety checks`);
 
-        console.log(`[ESCROW] ✅ Order ${order.id} passed all safety checks, releasing escrow`);
+        // ============================================
+        // CALCULATE CORRECT PAYOUT FOR GROUP
+        // ============================================
+        // Items: sum of all order amounts
+        const itemsTotal = orders.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
+        
+        // Shipping: only count ONCE (use MAX as they should all be the same)
+        const shippingAmount = Math.max(...orders.map(o => parseFloat((o.shipping_cost || 0).toString())));
+        
+        // Label cost: sum (typically only one order has it)
+        const labelCostTotal = orders.reduce((sum, o) => sum + parseFloat((o.label_cost || 0).toString()), 0);
+        
+        // Calculate actual payout
+        const actualPayout = itemsTotal + shippingAmount - labelCostTotal;
 
-        const seller = order.users_orders_seller_idTousers;
+        console.log(`[ESCROW] Payout calculation for group "${trackingKey}":`);
+        console.log(`  - Items total (${orders.length} orders): £${itemsTotal.toFixed(2)}`);
+        console.log(`  - Shipping (once): £${shippingAmount.toFixed(2)}`);
+        console.log(`  - Label cost deducted: £${labelCostTotal.toFixed(2)}`);
+        console.log(`  - Actual transfer amount: £${actualPayout.toFixed(2)}`);
 
-        // Transfer funds to seller's Connect account
-        if (seller.stripe_connect_id && order.seller_payout) {
-          // Calculate actual payout by deducting label cost
-          const originalPayout = parseFloat(order.seller_payout.toString());
-          const labelCost = order.label_cost ? parseFloat(order.label_cost.toString()) : 0;
-          const actualPayout = originalPayout - labelCost;
+        // Safety check: Don't transfer negative or zero amounts
+        if (actualPayout <= 0) {
+          console.error(`[ESCROW] ❌ Cannot transfer £${actualPayout.toFixed(2)} - marking group as completed without transfer`);
           
-          console.log(`[ESCROW] Payout calculation for order ${order.id}:`);
-          console.log(`  - Original seller payout: £${originalPayout.toFixed(2)}`);
-          console.log(`  - Label cost deducted: £${labelCost.toFixed(2)}`);
-          console.log(`  - Actual transfer amount: £${actualPayout.toFixed(2)}`);
-
-          // Safety check: Don't transfer negative or zero amounts
-          if (actualPayout <= 0) {
-            console.error(`[ESCROW] ❌ Cannot transfer £${actualPayout.toFixed(2)} - skipping order ${order.id}`);
-            
-            // Still mark as completed but notify about the issue
+          // Mark all orders as completed
+          for (const order of orders) {
             await prisma.orders.update({
               where: { id: order.id },
               data: {
@@ -474,139 +530,159 @@ export async function autoReleaseEscrow(): Promise<void> {
                 updated_at: now,
               },
             });
-
-            // Notify seller about the issue
-            await prisma.notifications.create({
-              data: {
-                id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                user_id: seller.id,
-                type: 'payout',
-                title: 'Order Completed - No Payout Due',
-                message: `Order completed but shipping label cost (£${labelCost.toFixed(2)}) exceeded the payout amount.`,
-                related_id: order.id,
-              },
-            });
-
-            continue;
           }
 
-          const transferAmountPence = Math.round(actualPayout * 100);
-          let transferId: string | null = null;
-
-          try {
-            const transfer = await stripe.transfers.create({
-              amount: transferAmountPence,
-              currency: 'gbp',
-              destination: seller.stripe_connect_id,
-              metadata: {
-                order_id: order.id,
-                type: 'escrow_release',
-                original_payout: originalPayout.toFixed(2),
-                label_cost_deducted: labelCost.toFixed(2),
-                actual_payout: actualPayout.toFixed(2),
-                released_at: now.toISOString(),
-              },
-            }, {
-              idempotencyKey: `escrow_release_${order.id}`, // ✅ Prevent double transfer
-            });
-
-            transferId = transfer.id;
-            console.log(`[ESCROW] ✅ Transfer ${transfer.id} created for £${actualPayout.toFixed(2)} to ${seller.stripe_connect_id}`);
-          } catch (transferError: any) {
-            console.error(`[ESCROW] ❌ Transfer failed for order ${order.id}:`, transferError.message);
-            continue; // Don't update status if transfer failed
-          }
-
-          // ✅ Update order status IMMEDIATELY after successful transfer
-          await prisma.orders.update({
-            where: { id: order.id },
-            data: {
-              status: 'completed',
-              completed_at: now,
-              stripe_transfer_id: transferId, // ✅ Store transfer ID to prevent double processing
-              updated_at: now,
-            },
-          });
-
-          // Update seller's total_sales count
-          await prisma.users.update({
-            where: { id: seller.id },
-            data: {
-              total_sales: { increment: 1 },
-              updated_at: now,
-            },
-          });
-
-          // Notify seller
-          const listingImage = order.listings?.images?.[0]?.image_url || null;
-          const listingTitle = order.listings?.title || 'Your item';
-          const payoutAmount = actualPayout.toFixed(2);
-
-          let notificationMessage = `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`;
-          if (labelCost > 0) {
-            notificationMessage = `£${payoutAmount} for "${listingTitle}" has been transferred to your account (£${labelCost.toFixed(2)} label cost deducted).`;
-          }
-
+          // Notify seller about the issue
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: seller.id,
               type: 'payout',
-              title: 'Payment Released!',
-              message: notificationMessage,
-              image_url: listingImage,
-              related_id: order.id,
+              title: 'Order Completed - No Payout Due',
+              message: `Order completed but shipping label cost (£${labelCostTotal.toFixed(2)}) exceeded the payout amount.`,
+              related_id: firstOrder.id,
             },
           });
 
-          // PUSH: Notify seller of payout
-          try {
-            await sendPushNotification(
-              seller.id,
-              'Payment Released!',
-              `£${payoutAmount} for "${listingTitle}" is on its way to your bank.`,
-              { type: 'payout', order_id: order.id }
-            );
-          } catch (pushErr) {
-            console.error('[ESCROW] Push to seller failed:', pushErr);
-          }
+          continue;
+        }
 
-          // EMAIL: Send escrow released email to seller
-          if (seller.email) {
-            try {
-              const salePrice = parseFloat(order.amount.toString()).toFixed(2);
-              const platformFee = parseFloat(order.amount.toString()) - originalPayout;
-              const totalFees = (platformFee + labelCost).toFixed(2);
-              
-              await sendEscrowReleased(seller.email, {
-                itemTitle: listingTitle,
-                orderNumber: order.id,
-                salePrice: salePrice,
-                fees: totalFees,
-                payoutAmount: payoutAmount,
-              });
-              console.log('[ESCROW] Escrow released email sent to seller:', seller.email);
-            } catch (emailError) {
-              console.error('[ESCROW] Failed to send escrow released email:', emailError);
-            }
-          }
-
-          console.log(`[ESCROW] ✅ Escrow released for order ${order.id}`);
-        } else {
-          // No Stripe Connect - just mark as completed
-          console.log(`[ESCROW] ⚠️ Seller has no Stripe Connect, marking order ${order.id} as completed without transfer`);
+        // ============================================
+        // CREATE STRIPE TRANSFER
+        // ============================================
+        if (!seller.stripe_connect_id) {
+          console.log(`[ESCROW] ⚠️ Seller has no Stripe Connect, marking orders as completed without transfer`);
           
+          for (const order of orders) {
+            await prisma.orders.update({
+              where: { id: order.id },
+              data: {
+                status: 'completed',
+                completed_at: now,
+                updated_at: now,
+              },
+            });
+          }
+          continue;
+        }
+
+        const transferAmountPence = Math.round(actualPayout * 100);
+        let transferId: string | null = null;
+        const orderIds = orders.map(o => o.id).join(',');
+
+        try {
+          const transfer = await stripe.transfers.create({
+            amount: transferAmountPence,
+            currency: 'gbp',
+            destination: seller.stripe_connect_id,
+            metadata: {
+              tracking_number: trackingKey.startsWith('single_') ? 'none' : trackingKey,
+              order_ids: orderIds,
+              order_count: orders.length.toString(),
+              items_total: itemsTotal.toFixed(2),
+              shipping_included: shippingAmount.toFixed(2),
+              label_cost_deducted: labelCostTotal.toFixed(2),
+              actual_payout: actualPayout.toFixed(2),
+              released_at: now.toISOString(),
+            },
+          }, {
+            idempotencyKey: `escrow_release_group_${trackingKey}`, // ✅ Prevent double transfer
+          });
+
+          transferId = transfer.id;
+          console.log(`[ESCROW] ✅ Transfer ${transfer.id} created for £${actualPayout.toFixed(2)} (${orders.length} orders)`);
+        } catch (transferError: any) {
+          console.error(`[ESCROW] ❌ Transfer failed for group ${trackingKey}:`, transferError.message);
+          continue; // Don't update status if transfer failed
+        }
+
+        // ============================================
+        // UPDATE ALL ORDERS IN GROUP
+        // ============================================
+        for (const order of orders) {
           await prisma.orders.update({
             where: { id: order.id },
             data: {
               status: 'completed',
               completed_at: now,
+              stripe_transfer_id: transferId, // ✅ Same transfer ID for all orders
               updated_at: now,
             },
           });
         }
-      } catch (orderError: any) {
-        console.error(`[ESCROW] ❌ Failed to release escrow for order ${order.id}:`, orderError.message);
+
+        // Update seller's total_sales count (once per order, not per group)
+        await prisma.users.update({
+          where: { id: seller.id },
+          data: {
+            total_sales: { increment: orders.length },
+            updated_at: now,
+          },
+        });
+
+        // ============================================
+        // NOTIFY SELLER
+        // ============================================
+        const listingImage = firstOrder.listings?.images?.[0]?.image_url || null;
+        const payoutAmount = actualPayout.toFixed(2);
+        
+        // Build notification message
+        let itemDescription: string;
+        if (orders.length === 1) {
+          itemDescription = firstOrder.listings?.title || 'Your item';
+        } else {
+          itemDescription = `${orders.length} items`;
+        }
+
+        let notificationMessage = `£${payoutAmount} for "${itemDescription}" has been transferred to your account.`;
+        if (labelCostTotal > 0) {
+          notificationMessage = `£${payoutAmount} for "${itemDescription}" has been transferred (£${labelCostTotal.toFixed(2)} label cost deducted).`;
+        }
+
+        await prisma.notifications.create({
+          data: {
+            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            user_id: seller.id,
+            type: 'payout',
+            title: 'Payment Released!',
+            message: notificationMessage,
+            image_url: listingImage,
+            related_id: firstOrder.id,
+          },
+        });
+
+        // PUSH: Notify seller of payout
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Payment Released!',
+            `£${payoutAmount} for "${itemDescription}" is on its way to your bank.`,
+            { type: 'payout', order_id: firstOrder.id }
+          );
+        } catch (pushErr) {
+          console.error('[ESCROW] Push to seller failed:', pushErr);
+        }
+
+        // EMAIL: Send escrow released email to seller
+        if (seller.email) {
+          try {
+            await sendEscrowReleased(seller.email, {
+              itemTitle: itemDescription,
+              orderNumber: orders.length === 1 ? firstOrder.id : `${orders.length} orders`,
+              salePrice: itemsTotal.toFixed(2),
+              fees: labelCostTotal.toFixed(2),
+              payoutAmount: payoutAmount,
+            });
+            console.log('[ESCROW] Escrow released email sent to seller:', seller.email);
+          } catch (emailError) {
+            console.error('[ESCROW] Failed to send escrow released email:', emailError);
+          }
+        }
+
+        console.log(`[ESCROW] ✅ Escrow released for group "${trackingKey}" (${orders.length} orders)`);
+
+      } catch (groupError: any) {
+        console.error(`[ESCROW] ❌ Failed to release escrow for group ${trackingKey}:`, groupError.message);
       }
     }
 
