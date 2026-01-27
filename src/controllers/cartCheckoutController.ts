@@ -29,6 +29,7 @@ interface AuthenticatedRequest extends Request {
 // Platform fee calculation
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
+const INSURANCE_RATE = 0.0125; // 1.25% shipping insurance (Shippo/XCover)
 
 // Escrow constants
 const SHIPPING_DEADLINE_DAYS = 5;
@@ -276,25 +277,33 @@ export class CartCheckoutController {
         (sum, item) => sum + parseFloat(item.listings.price.toString()) * (item.quantity || 1),
         0
       );
-      const shippingTotal = Object.values(sellerGroups).reduce(
+      const baseShippingTotal = Object.values(sellerGroups).reduce(
         (sum, group) => sum + group.shippingTotal,
         0
       );
+      
+      // ✅ INSURANCE: Calculate insurance premium (1.25% of item value)
+      const insurancePremium = itemsTotal * INSURANCE_RATE;
+      const insuredValue = itemsTotal;
+      const insuredShippingTotal = baseShippingTotal + insurancePremium;
       const totalQuantity = cartItems.reduce(
         (sum, item) => sum + (item.quantity || 1),
         0
       );
+      
       // £0.99 fee applies PER SELLER (not per item)
-const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Object.keys(sellerGroups).length);
-      const grandTotal = itemsTotal + shippingTotal + platformFee;
+      const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Object.keys(sellerGroups).length);
+      const grandTotal = itemsTotal + insuredShippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);
       const platformFeePence = Math.round(platformFee * 100);
-      const shippingTotalPence = Math.round(shippingTotal * 100);
+      const insuredShippingPence = Math.round(insuredShippingTotal * 100);
 
       console.log('[CART] Cart checkout price breakdown:', {
         itemsTotal: itemsTotal.toFixed(2),
-        shippingTotal: shippingTotal.toFixed(2),
+        baseShipping: baseShippingTotal.toFixed(2),
+        insurancePremium: insurancePremium.toFixed(2),
+        insuredShippingTotal: insuredShippingTotal.toFixed(2),
         platformFee: platformFee.toFixed(2),
         grandTotal: grandTotal.toFixed(2),
         itemCount: cartItems.length,
@@ -333,16 +342,16 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
         quantity: 1,
       });
 
-      // Add shipping as a line item (if there's any shipping cost)
-      if (shippingTotalPence > 0) {
+      // ✅ INSURANCE: Add "Insured Shipping" as line item
+      if (insuredShippingPence > 0) {
         lineItems.push({
           price_data: {
             currency: 'gbp',
             product_data: {
-              name: 'Shipping',
-              description: `Delivery for ${totalQuantity} item${totalQuantity > 1 ? 's' : ''}`,
+              name: 'Insured Shipping',
+              description: `Delivery for ${totalQuantity} item${totalQuantity > 1 ? 's' : ''} with full loss & damage protection`,
             },
-            unit_amount: shippingTotalPence,
+            unit_amount: insuredShippingPence,
           },
           quantity: 1,
         });
@@ -380,7 +389,10 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
           type: 'cart_checkout',
           buyer_id: userId,
           items_total: itemsTotal.toFixed(2),
-          shipping_total: shippingTotal.toFixed(2),
+          shipping_total: insuredShippingTotal.toFixed(2),
+          base_shipping: baseShippingTotal.toFixed(2),
+          insurance_premium: insurancePremium.toFixed(2),
+          insured_value: insuredValue.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           grand_total: grandTotal.toFixed(2),
           item_count: cartItems.length.toString(),
@@ -403,11 +415,13 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
       res.json({
         sessionId: session.id,
         url: session.url,
-        summary: {
+       summary: {
           itemCount: cartItems.length,
           totalQuantity: totalQuantity,
           itemsTotal: itemsTotal.toFixed(2),
-          shippingTotal: shippingTotal.toFixed(2),
+          baseShipping: baseShippingTotal.toFixed(2),
+          insurancePremium: insurancePremium.toFixed(2),
+          insuredShippingTotal: insuredShippingTotal.toFixed(2),
           platformFee: platformFee.toFixed(2),
           grandTotal: grandTotal.toFixed(2),
         },
@@ -436,6 +450,10 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
       // ✅ Reconstruct seller breakdown from database instead of metadata
       const sellerIds = (metadata.seller_ids || '').split(',').filter(Boolean);
       const firstItemImage = metadata.first_item_image || null;
+
+      // ✅ INSURANCE: Get insurance values from metadata
+      const insurancePremium = parseFloat(metadata.insurance_premium || '0');
+      const insuredValue = parseFloat(metadata.insured_value || '0');
 
       // Fetch listings to reconstruct seller breakdown
       const listings = await prisma.listings.findMany({
@@ -556,6 +574,10 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
 
       // Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
+
+        // ✅ INSURANCE: Calculate total items value for proportional insurance split
+      const totalItemsValue = sellerBreakdown.reduce((sum, s) => sum + s.subtotal, 0);
+
         for (const sellerData of sellerBreakdown) {
           const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
           
@@ -616,6 +638,9 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
               quantity: orderQuantity,
             });
 
+            // ✅ INSURANCE: Calculate this order's item total for insurance proportion
+            const orderItemTotal = itemPrice * orderQuantity;
+
             // Create order
             const order = await tx.orders.create({
               data: {
@@ -638,6 +663,9 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Ob
                 auto_cancel_at: autoCancelAt,
                 shipping_address: shippingAddressJson ?? Prisma.JsonNull,
                 updated_at: new Date(),
+                // ✅ INSURANCE: Store insurance values on order
+                insurance_premium: (orderItemTotal / totalItemsValue) * insurancePremium,
+                insured_value: orderItemTotal,
               },
             });
 

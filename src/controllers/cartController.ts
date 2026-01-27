@@ -13,6 +13,7 @@ const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 // Buyer protection fee
 const BUYER_PROTECTION_PERCENTAGE = 0.075; // 7.5%
 const BUYER_PROTECTION_FIXED = 0.99; // £0.99
+const INSURANCE_RATE = 0.0125; // 1.25% shipping insurance
 
 // ============================================
 // HELPER: Get available stock for a specific size
@@ -197,16 +198,21 @@ export const CartController = {
       // Convert to array
       const sellers = Object.values(sellerGroups);
 
-      // ✅ Calculate totals (using line totals which include quantity)
+      
+// ✅ Calculate totals (using line totals which include quantity)
       const itemsTotal = sellers.reduce((sum, s) => sum + s.subtotal, 0);
-      const shippingTotal = sellers.reduce((sum, s) => sum + (s.shipping_cost || 0), 0);
+      const baseShippingTotal = sellers.reduce((sum, s) => sum + (s.shipping_cost || 0), 0);
       
       // ✅ Total items count (sum of quantities) - moved up for fee calculation
       const totalItemCount = itemsWithAvailability.reduce((sum, item) => sum + item.quantity, 0);
       
+      // ✅ INSURANCE: Calculate insurance premium (1.25% of item value)
+      const insurancePremium = itemsTotal * INSURANCE_RATE;
+      const insuredShippingTotal = baseShippingTotal + insurancePremium;
+      
       // ✅ FIXED: £0.99 fee applies PER ITEM, not per cart
       const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_PERCENTAGE) + (BUYER_PROTECTION_FIXED * totalItemCount);
-      const grandTotal = itemsTotal + shippingTotal + buyerProtectionFee;
+      const grandTotal = itemsTotal + insuredShippingTotal + buyerProtectionFee;
 
       // Generate warnings for items in multiple carts
       const warnings = itemsWithAvailability
@@ -233,7 +239,9 @@ export const CartController = {
         sellers,
         summary: {
           items_total: Number(itemsTotal.toFixed(2)),
-          shipping_total: Number(shippingTotal.toFixed(2)),
+          base_shipping: baseShippingTotal,
+        insurance_premium: insurancePremium,
+        insured_shipping_total: insuredShippingTotal,
           buyer_protection_fee: Number(buyerProtectionFee.toFixed(2)),
           grand_total: Number(grandTotal.toFixed(2)),
           item_count: totalItemCount

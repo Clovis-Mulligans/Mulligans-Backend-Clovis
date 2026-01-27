@@ -185,6 +185,10 @@ model orders {
   refund_amount              Decimal?          @db.Decimal(10, 2)
   stripe_refund_id           String?
   lost_notification_sent_at  DateTime?        // ✅ NEW: Track lost notification to prevent spam
+  insurance_premium             Decimal?          @db.Decimal(10, 2)
+  insured_value                 Decimal?          @db.Decimal(10, 2)
+  insurance_claim_status        String?
+  insurance_claim_id            String?
 
   @@index([buyer_id])
   @@index([created_at])
