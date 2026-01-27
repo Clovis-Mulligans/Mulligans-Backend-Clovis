@@ -1132,13 +1132,28 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot be cancelled' });
       }
 
-      // ✅ Check if shipping label has been created - block cancellation
-      if (order.label_url) {
-        return res.status(400).json({ 
-          error: 'Cannot cancel order',
-          message: 'This order cannot be cancelled because a shipping label has already been purchased. Please contact support if you need assistance.'
-        });
-      }
+      // ✅ Check if shipping label has been created - block cancellation for everyone
+if (order.label_url) {
+  return res.status(400).json({ 
+    error: 'Cannot cancel order',
+    message: 'This order cannot be cancelled because a shipping label has already been purchased. Please contact support if you need assistance.'
+  });
+}
+
+// ✅ NEW: Buyer can only cancel within 5 minutes of order creation
+const isBuyerCancelling = order.buyer_id === userId;
+if (isBuyerCancelling) {
+  const orderCreatedAt = new Date(order.created_at).getTime();
+  const now = Date.now();
+  const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes
+  
+  if (now - orderCreatedAt > fiveMinutesInMs) {
+    return res.status(400).json({ 
+      error: 'Cancellation window expired',
+      message: 'Orders can only be cancelled within 5 minutes of purchase. Please contact the seller or open a dispute if you need assistance.'
+    });
+  }
+}
 
       const isBuyer = order.buyer_id === userId;
       
