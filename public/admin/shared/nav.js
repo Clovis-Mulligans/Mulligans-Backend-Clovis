@@ -6,6 +6,7 @@ const navBadges = {
   disputes: 0,
   reports: 0,
   returns: 0,
+  claims: 0,
   support: 0,
   feedback: 0,
 };
@@ -58,6 +59,11 @@ function generateSidebar() {
             <span class="nav-item-icon">📦</span>
             Returns
             <span class="nav-item-badge" id="navBadgeReturns" style="display: none;">0</span>
+          </a>
+          <a href="claims.html" class="nav-item ${currentPage === 'claims' ? 'active' : ''}">
+            <span class="nav-item-icon">🛡️</span>
+            Insurance Claims
+            <span class="nav-item-badge" id="navBadgeClaims" style="display: none;">0</span>
           </a>
         </div>
         
@@ -133,6 +139,13 @@ async function loadNavBadges() {
       const data = await returnsRes.json();
       const pending = (data.stats?.pending || 0) + (data.stats?.delivered || 0);
       updateNavBadge('returns', pending);
+    }
+
+    // Load claims count
+    const claimsRes = await apiRequest(`${API_BASE}/claims`);
+    if (claimsRes.ok) {
+      const data = await claimsRes.json();
+      updateNavBadge('claims', data.stats?.reported || 0);
     }
   } catch (error) {
     console.error('Failed to load nav badges:', error);

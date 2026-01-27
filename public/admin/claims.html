@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mulligans Admin - Insurance Claims</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shared/styles.css">
+  <style>
+    /* Claims specific styles */
+    .claims-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    
+    .stats-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .stat-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .stat-badge:hover {
+      border-color: var(--brand-green);
+    }
+    
+    .stat-badge.active {
+      background: var(--brand-green);
+      border-color: var(--brand-green);
+    }
+    
+    .stat-badge.active .stat-label,
+    .stat-badge.active .stat-count {
+      color: white;
+    }
+    
+    .stat-count {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    
+    .stat-badge.reported .stat-count { color: #f59e0b; }
+    .stat-badge.filed .stat-count { color: #3b82f6; }
+    .stat-badge.approved .stat-count { color: #10b981; }
+    .stat-badge.denied .stat-count { color: #ef4444; }
+    .stat-badge.active .stat-count { color: white; }
+    
+    .claims-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    .claims-table th {
+      text-align: left;
+      padding: 12px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    
+    .claims-table td {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+      vertical-align: middle;
+    }
+    
+    .claims-table tr:hover {
+      background: var(--bg-tertiary);
+    }
+    
+    .claim-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .claim-image {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: var(--bg-tertiary);
+    }
+    
+    .claim-info h4 {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+    
+    .claim-info p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .claim-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .claim-status.reported {
+      background: rgba(245, 158, 11, 0.15);
+      color: #f59e0b;
+    }
+    
+    .claim-status.filed {
+      background: rgba(59, 130, 246, 0.15);
+      color: #3b82f6;
+    }
+    
+    .claim-status.approved {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+    }
+    
+    .claim-status.denied {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
+    
+    .claim-amount {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    
+    .claim-date {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .claim-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    /* Detail Modal */
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    
+    @media (max-width: 768px) {
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .detail-section {
+      background: var(--bg-primary);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    
+    .detail-section h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    
+    .detail-row:last-child {
+      border-bottom: none;
+    }
+    
+    .detail-label {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .detail-value {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    
+    .detail-value a {
+      color: var(--brand-green);
+      text-decoration: none;
+    }
+    
+    .detail-value a:hover {
+      text-decoration: underline;
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border-color);
+    }
+    
+    .action-buttons .btn {
+      flex: 1;
+    }
+    
+    .btn-file {
+      background: #3b82f6;
+      color: white;
+    }
+    
+    .btn-file:hover {
+      background: #2563eb;
+    }
+    
+    .btn-approve {
+      background: #10b981;
+      color: white;
+    }
+    
+    .btn-approve:hover {
+      background: #059669;
+    }
+    
+    .btn-deny {
+      background: #ef4444;
+      color: white;
+    }
+    
+    .btn-deny:hover {
+      background: #dc2626;
+    }
+    
+    .insurance-highlight {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(16, 185, 129, 0.1) 100%);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    
+    .insurance-highlight h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .insurance-values {
+      display: flex;
+      gap: 24px;
+    }
+    
+    .insurance-value {
+      text-align: center;
+    }
+    
+    .insurance-value .amount {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--brand-green);
+    }
+    
+    .insurance-value .label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <!-- ==================== LOGIN SCREEN ==================== -->
+  <div id="loginScreen" class="login-container">
+    <div class="login-card">
+      <div class="login-logo">
+        <h1>🏌️ MULLIGANS</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <div id="loginError" class="error-message"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="password">Admin Password</label>
+          <input type="password" id="password" placeholder="Enter admin password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" id="loginBtn" style="width: 100%;">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MAIN APP ==================== -->
+  <div id="appContainer" class="app-container">
+    <!-- Sidebar -->
+    <div id="sidebarContainer"></div>
+    
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <header class="main-header">
+        <button class="btn btn-ghost" onclick="toggleSidebar()" style="display: none;">☰</button>
+        <h1 class="page-title">🛡️ Insurance Claims</h1>
+        <div class="header-actions">
+          <button class="btn btn-ghost" onclick="loadClaims()">🔄 Refresh</button>
+          <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+      </header>
+      
+      <main class="main-content">
+        <!-- Stats Row / Tabs -->
+        <div class="claims-header">
+          <div class="stats-row">
+            <div class="stat-badge active" data-tab="all" onclick="filterClaims('all')">
+              <span class="stat-count" id="statAll">0</span>
+              <span class="stat-label">All</span>
+            </div>
+            <div class="stat-badge reported" data-tab="reported" onclick="filterClaims('reported')">
+              <span class="stat-count" id="statReported">0</span>
+              <span class="stat-label">Reported</span>
+            </div>
+            <div class="stat-badge filed" data-tab="filed" onclick="filterClaims('filed')">
+              <span class="stat-count" id="statFiled">0</span>
+              <span class="stat-label">Filed</span>
+            </div>
+            <div class="stat-badge approved" data-tab="approved" onclick="filterClaims('approved')">
+              <span class="stat-count" id="statApproved">0</span>
+              <span class="stat-label">Approved</span>
+            </div>
+            <div class="stat-badge denied" data-tab="denied" onclick="filterClaims('denied')">
+              <span class="stat-count" id="statDenied">0</span>
+              <span class="stat-label">Denied</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Claims Table -->
+        <div class="card">
+          <div class="card-body" style="padding: 0;">
+            <table class="claims-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Buyer</th>
+                  <th>Seller</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Reported</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="claimsTableBody">
+                <tr>
+                  <td colspan="7" style="text-align: center; padding: 40px;">
+                    <div class="loading-spinner"></div>
+                    <p style="margin-top: 12px; color: var(--text-muted);">Loading claims...</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ==================== CLAIM DETAIL MODAL ==================== -->
+  <div id="claimModal" class="modal">
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h2 id="modalTitle">Claim Details</h2>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="claimDetailContent">
+        <!-- Loaded dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== FILE CLAIM MODAL ==================== -->
+  <div id="fileClaimModal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2>📋 Mark Claim as Filed</h2>
+        <button class="modal-close" onclick="closeFileModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">
+          After filing the claim through Shippo/XCover dashboard, record the claim ID here.
+        </p>
+        <div class="form-group">
+          <label for="claimIdInput">Claim Reference ID (optional)</label>
+          <input type="text" id="claimIdInput" placeholder="e.g., XC-123456">
+        </div>
+        <div class="form-group">
+          <label for="fileNotesInput">Notes</label>
+          <textarea id="fileNotesInput" rows="3" placeholder="Any additional notes..."></textarea>
+        </div>
+        <div class="action-buttons" style="margin-top: 16px; padding-top: 16px;">
+          <button class="btn btn-secondary" onclick="closeFileModal()">Cancel</button>
+          <button class="btn btn-file" onclick="submitFileClaim()">Mark as Filed</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== APPROVE CLAIM MODAL ==================== -->
+  <div id="approveModal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2>✅ Approve Claim & Refund</h2>
+        <button class="modal-close" onclick="closeApproveModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">
+          This will refund the buyer via Stripe and mark the claim as approved.
+        </p>
+        <div class="form-group">
+          <label for="refundAmountInput">Refund Amount (£)</label>
+          <input type="number" id="refundAmountInput" step="0.01" placeholder="Full order amount">
+          <small style="color: var(--text-muted);">Leave blank for full order amount</small>
+        </div>
+        <div class="form-group">
+          <label for="approveNotesInput">Notes</label>
+          <textarea id="approveNotesInput" rows="3" placeholder="Resolution notes..."></textarea>
+        </div>
+        <div class="action-buttons" style="margin-top: 16px; padding-top: 16px;">
+          <button class="btn btn-secondary" onclick="closeApproveModal()">Cancel</button>
+          <button class="btn btn-approve" onclick="submitApproveClaim()">Approve & Refund</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== DENY CLAIM MODAL ==================== -->
+  <div id="denyModal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2>❌ Deny Claim</h2>
+        <button class="modal-close" onclick="closeDenyModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">
+          The buyer will be notified that their claim was denied.
+        </p>
+        <div class="form-group">
+          <label for="denyReasonInput">Reason for Denial *</label>
+          <textarea id="denyReasonInput" rows="3" placeholder="Explain why the claim is being denied..." required></textarea>
+        </div>
+        <div class="action-buttons" style="margin-top: 16px; padding-top: 16px;">
+          <button class="btn btn-secondary" onclick="closeDenyModal()">Cancel</button>
+          <button class="btn btn-deny" onclick="submitDenyClaim()">Deny Claim</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shared Components -->
+  <script src="shared/nav.js"></script>
+  <script src="shared/helpers.js"></script>
+  
+  <script>
+    // ==================== CONFIGURATION ====================
+    const API_BASE = '/admin';
+    let currentTab = 'all';
+    let claimsData = [];
+    let selectedClaimId = null;
+    let adminPassword = null;
+
+    // ==================== INITIALIZATION ====================
+    document.addEventListener('DOMContentLoaded', () => {
+      // Check authentication
+      const token = localStorage.getItem('adminToken');
+      if (token) {
+        adminPassword = token;
+        showApp();
+        loadClaims();
+      } else {
+        showLogin();
+      }
+
+      // Login form handler
+      document.getElementById('loginForm').addEventListener('submit', handleLogin);
+    });
+
+    // ==================== AUTH ====================
+    function showLogin() {
+      document.getElementById('loginScreen').style.display = 'flex';
+      document.getElementById('appContainer').style.display = 'none';
+    }
+
+    function showApp() {
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('appContainer').style.display = 'flex';
+      initNav();
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('loginError');
+      const btn = document.getElementById('loginBtn');
+
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+      errorEl.textContent = '';
+
+      try {
+        const response = await fetch(`${API_BASE}/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          localStorage.setItem('adminToken', data.token);
+          adminPassword = data.token;
+          showApp();
+          loadClaims();
+        } else {
+          errorEl.textContent = data.error || 'Invalid password';
+        }
+      } catch (error) {
+        errorEl.textContent = 'Connection error. Please try again.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('adminToken');
+      adminPassword = null;
+      showLogin();
+    }
+
+    // ==================== API HELPER ====================
+    async function apiRequest(url, options = {}) {
+      const token = localStorage.getItem('adminToken');
+      return fetch(url, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          ...options.headers
+        }
+      });
+    }
+
+    // ==================== LOAD CLAIMS ====================
+    async function loadClaims() {
+      const tbody = document.getElementById('claimsTableBody');
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" style="text-align: center; padding: 40px;">
+            <div class="loading-spinner"></div>
+            <p style="margin-top: 12px; color: var(--text-muted);">Loading claims...</p>
+          </td>
+        </tr>
+      `;
+
+      try {
+        const tabParam = currentTab === 'all' ? '' : `?tab=${currentTab}`;
+        const response = await apiRequest(`${API_BASE}/claims${tabParam}`);
+        
+        if (!response.ok) {
+          throw new Error('Failed to load claims');
+        }
+
+        const data = await response.json();
+        claimsData = data.claims || [];
+        
+        // Update stats
+        document.getElementById('statAll').textContent = data.stats?.total || 0;
+        document.getElementById('statReported').textContent = data.stats?.reported || 0;
+        document.getElementById('statFiled').textContent = data.stats?.filed || 0;
+        document.getElementById('statApproved').textContent = data.stats?.approved || 0;
+        document.getElementById('statDenied').textContent = data.stats?.denied || 0;
+
+        renderClaimsTable();
+      } catch (error) {
+        console.error('Failed to load claims:', error);
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7" style="text-align: center; padding: 40px;">
+              <div class="empty-state-icon">⚠️</div>
+              <p style="color: var(--text-muted);">Failed to load claims</p>
+              <button class="btn btn-secondary" onclick="loadClaims()" style="margin-top: 12px;">Retry</button>
+            </td>
+          </tr>
+        `;
+      }
+    }
+
+    // ==================== FILTER CLAIMS ====================
+    function filterClaims(tab) {
+      currentTab = tab;
+      
+      // Update active tab
+      document.querySelectorAll('.stat-badge').forEach(badge => {
+        badge.classList.remove('active');
+        if (badge.dataset.tab === tab) {
+          badge.classList.add('active');
+        }
+      });
+
+      loadClaims();
+    }
+
+    // ==================== RENDER TABLE ====================
+    function renderClaimsTable() {
+      const tbody = document.getElementById('claimsTableBody');
+
+      if (claimsData.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7" style="text-align: center; padding: 40px;">
+              <div class="empty-state-icon">🛡️</div>
+              <p style="color: var(--text-muted);">No insurance claims found</p>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = claimsData.map(claim => `
+        <tr>
+          <td>
+            <div class="claim-item">
+              <img src="${claim.listing_image || '/placeholder.png'}" alt="" class="claim-image" onerror="this.src='/placeholder.png'">
+              <div class="claim-info">
+                <h4>${escapeHtml(claim.listing_title || 'Unknown Item')}</h4>
+                <p>Order: ${claim.id.substring(0, 20)}...</p>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="claim-info">
+              <h4>${escapeHtml(claim.buyer?.display_name || 'Unknown')}</h4>
+              <p>${escapeHtml(claim.buyer?.email || '')}</p>
+            </div>
+          </td>
+          <td>
+            <div class="claim-info">
+              <h4>${escapeHtml(claim.seller?.display_name || 'Unknown')}</h4>
+              <p>${escapeHtml(claim.seller?.email || '')}</p>
+            </div>
+          </td>
+          <td>
+            <div class="claim-amount">£${claim.amount.toFixed(2)}</div>
+            ${claim.insured_value ? `<div style="font-size: 11px; color: var(--text-muted);">Insured: £${claim.insured_value.toFixed(2)}</div>` : ''}
+          </td>
+          <td>
+            <span class="claim-status ${getStatusClass(claim.insurance_claim_status)}">
+              ${getStatusIcon(claim.insurance_claim_status)} ${formatStatus(claim.insurance_claim_status)}
+            </span>
+          </td>
+          <td>
+            <div class="claim-date">${claim.reported_lost_at ? getAge(claim.reported_lost_at) : '-'}</div>
+          </td>
+          <td>
+            <div class="claim-actions">
+              <button class="btn btn-sm btn-ghost" onclick="viewClaim('${claim.id}')" title="View Details">👁️</button>
+              ${claim.insurance_claim_status === 'reported_lost' ? `
+                <button class="btn btn-sm btn-file" onclick="openFileModal('${claim.id}')" title="Mark as Filed">📋</button>
+              ` : ''}
+              ${['reported_lost', 'claim_filed'].includes(claim.insurance_claim_status) ? `
+                <button class="btn btn-sm btn-approve" onclick="openApproveModal('${claim.id}')" title="Approve">✅</button>
+                <button class="btn btn-sm btn-deny" onclick="openDenyModal('${claim.id}')" title="Deny">❌</button>
+              ` : ''}
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    // ==================== STATUS HELPERS ====================
+    function getStatusClass(status) {
+      const classes = {
+        'reported_lost': 'reported',
+        'claim_filed': 'filed',
+        'claim_approved': 'approved',
+        'claim_denied': 'denied'
+      };
+      return classes[status] || 'reported';
+    }
+
+    function getStatusIcon(status) {
+      const icons = {
+        'reported_lost': '⏳',
+        'claim_filed': '📋',
+        'claim_approved': '✅',
+        'claim_denied': '❌'
+      };
+      return icons[status] || '❓';
+    }
+
+    function formatStatus(status) {
+      const labels = {
+        'reported_lost': 'Reported',
+        'claim_filed': 'Filed',
+        'claim_approved': 'Approved',
+        'claim_denied': 'Denied'
+      };
+      return labels[status] || status;
+    }
+
+    // ==================== VIEW CLAIM DETAIL ====================
+    async function viewClaim(claimId) {
+      selectedClaimId = claimId;
+      const modal = document.getElementById('claimModal');
+      const content = document.getElementById('claimDetailContent');
+      
+      modal.style.display = 'flex';
+      content.innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+          <div class="loading-spinner"></div>
+          <p style="margin-top: 12px; color: var(--text-muted);">Loading claim details...</p>
+        </div>
+      `;
+
+      try {
+        const response = await apiRequest(`${API_BASE}/claims/${claimId}`);
+        if (!response.ok) throw new Error('Failed to load claim');
+        
+        const data = await response.json();
+        const claim = data.claim;
+
+        document.getElementById('modalTitle').textContent = `Claim: ${claim.listing_title || 'Unknown Item'}`;
+
+        content.innerHTML = `
+          <!-- Insurance Info -->
+          <div class="insurance-highlight">
+            <h4>🛡️ Insurance Coverage</h4>
+            <div class="insurance-values">
+              <div class="insurance-value">
+                <div class="amount">£${(claim.insured_value || claim.amount).toFixed(2)}</div>
+                <div class="label">Insured Value</div>
+              </div>
+              <div class="insurance-value">
+                <div class="amount">£${(claim.insurance_premium || 0).toFixed(2)}</div>
+                <div class="label">Premium Paid</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-grid">
+            <!-- Order Details -->
+            <div class="detail-section">
+              <h3>📦 Order Details</h3>
+              <div class="detail-row">
+                <span class="detail-label">Order ID</span>
+                <span class="detail-value">${claim.id}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Amount</span>
+                <span class="detail-value">£${claim.amount.toFixed(2)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Shipping</span>
+                <span class="detail-value">£${(claim.shipping_cost || 0).toFixed(2)}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Status</span>
+                <span class="detail-value">
+                  <span class="claim-status ${getStatusClass(claim.insurance_claim_status)}">
+                    ${getStatusIcon(claim.insurance_claim_status)} ${formatStatus(claim.insurance_claim_status)}
+                  </span>
+                </span>
+              </div>
+              ${claim.insurance_claim_id ? `
+                <div class="detail-row">
+                  <span class="detail-label">Claim ID</span>
+                  <span class="detail-value">${claim.insurance_claim_id}</span>
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- Shipping Details -->
+            <div class="detail-section">
+              <h3>🚚 Shipping Details</h3>
+              <div class="detail-row">
+                <span class="detail-label">Tracking</span>
+                <span class="detail-value">${claim.tracking_number || 'N/A'}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Carrier</span>
+                <span class="detail-value">${claim.carrier || 'N/A'}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Shipped</span>
+                <span class="detail-value">${claim.shipped_at ? new Date(claim.shipped_at).toLocaleDateString() : 'N/A'}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Reported Lost</span>
+                <span class="detail-value">${claim.reported_lost_at ? new Date(claim.reported_lost_at).toLocaleDateString() : 'N/A'}</span>
+              </div>
+              ${claim.label_url ? `
+                <div class="detail-row">
+                  <span class="detail-label">Label</span>
+                  <span class="detail-value"><a href="${claim.label_url}" target="_blank">View Label</a></span>
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- Buyer Details -->
+            <div class="detail-section">
+              <h3>🛒 Buyer</h3>
+              <div class="detail-row">
+                <span class="detail-label">Name</span>
+                <span class="detail-value">${escapeHtml(claim.buyer?.display_name || 'Unknown')}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Email</span>
+                <span class="detail-value">${escapeHtml(claim.buyer?.email || 'N/A')}</span>
+              </div>
+            </div>
+
+            <!-- Seller Details -->
+            <div class="detail-section">
+              <h3>💼 Seller</h3>
+              <div class="detail-row">
+                <span class="detail-label">Name</span>
+                <span class="detail-value">${escapeHtml(claim.seller?.display_name || 'Unknown')}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Email</span>
+                <span class="detail-value">${escapeHtml(claim.seller?.email || 'N/A')}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Stripe Connected</span>
+                <span class="detail-value">${claim.seller?.has_stripe ? '✅ Yes' : '❌ No'}</span>
+              </div>
+            </div>
+          </div>
+
+          ${['reported_lost', 'claim_filed'].includes(claim.insurance_claim_status) ? `
+            <div class="action-buttons">
+              ${claim.insurance_claim_status === 'reported_lost' ? `
+                <button class="btn btn-file" onclick="closeModal(); openFileModal('${claim.id}');">📋 Mark as Filed</button>
+              ` : ''}
+              <button class="btn btn-approve" onclick="closeModal(); openApproveModal('${claim.id}');">✅ Approve & Refund</button>
+              <button class="btn btn-deny" onclick="closeModal(); openDenyModal('${claim.id}');">❌ Deny Claim</button>
+            </div>
+          ` : ''}
+        `;
+      } catch (error) {
+        console.error('Failed to load claim:', error);
+        content.innerHTML = `
+          <div style="text-align: center; padding: 40px;">
+            <div class="empty-state-icon">⚠️</div>
+            <p style="color: var(--text-muted);">Failed to load claim details</p>
+          </div>
+        `;
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('claimModal').style.display = 'none';
+    }
+
+    // ==================== FILE CLAIM ====================
+    function openFileModal(claimId) {
+      selectedClaimId = claimId;
+      document.getElementById('claimIdInput').value = '';
+      document.getElementById('fileNotesInput').value = '';
+      document.getElementById('fileClaimModal').style.display = 'flex';
+    }
+
+    function closeFileModal() {
+      document.getElementById('fileClaimModal').style.display = 'none';
+    }
+
+    async function submitFileClaim() {
+      const claimId = document.getElementById('claimIdInput').value;
+      const notes = document.getElementById('fileNotesInput').value;
+
+      try {
+        const response = await apiRequest(`${API_BASE}/claims/${selectedClaimId}/file`, {
+          method: 'POST',
+          body: JSON.stringify({ claim_id: claimId, notes })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to file claim');
+        }
+
+        closeFileModal();
+        loadClaims();
+        alert('Claim marked as filed successfully!');
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    // ==================== APPROVE CLAIM ====================
+    function openApproveModal(claimId) {
+      selectedClaimId = claimId;
+      document.getElementById('refundAmountInput').value = '';
+      document.getElementById('approveNotesInput').value = '';
+      document.getElementById('approveModal').style.display = 'flex';
+    }
+
+    function closeApproveModal() {
+      document.getElementById('approveModal').style.display = 'none';
+    }
+
+    async function submitApproveClaim() {
+      const refundAmount = document.getElementById('refundAmountInput').value;
+      const notes = document.getElementById('approveNotesInput').value;
+
+      if (!confirm('Are you sure you want to approve this claim and refund the buyer?')) {
+        return;
+      }
+
+      try {
+        const response = await apiRequest(`${API_BASE}/claims/${selectedClaimId}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ 
+            refund_amount: refundAmount ? parseFloat(refundAmount) : null, 
+            notes 
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to approve claim');
+        }
+
+        const data = await response.json();
+        closeApproveModal();
+        loadClaims();
+        alert(`Claim approved! Refund of £${data.amount.toFixed(2)} processed.`);
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    // ==================== DENY CLAIM ====================
+    function openDenyModal(claimId) {
+      selectedClaimId = claimId;
+      document.getElementById('denyReasonInput').value = '';
+      document.getElementById('denyModal').style.display = 'flex';
+    }
+
+    function closeDenyModal() {
+      document.getElementById('denyModal').style.display = 'none';
+    }
+
+    async function submitDenyClaim() {
+      const reason = document.getElementById('denyReasonInput').value.trim();
+
+      if (!reason) {
+        alert('Please provide a reason for denying the claim.');
+        return;
+      }
+
+      if (!confirm('Are you sure you want to deny this claim?')) {
+        return;
+      }
+
+      try {
+        const response = await apiRequest(`${API_BASE}/claims/${selectedClaimId}/deny`, {
+          method: 'POST',
+          body: JSON.stringify({ reason })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to deny claim');
+        }
+
+        closeDenyModal();
+        loadClaims();
+        alert('Claim denied. Buyer has been notified.');
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    // ==================== UTILITIES ====================
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function getAge(dateString) {
+      if (!dateString) return '-';
+      const date = new Date(dateString);
+      const now = new Date();
+      const diffMs = now - date;
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+
+      if (diffMins < 60) return `${diffMins}m ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 7) return `${diffDays}d ago`;
+      return date.toLocaleDateString();
+    }
+
+    // Close modals on outside click
+    window.onclick = function(event) {
+      if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none';
+      }
+    };
+  </script>
+</body>
+</html>

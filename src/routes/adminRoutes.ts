@@ -514,4 +514,361 @@ router.post('/returns/:id/refund', adminAuth, async (req, res) => {
   }
 });
 
+// ============================================
+// INSURANCE CLAIMS MANAGEMENT ROUTES (NEW)
+// ============================================
+
+// Get all orders with insurance claims
+router.get('/claims', adminAuth, async (req, res) => {
+  try {
+    const { tab } = req.query;
+    
+    let whereClause: any = {
+      insurance_claim_status: { not: null },
+    };
+    
+    // Filter by tab
+    if (tab === 'reported') {
+      whereClause.insurance_claim_status = 'reported_lost';
+    } else if (tab === 'filed') {
+      whereClause.insurance_claim_status = 'claim_filed';
+    } else if (tab === 'approved') {
+      whereClause.insurance_claim_status = 'claim_approved';
+    } else if (tab === 'denied') {
+      whereClause.insurance_claim_status = 'claim_denied';
+    }
+
+    const claims = await prisma.orders.findMany({
+      where: whereClause,
+      include: {
+        users_orders_buyer_idTousers: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+          },
+        },
+        users_orders_seller_idTousers: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { reported_lost_at: 'desc' },
+    });
+
+    // Get stats
+    const allClaims = await prisma.orders.findMany({
+      where: { insurance_claim_status: { not: null } },
+      select: { insurance_claim_status: true },
+    });
+
+    const stats = {
+      reported: allClaims.filter(c => c.insurance_claim_status === 'reported_lost').length,
+      filed: allClaims.filter(c => c.insurance_claim_status === 'claim_filed').length,
+      approved: allClaims.filter(c => c.insurance_claim_status === 'claim_approved').length,
+      denied: allClaims.filter(c => c.insurance_claim_status === 'claim_denied').length,
+      total: allClaims.length,
+    };
+
+    // Format response
+    const formatted = claims.map((order: any) => ({
+      id: order.id,
+      listing_title: order.listing_title,
+      listing_image: order.listing_image,
+      amount: parseFloat(order.amount.toString()),
+      shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
+      insurance_premium: order.insurance_premium ? parseFloat(order.insurance_premium.toString()) : 0,
+      insured_value: order.insured_value ? parseFloat(order.insured_value.toString()) : 0,
+      insurance_claim_status: order.insurance_claim_status,
+      insurance_claim_id: order.insurance_claim_id,
+      tracking_number: order.tracking_number,
+      carrier: order.carrier,
+      shipped_at: order.shipped_at?.toISOString() || null,
+      reported_lost_at: order.reported_lost_at?.toISOString() || null,
+      created_at: order.created_at.toISOString(),
+      buyer: {
+        id: order.users_orders_buyer_idTousers?.id,
+        display_name: order.users_orders_buyer_idTousers?.display_name,
+        email: order.users_orders_buyer_idTousers?.email,
+      },
+      seller: {
+        id: order.users_orders_seller_idTousers?.id,
+        display_name: order.users_orders_seller_idTousers?.display_name,
+        email: order.users_orders_seller_idTousers?.email,
+      },
+    }));
+
+    res.json({ claims: formatted, stats });
+  } catch (error: any) {
+    console.error('❌ Get claims error:', error);
+    res.status(500).json({ error: 'Failed to get claims' });
+  }
+});
+
+// Get single claim details
+router.get('/claims/:id', adminAuth, async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({
+      where: { id: req.params.id },
+      include: {
+        users_orders_buyer_idTousers: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+          },
+        },
+        users_orders_seller_idTousers: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+            stripe_connect_id: true,
+          },
+        },
+        listings: {
+          select: {
+            id: true,
+            title: true,
+            images: {
+              select: { image_url: true },
+              take: 1,
+              orderBy: { display_order: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const formatted = {
+      id: order.id,
+      listing_id: order.listing_id,
+      listing_title: order.listing_title || order.listings?.title,
+      listing_image: order.listing_image || order.listings?.images?.[0]?.image_url,
+      amount: parseFloat(order.amount.toString()),
+      shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
+      seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : 0,
+      insurance_premium: order.insurance_premium ? parseFloat(order.insurance_premium.toString()) : 0,
+      insured_value: order.insured_value ? parseFloat(order.insured_value.toString()) : 0,
+      insurance_claim_status: order.insurance_claim_status,
+      insurance_claim_id: order.insurance_claim_id,
+      status: order.status,
+      tracking_number: order.tracking_number,
+      carrier: order.carrier,
+      label_url: order.label_url,
+      shippo_transaction_id: order.shippo_transaction_id,
+      shipping_address: order.shipping_address,
+      stripe_payment_intent_id: order.stripe_payment_intent_id,
+      paid_at: order.paid_at?.toISOString() || null,
+      shipped_at: order.shipped_at?.toISOString() || null,
+      reported_lost_at: order.reported_lost_at?.toISOString() || null,
+      created_at: order.created_at.toISOString(),
+      buyer: {
+        id: order.users_orders_buyer_idTousers?.id,
+        display_name: order.users_orders_buyer_idTousers?.display_name,
+        email: order.users_orders_buyer_idTousers?.email,
+      },
+      seller: {
+        id: order.users_orders_seller_idTousers?.id,
+        display_name: order.users_orders_seller_idTousers?.display_name,
+        email: order.users_orders_seller_idTousers?.email,
+        has_stripe: !!order.users_orders_seller_idTousers?.stripe_connect_id,
+      },
+    };
+
+    res.json({ claim: formatted });
+  } catch (error: any) {
+    console.error('❌ Get claim detail error:', error);
+    res.status(500).json({ error: 'Failed to get claim details' });
+  }
+});
+
+// Mark claim as filed (admin files through Shippo dashboard, then records here)
+router.post('/claims/:id/file', adminAuth, async (req, res) => {
+  try {
+    const { claim_id, notes } = req.body;
+    const now = new Date();
+
+    const order = await prisma.orders.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    if (order.insurance_claim_status !== 'reported_lost') {
+      return res.status(400).json({ error: 'Claim must be in reported_lost status to file' });
+    }
+
+    await prisma.orders.update({
+      where: { id: req.params.id },
+      data: {
+        insurance_claim_status: 'claim_filed',
+        insurance_claim_id: claim_id || `manual_${Date.now()}`,
+        cancel_reason: notes ? `Claim filed: ${notes}` : 'Claim filed with carrier',
+        updated_at: now,
+      },
+    });
+
+    console.log(`📋 Admin filed insurance claim for order ${req.params.id}`);
+    
+    res.json({ success: true, message: 'Claim marked as filed' });
+  } catch (error: any) {
+    console.error('❌ File claim error:', error);
+    res.status(500).json({ error: error.message || 'Failed to file claim' });
+  }
+});
+
+// Approve claim and refund buyer
+router.post('/claims/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { refund_amount, notes } = req.body;
+    const now = new Date();
+
+    const order = await prisma.orders.findUnique({
+      where: { id: req.params.id },
+      include: {
+        users_orders_buyer_idTousers: {
+          select: { id: true, display_name: true },
+        },
+        users_orders_seller_idTousers: {
+          select: { id: true, display_name: true },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    if (!['reported_lost', 'claim_filed'].includes(order.insurance_claim_status || '')) {
+      return res.status(400).json({ error: 'Invalid claim status for approval' });
+    }
+
+    if (!order.stripe_payment_intent_id) {
+      return res.status(400).json({ error: 'No payment intent found for this order' });
+    }
+
+    // Calculate refund amount (default to full order amount)
+    const amount = refund_amount || parseFloat(order.amount.toString());
+
+    // Process Stripe refund
+    const refund = await stripe.refunds.create({
+      payment_intent: order.stripe_payment_intent_id,
+      amount: Math.round(amount * 100),
+      reason: 'requested_by_customer',
+      metadata: {
+        order_id: order.id,
+        reason: 'insurance_claim_approved',
+        admin_processed: 'true',
+      },
+    });
+
+    // Update order
+    await prisma.orders.update({
+      where: { id: req.params.id },
+      data: {
+        status: 'refunded',
+        insurance_claim_status: 'claim_approved',
+        refunded_at: now,
+        refund_amount: amount,
+        stripe_refund_id: refund.id,
+        cancel_reason: notes ? `Claim approved: ${notes}` : 'Insurance claim approved - buyer refunded',
+        updated_at: now,
+      },
+    });
+
+    // Notify buyer
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: order.buyer_id,
+        type: 'refund',
+        title: 'Lost Item Claim Approved',
+        message: `Your claim for "${order.listing_title}" has been approved. A refund of £${amount.toFixed(2)} has been processed.`,
+        image_url: order.listing_image,
+        related_id: order.id,
+      },
+    });
+
+    // Notify seller
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: order.seller_id,
+        type: 'order_update',
+        title: 'Lost Item Claim Resolved',
+        message: `The insurance claim for "${order.listing_title}" has been approved. The buyer has been refunded.`,
+        image_url: order.listing_image,
+        related_id: order.id,
+      },
+    });
+
+    console.log(`✅ Admin approved insurance claim for order ${req.params.id}, refunded £${amount.toFixed(2)}`);
+    
+    res.json({ success: true, refund_id: refund.id, amount });
+  } catch (error: any) {
+    console.error('❌ Approve claim error:', error);
+    res.status(500).json({ error: error.message || 'Failed to approve claim' });
+  }
+});
+
+// Deny claim
+router.post('/claims/:id/deny', adminAuth, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const now = new Date();
+
+    if (!reason) {
+      return res.status(400).json({ error: 'Denial reason is required' });
+    }
+
+    const order = await prisma.orders.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Update order - keep status as in_transit since no refund
+    await prisma.orders.update({
+      where: { id: req.params.id },
+      data: {
+        insurance_claim_status: 'claim_denied',
+        cancel_reason: `Claim denied: ${reason}`,
+        updated_at: now,
+      },
+    });
+
+    // Notify buyer
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: order.buyer_id,
+        type: 'order_update',
+        title: 'Lost Item Claim Update',
+        message: `Your claim for "${order.listing_title}" could not be approved. Reason: ${reason}. Please contact support if you have questions.`,
+        image_url: order.listing_image,
+        related_id: order.id,
+      },
+    });
+
+    console.log(`❌ Admin denied insurance claim for order ${req.params.id}: ${reason}`);
+    
+    res.json({ success: true, message: 'Claim denied' });
+  } catch (error: any) {
+    console.error('❌ Deny claim error:', error);
+    res.status(500).json({ error: error.message || 'Failed to deny claim' });
+  }
+});
+
 export default router;

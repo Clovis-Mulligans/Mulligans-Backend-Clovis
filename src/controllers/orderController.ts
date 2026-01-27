@@ -919,8 +919,14 @@ if (order.disputes) {
   }
 
   /**
-   * ✅ NEW: Buyer reports item as lost
+   * ✅ INSURANCE: Buyer reports item as lost
    * PUT /api/orders/:id/report-lost
+   * 
+   * NEW FLOW:
+   * 1. Mark order with insurance_claim_status = 'reported_lost'
+   * 2. Notify buyer that claim is being processed
+   * 3. Admin reviews and files claim with XCover via Shippo
+   * 4. Refund happens AFTER claim is approved
    */
   static async reportLost(req: Request, res: Response) {
     try {
@@ -958,6 +964,14 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot be reported as lost' });
       }
 
+      // Check if already reported
+      if (order.insurance_claim_status) {
+        return res.status(400).json({ 
+          error: 'Already reported',
+          message: 'This order has already been reported. Our team is processing your claim.'
+        });
+      }
+
       // Check if shipped more than 14 days ago
       if (order.shipped_at) {
         const daysSinceShipped = (new Date().getTime() - order.shipped_at.getTime()) / (24 * 60 * 60 * 1000);
@@ -973,55 +987,36 @@ if (order.disputes) {
       const listingImage = order.listings?.images?.[0]?.image_url || null;
       const now = new Date();
 
-      // ✅ Refund the buyer
-      if (order.stripe_payment_intent_id) {
-        try {
-          const refund = await stripe.refunds.create({
-            payment_intent: order.stripe_payment_intent_id,
-            reason: 'requested_by_customer',
-            metadata: {
-              order_id: order.id,
-              reason: 'reported_lost_in_transit',
-            },
-          });
-          console.log(`💸 Refund created: ${refund.id} for order ${order.id}`);
-        } catch (refundError: any) {
-          console.error('⚠️ Refund failed:', refundError.message);
-          return res.status(500).json({ error: 'Failed to process refund' });
-        }
-      }
-
-      // Update order status
+      // ✅ INSURANCE: Mark as reported lost (DO NOT REFUND YET)
       await prisma.orders.update({
         where: { id: orderId },
         data: {
-          status: 'refunded',
+          insurance_claim_status: 'reported_lost',
           reported_lost_at: now,
-          cancel_reason: 'lost_in_transit',
           updated_at: now,
         },
       });
 
-      // Notify buyer
+      // Notify buyer - claim is being processed
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: order.buyer_id,
-          type: 'refund',
-          title: 'Refund Processed',
-          message: `Your order for "${listingTitle}" has been refunded as it was reported lost in transit.`,
+          type: 'order_update',
+          title: 'Lost Item Report Received',
+          message: `We've received your report for "${listingTitle}". Our team will investigate and process your claim within 5 business days.`,
           image_url: listingImage,
           related_id: orderId,
         },
       });
 
-       // PUSH: Notify buyer of refund
+      // PUSH: Notify buyer
       try {
         await sendPushNotification(
           order.buyer_id,
-          'Refund Processed',
-          `Your order for "${listingTitle}" has been refunded.`,
-          { type: 'refund', order_id: orderId }
+          'Lost Item Report Received',
+          `We're investigating your lost item report for "${listingTitle}".`,
+          { type: 'order_update', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1034,7 +1029,7 @@ if (order.disputes) {
           user_id: order.seller_id,
           type: 'order_issue',
           title: 'Item Reported Lost in Transit',
-          message: `"${listingTitle}" was reported as lost by the buyer. The buyer has been refunded. You may claim compensation from the courier.`,
+          message: `"${listingTitle}" was reported as lost by the buyer. We are investigating and will update you soon.`,
           image_url: listingImage,
           related_id: orderId,
         },
@@ -1045,22 +1040,22 @@ if (order.disputes) {
         await sendPushNotification(
           order.seller_id,
           'Item Reported Lost',
-          `"${listingTitle}" was reported as lost. Buyer has been refunded.`,
+          `"${listingTitle}" was reported as lost by the buyer. Investigation in progress.`,
           { type: 'order_issue', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
       }
 
-      console.log('✅ Order reported as lost, buyer refunded:', orderId);
+      console.log('✅ Order reported as lost, insurance claim pending:', orderId);
 
       res.json({ 
         success: true, 
-        message: 'Your refund has been processed. The seller has been notified to claim from the courier.' 
+        message: 'Your report has been submitted. Our team will investigate and process your claim within 5 business days. You will receive a notification once resolved.' 
       });
     } catch (error: any) {
       console.error('❌ Report lost error:', error);
-      res.status(500).json({ error: 'Failed to report item as lost' });
+      res.status(500).json({ error: 'Failed to submit lost item report' });
     }
   }
 
