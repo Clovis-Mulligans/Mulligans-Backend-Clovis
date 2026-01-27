@@ -72,8 +72,14 @@
     
     .attention-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 16px;
+    }
+    
+    @media (max-width: 1200px) {
+      .attention-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
     }
     
     @media (max-width: 900px) {
@@ -118,6 +124,7 @@
     .attention-icon.disputes { background: rgba(239, 68, 68, 0.15); }
     .attention-icon.reports { background: rgba(249, 115, 22, 0.15); }
     .attention-icon.returns { background: rgba(59, 130, 246, 0.15); }
+    .attention-icon.claims { background: rgba(16, 185, 129, 0.15); }
     
     .attention-content h3 {
       font-size: 24px;
@@ -187,6 +194,7 @@
     .activity-icon.dispute { background: rgba(239, 68, 68, 0.15); }
     .activity-icon.report { background: rgba(249, 115, 22, 0.15); }
     .activity-icon.return { background: rgba(59, 130, 246, 0.15); }
+    .activity-icon.claim { background: rgba(16, 185, 129, 0.15); }
     .activity-icon.order { background: rgba(16, 185, 129, 0.15); }
     
     .activity-content {
@@ -294,6 +302,14 @@
               <div class="attention-content">
                 <h3 id="pendingReturns">0</h3>
                 <p>Returns to Process</p>
+              </div>
+              <span class="attention-arrow">→</span>
+            </a>
+            <a href="claims.html" class="attention-card" id="attentionClaims">
+              <div class="attention-icon claims">🛡️</div>
+              <div class="attention-content">
+                <h3 id="reportedClaims">0</h3>
+                <p>Insurance Claims</p>
               </div>
               <span class="attention-arrow">→</span>
             </a>
@@ -566,6 +582,20 @@
           
           updateNavBadge('returns', pending);
         }
+
+        // Load insurance claims
+        const claimsRes = await apiRequest(`${API_BASE}/claims`);
+        if (claimsRes.ok) {
+          const data = await claimsRes.json();
+          const reported = data.stats?.reported || 0;
+          document.getElementById('reportedClaims').textContent = reported;
+          
+          const card = document.getElementById('attentionClaims');
+          if (reported > 0) card.classList.add('urgent');
+          else card.classList.remove('urgent');
+          
+          updateNavBadge('claims', reported);
+        }
       } catch (error) {
         console.error('Failed to load attention items:', error);
       }
@@ -799,6 +829,21 @@
           });
         }
 
+        // Load recent insurance claims
+        const claimsRes = await apiRequest(`${API_BASE}/claims`);
+        if (claimsRes.ok) {
+          const data = await claimsRes.json();
+          (data.claims || []).slice(0, 2).forEach(c => {
+            activities.push({
+              type: 'claim',
+              title: `Claim: ${c.listing_title || 'Unknown Item'}`,
+              meta: `Reported by ${c.buyer?.display_name || 'Unknown'}`,
+              time: c.reported_lost_at || c.created_at,
+              link: `claims.html`
+            });
+          });
+        }
+
         // Sort by time
         activities.sort((a, b) => new Date(b.time) - new Date(a.time));
 
@@ -815,7 +860,7 @@
         container.innerHTML = activities.slice(0, 5).map(activity => `
           <a href="${activity.link}" class="activity-item">
             <div class="activity-icon ${activity.type}">
-              ${activity.type === 'dispute' ? '⚖️' : activity.type === 'report' ? '🚩' : '📦'}
+              ${activity.type === 'dispute' ? '⚖️' : activity.type === 'report' ? '🚩' : activity.type === 'claim' ? '🛡️' : '📦'}
             </div>
             <div class="activity-content">
               <div class="activity-title">${escapeHtml(activity.title)}</div>
