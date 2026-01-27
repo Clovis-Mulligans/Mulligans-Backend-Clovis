@@ -164,6 +164,38 @@
       gap: 8px;
     }
     
+    .btn-sm {
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    
+    .btn-file {
+      background: #3b82f6;
+      color: white;
+    }
+    
+    .btn-file:hover {
+      background: #2563eb;
+    }
+    
+    .btn-approve {
+      background: #10b981;
+      color: white;
+    }
+    
+    .btn-approve:hover {
+      background: #059669;
+    }
+    
+    .btn-deny {
+      background: #ef4444;
+      color: white;
+    }
+    
+    .btn-deny:hover {
+      background: #dc2626;
+    }
+
     /* Detail Modal */
     .detail-grid {
       display: grid;
@@ -236,33 +268,6 @@
       flex: 1;
     }
     
-    .btn-file {
-      background: #3b82f6;
-      color: white;
-    }
-    
-    .btn-file:hover {
-      background: #2563eb;
-    }
-    
-    .btn-approve {
-      background: #10b981;
-      color: white;
-    }
-    
-    .btn-approve:hover {
-      background: #059669;
-    }
-    
-    .btn-deny {
-      background: #ef4444;
-      color: white;
-    }
-    
-    .btn-deny:hover {
-      background: #dc2626;
-    }
-    
     .insurance-highlight {
       background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(16, 185, 129, 0.1) 100%);
       border: 1px solid rgba(59, 130, 246, 0.3);
@@ -332,7 +337,6 @@
     <!-- Main Content -->
     <div class="main-wrapper">
       <header class="main-header">
-        <button class="btn btn-ghost" onclick="toggleSidebar()" style="display: none;">☰</button>
         <h1 class="page-title">🛡️ Insurance Claims</h1>
         <div class="header-actions">
           <button class="btn btn-ghost" onclick="loadClaims()">🔄 Refresh</button>
@@ -398,8 +402,8 @@
   </div>
 
   <!-- ==================== CLAIM DETAIL MODAL ==================== -->
-  <div id="claimModal" class="modal">
-    <div class="modal-content" style="max-width: 800px;">
+  <div id="claimModal" class="modal-overlay" style="display: none;">
+    <div class="modal" style="max-width: 800px;">
       <div class="modal-header">
         <h2 id="modalTitle">Claim Details</h2>
         <button class="modal-close" onclick="closeModal()">&times;</button>
@@ -411,8 +415,8 @@
   </div>
 
   <!-- ==================== FILE CLAIM MODAL ==================== -->
-  <div id="fileClaimModal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
+  <div id="fileClaimModal" class="modal-overlay" style="display: none;">
+    <div class="modal" style="max-width: 500px;">
       <div class="modal-header">
         <h2>📋 Mark Claim as Filed</h2>
         <button class="modal-close" onclick="closeFileModal()">&times;</button>
@@ -438,8 +442,8 @@
   </div>
 
   <!-- ==================== APPROVE CLAIM MODAL ==================== -->
-  <div id="approveModal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
+  <div id="approveModal" class="modal-overlay" style="display: none;">
+    <div class="modal" style="max-width: 500px;">
       <div class="modal-header">
         <h2>✅ Approve Claim & Refund</h2>
         <button class="modal-close" onclick="closeApproveModal()">&times;</button>
@@ -466,8 +470,8 @@
   </div>
 
   <!-- ==================== DENY CLAIM MODAL ==================== -->
-  <div id="denyModal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
+  <div id="denyModal" class="modal-overlay" style="display: none;">
+    <div class="modal" style="max-width: 500px;">
       <div class="modal-header">
         <h2>❌ Deny Claim</h2>
         <button class="modal-close" onclick="closeDenyModal()">&times;</button>
@@ -488,98 +492,21 @@
     </div>
   </div>
 
-  <!-- Shared Components -->
-  <script src="shared/nav.js"></script>
+  <!-- Scripts - Same order as returns.html -->
+  <script src="shared/auth.js"></script>
   <script src="shared/helpers.js"></script>
+  <script src="shared/nav.js"></script>
   
   <script>
-    // ==================== CONFIGURATION ====================
-    const API_BASE = '/admin';
+    // ==================== STATE ====================
     let currentTab = 'all';
     let claimsData = [];
     let selectedClaimId = null;
-    let adminPassword = null;
 
     // ==================== INITIALIZATION ====================
-    document.addEventListener('DOMContentLoaded', () => {
-      // Check authentication
-      const token = localStorage.getItem('adminToken');
-      if (token) {
-        adminPassword = token;
-        showApp();
-        loadClaims();
-      } else {
-        showLogin();
-      }
-
-      // Login form handler
-      document.getElementById('loginForm').addEventListener('submit', handleLogin);
-    });
-
-    // ==================== AUTH ====================
-    function showLogin() {
-      document.getElementById('loginScreen').style.display = 'flex';
-      document.getElementById('appContainer').style.display = 'none';
-    }
-
-    function showApp() {
-      document.getElementById('loginScreen').style.display = 'none';
-      document.getElementById('appContainer').style.display = 'flex';
+    function initPage() {
       initNav();
-    }
-
-    async function handleLogin(e) {
-      e.preventDefault();
-      const password = document.getElementById('password').value;
-      const errorEl = document.getElementById('loginError');
-      const btn = document.getElementById('loginBtn');
-
-      btn.disabled = true;
-      btn.textContent = 'Signing in...';
-      errorEl.textContent = '';
-
-      try {
-        const response = await fetch(`${API_BASE}/verify`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          localStorage.setItem('adminToken', data.token);
-          adminPassword = data.token;
-          showApp();
-          loadClaims();
-        } else {
-          errorEl.textContent = data.error || 'Invalid password';
-        }
-      } catch (error) {
-        errorEl.textContent = 'Connection error. Please try again.';
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Sign In';
-      }
-    }
-
-    function logout() {
-      localStorage.removeItem('adminToken');
-      adminPassword = null;
-      showLogin();
-    }
-
-    // ==================== API HELPER ====================
-    async function apiRequest(url, options = {}) {
-      const token = localStorage.getItem('adminToken');
-      return fetch(url, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          ...options.headers
-        }
-      });
+      loadClaims();
     }
 
     // ==================== LOAD CLAIMS ====================
@@ -1014,32 +941,9 @@
       }
     }
 
-    // ==================== UTILITIES ====================
-    function escapeHtml(text) {
-      if (!text) return '';
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    function getAge(dateString) {
-      if (!dateString) return '-';
-      const date = new Date(dateString);
-      const now = new Date();
-      const diffMs = now - date;
-      const diffMins = Math.floor(diffMs / 60000);
-      const diffHours = Math.floor(diffMins / 60);
-      const diffDays = Math.floor(diffHours / 24);
-
-      if (diffMins < 60) return `${diffMins}m ago`;
-      if (diffHours < 24) return `${diffHours}h ago`;
-      if (diffDays < 7) return `${diffDays}d ago`;
-      return date.toLocaleDateString();
-    }
-
     // Close modals on outside click
     window.onclick = function(event) {
-      if (event.target.classList.contains('modal')) {
+      if (event.target.classList.contains('modal-overlay')) {
         event.target.style.display = 'none';
       }
     };
