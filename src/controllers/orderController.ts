@@ -212,10 +212,14 @@ export class OrderController {
         is_new: order.buyer_viewed_at === null && ['to_ship', 'in_transit'].includes(order.status),
         // ✅ NEW: Can confirm receipt if delivered but not completed
         can_confirm_receipt: order.status === 'delivered',
-        // ✅ NEW: Can report lost if in_transit for 14+ days
+        // ✅ NEW: Can report lost if in_transit for 14+ days and not already reported
         can_report_lost: order.status === 'in_transit' && 
           order.shipped_at && 
+          !order.reported_lost_at &&
           (new Date().getTime() - order.shipped_at.getTime()) > 14 * 24 * 60 * 60 * 1000,
+        // ✅ NEW: Insurance claim fields for "Investigating" status
+        reported_lost_at: order.reported_lost_at?.toISOString() || null,
+        insurance_claim_status: order.insurance_claim_status || null,
       }));
 
       console.log(`✅ Found ${formattedOrders.length} purchases`);
@@ -319,6 +323,9 @@ export class OrderController {
         days_to_ship: order.auto_cancel_at ? 
           Math.max(0, Math.ceil((order.auto_cancel_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
           null,
+        // ✅ NEW: Insurance claim fields for "Investigating" status
+        reported_lost_at: order.reported_lost_at?.toISOString() || null,
+        insurance_claim_status: order.insurance_claim_status || null,
       }));
 
       console.log(`✅ Found ${formattedOrders.length} sales`);
