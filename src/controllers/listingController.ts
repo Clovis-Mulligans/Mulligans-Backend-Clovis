@@ -411,9 +411,10 @@ export class ListingController {
   static async getAllListings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const {
-        page = '1',
-        limit = '20',
-        category,
+  page = '1',
+  limit = '20',
+  offset,  // ✅ ADD THIS LINE
+  category,
         subcategory,
         condition,
         minPrice,
@@ -769,7 +770,8 @@ if (keyword) {
             },
           },
           orderBy: { created_at: 'desc' },
-          skip: (Number(page) - 1) * Number(limit),
+          // ✅ Use offset if provided, otherwise calculate from page
+          skip: offset !== undefined ? Number(offset) : (Number(page) - 1) * Number(limit),
           take: Number(limit),
         }),
         prisma.listings.count({ where }),
