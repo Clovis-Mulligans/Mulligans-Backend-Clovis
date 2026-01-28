@@ -537,13 +537,20 @@ if (order.disputes) {
         can_confirm_receipt: isBuyer && order.status === 'delivered',
         can_report_lost: isBuyer && order.status === 'in_transit' && 
           order.shipped_at && 
+          !order.reported_lost_at &&  // ✅ FIX: Don't show if already reported
           (new Date().getTime() - order.shipped_at.getTime()) > 14 * 24 * 60 * 60 * 1000,
         // ✅ NEW: Days until auto-release
         days_until_release: order.escrow_release_at ? 
           Math.max(0, Math.ceil((order.escrow_release_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
           null,
-          // ✅ NEW: Return request data
+        // ✅ NEW: Return request data
         return_request: returnRequestData,
+        // ✅ NEW: Insurance claim fields
+        reported_lost_at: order.reported_lost_at?.toISOString() || null,
+        insurance_claim_status: order.insurance_claim_status || null,
+        insurance_premium: order.insurance_premium ? parseFloat(order.insurance_premium.toString()) : null,
+        insured_value: order.insured_value ? parseFloat(order.insured_value.toString()) : null,
+        insurance_claim_id: order.insurance_claim_id || null,
       };
 
       res.json({ order: formattedOrder });
