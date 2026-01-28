@@ -1160,15 +1160,22 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
         },
       });
 
-      // Get review stats
-      const reviewStats = await prisma.reviews.aggregate({
-        where: {
-          reviewed_user_id: userId,
-          review_type: 'seller',
-        },
-        _avg: { rating: true },
-        _count: true,
-      });
+     // Get review stats
+const reviewStats = await prisma.reviews.aggregate({
+  where: {
+    reviewed_user_id: userId,
+    review_type: 'seller',
+  },
+  _avg: { rating: true },
+});
+
+// Get review count separately (more reliable)
+const reviewCount = await prisma.reviews.count({
+  where: {
+    reviewed_user_id: userId,
+    review_type: 'seller',
+  },
+});
 
       // Calculate response rate (default to 100% for now)
       const responseRate = 100;
@@ -1216,7 +1223,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
         totalFavorites,
         totalSales: user.total_sales || 0,
         rating: Number(reviewStats._avg.rating) || Number(user.rating) || 0,
-        reviewCount: reviewStats._count || 0,
+        reviewCount: reviewCount,
         responseRate,
         avgShippingTime: Math.round(avgShippingTime * 10) / 10,
       };
