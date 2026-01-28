@@ -8,6 +8,13 @@ import { DisputeController } from '../controllers/disputeController';
 import { AdminReportsController } from '../controllers/adminReportsController';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
+import { sendPushNotification } from '../controllers/pushNotificationController';
+import { 
+  sendInsuranceClaimApprovedToBuyer, 
+  sendInsuranceClaimApprovedToSeller,
+  sendInsuranceClaimDeniedToBuyer,
+  sendInsuranceClaimDeniedToSeller
+} from '../services/emailService';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -812,6 +819,55 @@ router.post('/claims/:id/approve', adminAuth, async (req, res) => {
       },
     });
 
+    // ✅ Send push notifications
+    sendPushNotification(
+      order.buyer_id,
+      'Lost Item Claim Approved ✅',
+      `Your claim for "${order.listing_title}" has been approved. Refund: £${amount.toFixed(2)}`,
+      { type: 'claim_approved', orderId: order.id }
+    );
+    
+    sendPushNotification(
+      order.seller_id,
+      'Lost Item Claim Resolved',
+      `The claim for "${order.listing_title}" has been approved. The buyer has been refunded.`,
+      { type: 'claim_approved', orderId: order.id }
+    );
+
+    // ✅ Send emails
+    const buyer = order.users_orders_buyer_idTousers;
+    const seller = order.users_orders_seller_idTousers;
+    
+    // Get buyer email
+    const buyerFull = await prisma.users.findUnique({
+      where: { id: order.buyer_id },
+      select: { email: true }
+    });
+    
+    // Get seller email
+    const sellerFull = await prisma.users.findUnique({
+      where: { id: order.seller_id },
+      select: { email: true }
+    });
+
+    if (buyerFull?.email) {
+      sendInsuranceClaimApprovedToBuyer(buyerFull.email, {
+        buyerName: buyer?.display_name || 'there',
+        itemTitle: order.listing_title || 'your item',
+        refundAmount: amount.toFixed(2),
+        orderNumber: order.id,
+      }).catch(err => console.error('Email error:', err));
+    }
+
+    if (sellerFull?.email) {
+      sendInsuranceClaimApprovedToSeller(sellerFull.email, {
+        sellerName: seller?.display_name || 'there',
+        itemTitle: order.listing_title || 'the item',
+        buyerName: buyer?.display_name || 'The buyer',
+        orderNumber: order.id,
+      }).catch(err => console.error('Email error:', err));
+    }
+
     console.log(`✅ Admin approved insurance claim for order ${req.params.id}, refunded £${amount.toFixed(2)}`);
     
     res.json({ success: true, refund_id: refund.id, amount });
@@ -861,6 +917,62 @@ router.post('/claims/:id/deny', adminAuth, async (req, res) => {
         related_id: order.id,
       },
     });
+
+    // Notify seller too
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: order.seller_id,
+        type: 'order_update',
+        title: 'Lost Item Claim Resolved',
+        message: `The lost item claim for "${order.listing_title}" was not approved. Your payout will proceed as normal.`,
+        image_url: order.listing_image,
+        related_id: order.id,
+      },
+    });
+
+    // Send push notifications
+    sendPushNotification(
+      order.buyer_id,
+      'Lost Item Claim Update',
+      `Your claim for "${order.listing_title}" could not be approved.`,
+      { type: 'claim_denied', orderId: order.id }
+    );
+    
+    sendPushNotification(
+      order.seller_id,
+      'Lost Item Claim Resolved ✅',
+      `The claim for "${order.listing_title}" was denied. Your payout will proceed normally.`,
+      { type: 'claim_denied', orderId: order.id }
+    );
+
+    // Send emails
+    const buyerFull = await prisma.users.findUnique({
+      where: { id: order.buyer_id },
+      select: { email: true, display_name: true }
+    });
+    
+    const sellerFull = await prisma.users.findUnique({
+      where: { id: order.seller_id },
+      select: { email: true, display_name: true }
+    });
+
+    if (buyerFull?.email) {
+      sendInsuranceClaimDeniedToBuyer(buyerFull.email, {
+        buyerName: buyerFull.display_name || 'there',
+        itemTitle: order.listing_title || 'your item',
+        reason: reason,
+        orderNumber: order.id,
+      }).catch(err => console.error('Email error:', err));
+    }
+
+    if (sellerFull?.email) {
+      sendInsuranceClaimDeniedToSeller(sellerFull.email, {
+        sellerName: sellerFull.display_name || 'there',
+        itemTitle: order.listing_title || 'the item',
+        orderNumber: order.id,
+      }).catch(err => console.error('Email error:', err));
+    }
 
     console.log(`❌ Admin denied insurance claim for order ${req.params.id}: ${reason}`);
     

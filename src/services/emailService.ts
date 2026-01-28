@@ -697,3 +697,109 @@ export async function sendReturnRefundProcessed(
   
   console.log(`✅ Refund processed email sent to ${buyerEmail}`);
 }
+// ============================================
+// INSURANCE CLAIM EMAILS
+// ============================================
+
+export async function sendInsuranceClaimApprovedToBuyer(
+  buyerEmail: string,
+  data: {
+    buyerName: string;
+    itemTitle: string;
+    refundAmount: string;
+    orderNumber: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('insurance-claim-approved-buyer', data);
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    subject: `✅ Lost Item Claim Approved - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send claim approved email to buyer:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Claim approved email sent to buyer: ${buyerEmail}`);
+}
+
+export async function sendInsuranceClaimApprovedToSeller(
+  sellerEmail: string,
+  data: {
+    sellerName: string;
+    itemTitle: string;
+    buyerName: string;
+    orderNumber: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('insurance-claim-approved-seller', data);
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    subject: `📦 Lost Item Claim Resolved - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send claim approved email to seller:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Claim approved email sent to seller: ${sellerEmail}`);
+}
+
+export async function sendInsuranceClaimDeniedToBuyer(
+  buyerEmail: string,
+  data: {
+    buyerName: string;
+    itemTitle: string;
+    reason: string;
+    orderNumber: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('insurance-claim-denied-buyer', data);
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    subject: `Lost Item Claim Update - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send claim denied email to buyer:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Claim denied email sent to buyer: ${buyerEmail}`);
+}
+
+export async function sendInsuranceClaimDeniedToSeller(
+  sellerEmail: string,
+  data: {
+    sellerName: string;
+    itemTitle: string;
+    orderNumber: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('insurance-claim-denied-seller', data);
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    subject: `✅ Lost Item Claim Resolved - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send claim denied email to seller:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Claim denied email sent to seller: ${sellerEmail}`);
+}
