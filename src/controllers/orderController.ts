@@ -12,6 +12,7 @@ import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
+import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller } from '../services/emailService';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -1059,6 +1060,41 @@ if (order.disputes) {
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
+      }
+
+      // EMAIL: Send confirmation emails
+      try {
+        // Get buyer email
+        const buyerUser = await prisma.users.findUnique({
+          where: { id: order.buyer_id },
+          select: { email: true, display_name: true }
+        });
+        
+        // Get seller email
+        const sellerUser = await prisma.users.findUnique({
+          where: { id: order.seller_id },
+          select: { email: true, display_name: true }
+        });
+
+        if (buyerUser?.email) {
+          sendInsuranceReportReceivedToBuyer(buyerUser.email, {
+            buyerName: buyerUser.display_name || 'there',
+            itemTitle: listingTitle,
+            orderNumber: orderId,
+            sellerName: sellerUser?.display_name || 'the seller',
+          }).catch(err => console.error('[ORDER] Email error:', err));
+        }
+
+        if (sellerUser?.email) {
+          sendInsuranceReportReceivedToSeller(sellerUser.email, {
+            sellerName: sellerUser.display_name || 'there',
+            itemTitle: listingTitle,
+            orderNumber: orderId,
+            buyerName: buyerUser?.display_name || 'The buyer',
+          }).catch(err => console.error('[ORDER] Email error:', err));
+        }
+      } catch (emailErr) {
+        console.error('[ORDER] Email notification failed:', emailErr);
       }
 
       console.log('✅ Order reported as lost, insurance claim pending:', orderId);

@@ -803,3 +803,59 @@ export async function sendInsuranceClaimDeniedToSeller(
   
   console.log(`✅ Claim denied email sent to seller: ${sellerEmail}`);
 }
+
+// ============================================
+// INSURANCE REPORT EMAILS
+// ============================================
+
+export async function sendInsuranceReportReceivedToBuyer(
+  buyerEmail: string,
+  data: {
+    buyerName: string;
+    itemTitle: string;
+    orderNumber: string;
+    sellerName: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('insurance-report-received-buyer', data);
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    subject: `📦 Lost Item Report Received - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send report received email to buyer:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Report received email sent to buyer: ${buyerEmail}`);
+}
+
+export async function sendInsuranceReportReceivedToSeller(
+  sellerEmail: string,
+  data: {
+    sellerName: string;
+    itemTitle: string;
+    orderNumber: string;
+    buyerName: string;
+  }
+): Promise<void> {
+  const html = loadTemplate('insurance-report-received-seller', data);
+  
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    subject: `📦 Item Reported Lost - ${data.itemTitle}`,
+    html: html,
+  });
+  
+  if (error) {
+    console.error('❌ Failed to send report received email to seller:', error);
+    throw new Error(error.message);
+  }
+  
+  console.log(`✅ Report received email sent to seller: ${sellerEmail}`);
+}
