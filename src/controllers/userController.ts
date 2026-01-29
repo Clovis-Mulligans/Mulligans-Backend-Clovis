@@ -1056,7 +1056,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
             status: 'completed',
             completed_at: { gte: todayStart },
           },
-          _sum: { seller_payout: true },
+          _sum: { amount: true },
           _count: true,
         }),
         prisma.orders.aggregate({
@@ -1065,7 +1065,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
             status: 'completed',
             completed_at: { gte: weekStart },
           },
-          _sum: { seller_payout: true },
+          _sum: { amount: true },
         }),
         prisma.orders.aggregate({
           where: {
@@ -1073,7 +1073,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
             status: 'completed',
             completed_at: { gte: monthStart },
           },
-          _sum: { seller_payout: true },
+          _sum: { amount: true },
         }),
       ]);
 
@@ -1088,7 +1088,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
           status: { in: ['completed', 'delivered'] },
           completed_at: { gte: yearStart },
         },
-        _sum: { seller_payout: true },
+        _sum: { amount: true },
       });
 
       // All-time earnings
@@ -1097,7 +1097,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
           seller_id: userId,
           status: { in: ['completed', 'delivered'] },
         },
-        _sum: { seller_payout: true },
+        _sum: { amount: true },
       });
 
       // Get pending balance (orders delivered but not yet completed - in escrow)
@@ -1106,7 +1106,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
           seller_id: userId,
           status: 'delivered',
         },
-        _sum: { seller_payout: true },
+        _sum: { amount: true },
       });
 
       // Get orders to ship count
@@ -1208,14 +1208,14 @@ const reviewCount = await prisma.reviews.count({
       }
 
       const stats = {
-        todayEarnings: Number(todayOrders._sum.seller_payout) || 0,
-        weekEarnings: Number(weekOrders._sum.seller_payout) || 0,
-        monthEarnings: Number(monthOrders._sum.seller_payout) || 0,
-        yearEarnings: Number(yearOrders._sum.seller_payout) || 0,
-        allTimeEarnings: Number(allTimeOrders._sum.seller_payout) || 0, 
-        availableBalance: 0,
-        pendingBalance: Number(pendingOrders._sum.seller_payout) || 0,
-        ordersToShip,
+        todayEarnings: Number(todayOrders._sum.amount) || 0,
+  weekEarnings: Number(weekOrders._sum.amount) || 0,
+  monthEarnings: Number(monthOrders._sum.amount) || 0,
+  yearEarnings: Number(yearOrders._sum.amount) || 0,
+  allTimeEarnings: Number(allTimeOrders._sum.amount) || 0,
+  availableBalance: 0,
+  pendingBalance: Number(pendingOrders._sum.amount) || 0,
+  ordersToShip,
         ordersInTransit,
         ordersDelivered,
         activeListings,
