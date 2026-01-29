@@ -1164,7 +1164,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
 const reviewStats = await prisma.reviews.aggregate({
   where: {
     reviewed_user_id: userId,
-    review_type: 'seller',
+    review_type: 'buyer_to_seller',
   },
   _avg: { rating: true },
 });
@@ -1173,7 +1173,7 @@ const reviewStats = await prisma.reviews.aggregate({
 const reviewCount = await prisma.reviews.count({
   where: {
     reviewed_user_id: userId,
-    review_type: 'seller',
+    review_type: 'buyer_to_seller',
   },
 });
 
