@@ -701,13 +701,13 @@ prisma.reviews.findMany({
         return;
       }
 
-      // Get sales count (completed orders)
-      const salesCount = await prisma.orders.count({
-        where: {
-          seller_id: userId,
-          status: 'completed',
-        },
-      });
+      // Get sales count (completed and delivered orders)
+const salesCount = await prisma.orders.count({
+  where: {
+    seller_id: userId,
+    status: { in: ['completed', 'delivered'] },
+  },
+});
 
       // Get reviews count and average rating
       const reviews = await prisma.reviews.findMany({
