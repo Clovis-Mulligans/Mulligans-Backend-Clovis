@@ -239,7 +239,7 @@ export class StripeController {
 
       // ✅ ESCROW: Create checkout session WITHOUT transfer_data
       const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
+        payment_method_types: ['card', 'klarna'],
         mode: 'payment',
         line_items: [
           {
