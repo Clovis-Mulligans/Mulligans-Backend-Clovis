@@ -193,7 +193,7 @@ export class StripeController {
       // ✅ Calculate prices with quantity
       const unitPrice = parseFloat(listing.price.toString());
       const itemPrice = unitPrice * orderQuantity;  // ✅ Total for all items
-      const platformFeePercent = 0.07;
+      const platformFeePercent = 0.075;
       const platformFeeFixed = 0.99;
       const platformFee = (itemPrice * platformFeePercent) + platformFeeFixed;
       const totalPrice = itemPrice + platformFee;
