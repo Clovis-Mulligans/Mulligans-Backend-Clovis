@@ -15,6 +15,7 @@ import {
   sendInsuranceClaimDeniedToBuyer,
   sendInsuranceClaimDeniedToSeller
 } from '../services/emailService';
+import { AdminStatsController } from '../controllers/adminStatsController';
 
 import rateLimit from 'express-rate-limit';
 
@@ -993,5 +994,15 @@ router.post('/claims/:id/deny', adminAuth, async (req, res) => {
     res.status(500).json({ error: error.message || 'Failed to deny claim' });
   }
 });
+
+
+// DASHBOARD STATS ROUTES
+// ============================================
+
+// Get platform overview stats (users, listings, orders, GMV, etc.)
+router.get('/stats', adminAuth, AdminStatsController.getStats);
+
+// Get chart data (orders/revenue/signups over time)
+router.get('/stats/charts', adminAuth, AdminStatsController.getChartData);
 
 export default router;
