@@ -770,6 +770,13 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
 // ============================================
 export const handleShippoWebhook = async (req: Request, res: Response) => {
   try {
+    // Verify webhook secret token
+    const token = req.query.token;
+    if (token !== process.env.SHIPPO_WEBHOOK_SECRET) {
+      console.error('❌ Invalid Shippo webhook token');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     const event = req.body;
 
     console.log('📬 Received Shippo webhook:', event);

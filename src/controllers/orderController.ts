@@ -27,7 +27,7 @@ const ESCROW_RELEASE_DAYS = 3;
 
 // Fee calculation - matches your pricing structure
 const calculateSellerPayout = (totalAmount: number): number => {
-  const platformFeePercent = 0.07;
+  const platformFeePercent = 0.075;
   const platformFeeFixed = 0.99;
   const sellerPayout = (totalAmount - platformFeeFixed) / (1 + platformFeePercent);
   return Math.round(sellerPayout * 100) / 100;
