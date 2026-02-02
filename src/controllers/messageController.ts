@@ -292,6 +292,17 @@ export class MessageController {
       const { content, messageType = 'text', offerAmount } = req.body;
       const senderId = req.user?.sub;
 
+      // Validate message content
+      if (!content || typeof content !== 'string' || content.trim().length === 0) {
+        res.status(400).json({ error: 'Message content is required' });
+        return;
+      }
+
+      if (content.length > 2000) {
+        res.status(400).json({ error: 'Message too long (max 2000 characters)' });
+        return;
+      }
+
       // Validate user is authenticated
       if (!senderId) {
         res.status(401).json({ error: 'User not authenticated' });
