@@ -39,7 +39,7 @@ export class UserController {
           clothing_size: true,
           shoe_size: true,
           glove_size: true,
-          is_verified: true,
+          is_verified_seller: true,
         },
       });
 
@@ -463,7 +463,7 @@ export class UserController {
             clothing_size: true,
             shoe_size: true,
             glove_size: true,
-            is_verified: true,
+            is_verified_seller: true,
             rating: true,
             total_sales: true,
             total_purchases: true,

@@ -92,7 +92,7 @@ export const CartController = {
                   avatar_url: true,
                   postcode_area: true,
                   rating: true,
-                  is_verified: true
+                  is_verified_seller: true
                 }
               }
             }
@@ -156,7 +156,7 @@ export const CartController = {
             seller_avatar: seller.avatar_url,
             seller_postcode: seller.postcode_area,
             seller_rating: seller.rating,
-            seller_is_verified: seller.is_verified || false,
+            seller_is_verified_seller_seller: seller.is_verified_seller || false,
             items: [],
             subtotal: 0,
             shipping_cost: 0

@@ -115,7 +115,7 @@ export class AdminStatsController {
 
       // ===== VERIFIED SELLERS =====
       const verifiedSellers = await prisma.users.count({
-        where: { is_verified: true }
+        where: { is_verified_seller: true }
       });
 
       // ===== PENDING ESCROW =====

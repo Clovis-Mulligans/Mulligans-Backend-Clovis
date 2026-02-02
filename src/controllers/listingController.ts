@@ -67,7 +67,7 @@ export class ListingController {
               id: true,
               display_name: true,
               rating: true,
-              is_verified: true,
+              is_verified_seller: true,
             },
           },
         },
@@ -788,7 +788,7 @@ if (keyword) {
               id: true,
               display_name: true,
               rating: true,
-              is_verified: true,
+              is_verified_seller: true,
             },
           });
           return { ...listing, users };
@@ -840,7 +840,7 @@ if (keyword) {
           display_name: true,
           rating: true,
           avatar_url: true,
-          is_verified: true,
+          is_verified_seller: true,
         },
       });
 

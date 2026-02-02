@@ -142,7 +142,7 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
         where: { email: req.body.email },
       });
 
-      if (existingUser && !existingUser.is_verified) {
+      if (existingUser && !existingUser.is_verified_seller) {
         console.log('📧 User is unverified, resending verification code...');
         
         // Generate new verification code
@@ -236,15 +236,15 @@ router.post('/verify-email', async (req: Request, res: Response) => {
       }
     }
 
-    // ✅ FIXED: Only clear verification code, do NOT set is_verified to true
-    // is_verified is for SELLER VERIFICATION (the badge), not email verification
+    // ✅ FIXED: Only clear verification code, do NOT set is_verified_seller to true
+    // is_verified_seller is for SELLER VERIFICATION (the badge), not email verification
     // Email verification is tracked via Cognito confirmation status
     await prisma.users.update({
       where: { id: user.id },
       data: {
         verification_code: null,
         verification_code_expires: null,
-        // ❌ REMOVED: is_verified: true - this was giving new users the verified seller badge!
+        // ❌ REMOVED: is_verified_seller: true - this was giving new users the verified seller badge!
         updated_at: new Date(),
       },
     });

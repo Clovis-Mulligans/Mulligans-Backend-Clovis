@@ -590,7 +590,7 @@ export class DisputeController {
               avatar_url: true,
               rating: true,
               total_sales: true,
-              is_verified: true,
+              is_verified_seller: true,
             },
           },
           dispute_images: {
@@ -680,7 +680,7 @@ export class DisputeController {
             avatar_url: dispute.users_disputes_seller.avatar_url,
             rating: parseFloat(dispute.users_disputes_seller.rating?.toString() || '0'),
             total_sales: dispute.users_disputes_seller.total_sales,
-            is_verified: dispute.users_disputes_seller.is_verified,
+            is_verified_seller: dispute.users_disputes_seller.is_verified_seller,
           },
           
           // Images
@@ -1765,7 +1765,7 @@ export class DisputeController {
               avatar_url: true,
               rating: true,
               total_sales: true,
-              is_verified: true,
+              is_verified_seller: true,
             },
           },
           dispute_images: {
@@ -1849,7 +1849,7 @@ export class DisputeController {
             avatar_url: dispute.users_disputes_seller.avatar_url,
             rating: parseFloat(dispute.users_disputes_seller.rating?.toString() || '0'),
             total_sales: dispute.users_disputes_seller.total_sales,
-            is_verified: dispute.users_disputes_seller.is_verified,
+            is_verified_seller: dispute.users_disputes_seller.is_verified_seller,
           },
           
           // Images

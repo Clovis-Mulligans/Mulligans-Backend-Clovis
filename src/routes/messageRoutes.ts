@@ -151,7 +151,7 @@ router.get('/conversations/:id', authenticateToken, async (req: any, res) => {
       other_user_name: other_user?.display_name,
       other_user_id: other_user?.id,
       other_user_avatar: other_user?.avatar_url,
-      other_user_is_verified: other_user?.is_verified || false
+      other_user_is_verified_seller_seller: other_user?.is_verified_seller || false
     });
   } catch (error) {
     console.error('Failed to get conversation:', error);
@@ -327,7 +327,7 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
             id: true,
             display_name: true,
             avatar_url: true,
-            is_verified: true
+            is_verified_seller: true
           }
         });
 
@@ -370,7 +370,7 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
           other_user_id: other_user?.id || null,
           other_user_name: other_user?.display_name || 'Unknown User',
           other_user_avatar: other_user?.avatar_url || null,
-          other_user_is_verified: other_user?.is_verified || false,
+          other_user_is_verified_seller_seller: other_user?.is_verified_seller || false,
           last_message: lastMessage?.content || 'No messages yet',
           last_message_time: lastMessage?.created_at?.toISOString() || conv.created_at.toISOString(),
           last_message_timestamp: lastMessage?.created_at || conv.created_at,

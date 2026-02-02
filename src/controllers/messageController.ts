@@ -167,7 +167,7 @@ export class MessageController {
                 id: true,
                 display_name: true,
                 avatar_url: true,
-                is_verified: true,
+                is_verified_seller: true,
               },
             },
             users_conversations_seller_idTousers: {
@@ -175,7 +175,7 @@ export class MessageController {
                 id: true,
                 display_name: true,
                 avatar_url: true,
-                is_verified: true,
+                is_verified_seller: true,
               },
             },
             messages: {

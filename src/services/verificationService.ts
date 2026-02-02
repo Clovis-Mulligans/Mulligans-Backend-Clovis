@@ -36,7 +36,7 @@ export async function updateVerificationStatus(): Promise<void> {
         created_at: { lte: minAccountDate },
         shipping_strikes: { lte: CRITERIA.MAX_SHIPPING_STRIKES },
         avatar_url: { not: null },
-        is_verified: false, // Not already verified
+        is_verified_seller: false, // Not already verified
       },
       select: { id: true, display_name: true },
     });
@@ -48,8 +48,8 @@ export async function updateVerificationStatus(): Promise<void> {
       await prisma.users.update({
         where: { id: user.id },
         data: {
-          is_verified: true,
-          verified_at: now,
+          is_verified_seller: true,
+          verified_seller_at: now,
           updated_at: now,
         },
       });
@@ -83,7 +83,7 @@ export async function updateVerificationStatus(): Promise<void> {
     // Find users who SHOULD LOSE verification
     const unqualifiedUsers = await prisma.users.findMany({
       where: {
-        is_verified: true,
+        is_verified_seller: true,
         OR: [
           { rating: { lt: CRITERIA.MIN_RATING } },
           { shipping_strikes: { gt: CRITERIA.MAX_SHIPPING_STRIKES } },
@@ -99,8 +99,8 @@ export async function updateVerificationStatus(): Promise<void> {
       await prisma.users.update({
         where: { id: user.id },
         data: {
-          is_verified: false,
-          verified_at: null,
+          is_verified_seller: false,
+          verified_seller_at: null,
           updated_at: now,
         },
       });
@@ -141,7 +141,7 @@ export async function updateVerificationStatus(): Promise<void> {
 // CHECK SINGLE USER (for API)
 // ============================================
 export async function checkUserVerification(userId: string): Promise<{
-  isVerified: boolean;
+  isVerifiedSeller: boolean;
   meetsRequirements: boolean;
   requirements: {
     sales: { required: number; current: number; met: boolean };
@@ -154,7 +154,7 @@ export async function checkUserVerification(userId: string): Promise<{
   const user = await prisma.users.findUnique({
     where: { id: userId },
     select: {
-      is_verified: true,
+      is_verified_seller: true,
       total_sales: true,
       rating: true,
       created_at: true,
@@ -200,7 +200,7 @@ export async function checkUserVerification(userId: string): Promise<{
   const meetsRequirements = Object.values(requirements).every((r) => r.met);
 
   return {
-    isVerified: user.is_verified,
+    isVerifiedSeller: user.is_verified_seller,
     meetsRequirements,
     requirements,
   };

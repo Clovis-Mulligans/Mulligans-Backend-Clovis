@@ -649,7 +649,7 @@ if (size) {
                 email: true,
                 display_name: true,
                 rating: true,
-                is_verified: true,
+                is_verified_seller: true,
               },
             },
             listing_attributes: true,
@@ -664,8 +664,8 @@ if (size) {
 
       // ✅ Sort verified sellers to top (within current sort order)
       const sortedListings = [...listings].sort((a, b) => {
-        const aVerified = a.users?.is_verified ? 1 : 0;
-        const bVerified = b.users?.is_verified ? 1 : 0;
+        const aVerified = a.users?.is_verified_seller ? 1 : 0;
+        const bVerified = b.users?.is_verified_seller ? 1 : 0;
         return bVerified - aVerified; // Verified first
       });
 
