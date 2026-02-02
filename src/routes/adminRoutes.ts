@@ -16,6 +16,17 @@ import {
   sendInsuranceClaimDeniedToSeller
 } from '../services/emailService';
 
+import rateLimit from 'express-rate-limit';
+
+// Admin login rate limiter - 5 attempts per 15 minutes
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many admin login attempts, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 const router = express.Router();
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -32,7 +43,7 @@ router.get('/', (req, res) => {
 });
 
 // Verify admin password
-router.post('/verify', verifyAdminPassword);
+router.post('/verify', adminLimiter, verifyAdminPassword);
 
 // ============================================
 // PROTECTED ROUTES (admin auth required)
