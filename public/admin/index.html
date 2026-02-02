@@ -1065,43 +1065,43 @@
           data: data.data || []
         }],
         chart: {
-          type: 'area',
+          type: 'bar',
           height: 220,
           toolbar: { show: false },
           background: 'transparent',
           fontFamily: 'Inter, sans-serif',
-          sparkline: { enabled: false },
         },
-        colors: ['#1DC690'],
-        fill: {
-          type: 'gradient',
-          gradient: {
-            shadeIntensity: 1,
-            opacityFrom: 0.3,
-            opacityTo: 0.05,
-            stops: [0, 100]
+        plotOptions: {
+          bar: {
+            borderRadius: 3,
+            columnWidth: '65%',
           }
         },
-        stroke: {
-          curve: 'smooth',
-          width: 2
-        },
+        colors: ['#1DC690'],
         dataLabels: { enabled: false },
         xaxis: {
           categories: data.labels || [],
           labels: {
             show: true,
             rotate: -45,
-            rotateAlways: false,
-            hideOverlappingLabels: true,
-            style: { colors: '#94A3B8', fontSize: '10px' },
-            formatter: (val, index) => {
-              // Show every 5th label
-              return index % 5 === 0 ? val : '';
-            }
+            rotateAlways: true,
+            hideOverlappingLabels: false,
+            showDuplicates: false,
+            trim: true,
+            minHeight: 60,
+            style: { 
+              colors: '#94A3B8', 
+              fontSize: '9px' 
+            },
           },
           axisBorder: { show: false },
-          axisTicks: { show: false },
+          axisTicks: { 
+            show: true, 
+            color: '#334155',
+            height: 4
+          },
+          tickAmount: 10,
+          tickPlacement: 'on',
         },
         yaxis: {
           labels: {
@@ -1116,7 +1116,9 @@
         tooltip: {
           theme: 'dark',
           x: { show: true },
-          y: { formatter: (val) => val + ' signups' }
+          y: { 
+            formatter: (val) => val + ' signup' + (val !== 1 ? 's' : '')
+          }
         }
       };
       

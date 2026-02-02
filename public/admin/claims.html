@@ -165,8 +165,29 @@
     }
     
     .btn-sm {
-      padding: 4px 8px;
+      padding: 6px 10px;
       font-size: 12px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      min-width: 32px;
+    }
+    
+    .btn-ghost {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+    }
+    
+    .btn-ghost:hover {
+      background: var(--bg-card);
+      border-color: var(--brand-green);
+      color: var(--text-primary);
+      transform: scale(1.05);
     }
     
     .btn-file {
@@ -586,7 +607,7 @@
       }
 
       tbody.innerHTML = claimsData.map(claim => `
-        <tr>
+        <tr style="cursor: pointer;" onclick="viewClaim('${claim.id}')">
           <td>
             <div class="claim-item">
               <img src="${claim.listing_image || '/placeholder.png'}" alt="" class="claim-image" onerror="this.src='/placeholder.png'">
@@ -620,15 +641,15 @@
           <td>
             <div class="claim-date">${claim.reported_lost_at ? getAge(claim.reported_lost_at) : '-'}</div>
           </td>
-          <td>
+          <td onclick="event.stopPropagation();">
             <div class="claim-actions">
-              <button class="btn btn-sm btn-ghost" onclick="viewClaim('${claim.id}')" title="View Details">👁️</button>
+              <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation(); viewClaim('${claim.id}')" title="View Details">👁️</button>
               ${claim.insurance_claim_status === 'reported_lost' ? `
-                <button class="btn btn-sm btn-file" onclick="openFileModal('${claim.id}')" title="Mark as Filed">📋</button>
+                <button class="btn btn-sm btn-file" onclick="event.stopPropagation(); openFileModal('${claim.id}')" title="Mark as Filed">📋</button>
               ` : ''}
               ${['reported_lost', 'claim_filed'].includes(claim.insurance_claim_status) ? `
-                <button class="btn btn-sm btn-approve" onclick="openApproveModal('${claim.id}')" title="Approve">✅</button>
-                <button class="btn btn-sm btn-deny" onclick="openDenyModal('${claim.id}')" title="Deny">❌</button>
+                <button class="btn btn-sm btn-approve" onclick="event.stopPropagation(); openApproveModal('${claim.id}')" title="Approve">✅</button>
+                <button class="btn btn-sm btn-deny" onclick="event.stopPropagation(); openDenyModal('${claim.id}')" title="Deny">❌</button>
               ` : ''}
             </div>
           </td>
@@ -669,6 +690,12 @@
 
     // ==================== VIEW CLAIM DETAIL ====================
     async function viewClaim(claimId) {
+      console.log('👁️ viewClaim called with:', claimId);
+      if (!claimId) {
+        console.error('❌ No claim ID provided');
+        return;
+      }
+      
       selectedClaimId = claimId;
       const modal = document.getElementById('claimModal');
       const content = document.getElementById('claimDetailContent');
@@ -682,10 +709,17 @@
       `;
 
       try {
+        console.log('📡 Fetching claim:', `${API_BASE}/claims/${claimId}`);
         const response = await apiRequest(`${API_BASE}/claims/${claimId}`);
-        if (!response.ok) throw new Error('Failed to load claim');
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ API Error:', response.status, errorText);
+          throw new Error(`Failed to load claim: ${response.status}`);
+        }
         
         const data = await response.json();
+        console.log('✅ Claim data received:', data);
         const claim = data.claim;
 
         document.getElementById('modalTitle').textContent = `Claim: ${claim.listing_title || 'Unknown Item'}`;
@@ -807,11 +841,13 @@
           ` : ''}
         `;
       } catch (error) {
-        console.error('Failed to load claim:', error);
+        console.error('❌ Failed to load claim:', error);
         content.innerHTML = `
           <div style="text-align: center; padding: 40px;">
             <div class="empty-state-icon">⚠️</div>
             <p style="color: var(--text-muted);">Failed to load claim details</p>
+            <p style="color: var(--text-muted); font-size: 12px; margin-top: 8px;">${escapeHtml(error.message || 'Unknown error')}</p>
+            <button class="btn btn-secondary" style="margin-top: 16px;" onclick="closeModal()">Close</button>
           </div>
         `;
       }
@@ -823,6 +859,7 @@
 
     // ==================== FILE CLAIM ====================
     function openFileModal(claimId) {
+      console.log('📋 openFileModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('claimIdInput').value = '';
       document.getElementById('fileNotesInput').value = '';
@@ -858,6 +895,7 @@
 
     // ==================== APPROVE CLAIM ====================
     function openApproveModal(claimId) {
+      console.log('✅ openApproveModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('refundAmountInput').value = '';
       document.getElementById('approveNotesInput').value = '';
@@ -901,6 +939,7 @@
 
     // ==================== DENY CLAIM ====================
     function openDenyModal(claimId) {
+      console.log('❌ openDenyModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('denyReasonInput').value = '';
       document.getElementById('denyModal').style.display = 'flex';
