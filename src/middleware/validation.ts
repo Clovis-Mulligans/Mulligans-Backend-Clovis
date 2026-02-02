@@ -37,7 +37,7 @@ export const createListingSchema = z.object({
   body: z.object({
     title: z.string().min(3).max(200),
     description: z.string().min(10).max(5000),
-    price: z.number().positive(),
+    price: z.number().min(0.50).max(50000),
     category: z.enum([
       'CLUBS',
       'BAGS',
