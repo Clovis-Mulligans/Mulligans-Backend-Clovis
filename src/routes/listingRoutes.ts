@@ -4,6 +4,16 @@ import { ListingController } from '../controllers/listingController';
 import { authenticateToken } from '../middleware/auth';
 import multer from 'multer';
 import { validate, createListingSchema } from '../middleware/validation';
+import rateLimit from 'express-rate-limit';
+
+// Rate limiter: 20 listings per hour per user
+const listingLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 50,
+  message: 'Too many listings created, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -22,7 +32,7 @@ router.get('/featured', ListingController.getFeaturedListings);
  * Protected routes (require login)
  */
 // Create listing WITHOUT images
-router.post('/', authenticateToken, validate(createListingSchema), ListingController.createListing);
+router.post('/', authenticateToken, listingLimiter, validate(createListingSchema), ListingController.createListing);
 
 // Upload images separately
 router.post(
