@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { ListingController } from '../controllers/listingController';
 import { authenticateToken } from '../middleware/auth';
 import multer from 'multer';
+import { validate, createListingSchema } from '../middleware/validation';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -21,7 +22,7 @@ router.get('/featured', ListingController.getFeaturedListings);
  * Protected routes (require login)
  */
 // Create listing WITHOUT images
-router.post('/', authenticateToken, ListingController.createListing);
+router.post('/', authenticateToken, validate(createListingSchema), ListingController.createListing);
 
 // Upload images separately
 router.post(
