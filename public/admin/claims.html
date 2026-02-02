@@ -485,26 +485,26 @@
   </div>
 
   <!-- ==================== CLAIM DETAIL MODAL ==================== -->
-  <div id="claimModal" class="modal-overlay" style="display: none;">
-    <div class="modal" style="max-width: 800px;">
-      <div class="modal-header">
-        <h2 id="modalTitle">Claim Details</h2>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
+  <div id="claimModal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;">
+    <div class="modal" style="max-width: 800px; background: #1a1a2e; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid #2d2d44;">
+        <h2 id="modalTitle" style="font-size: 18px; font-weight: 600; color: #fff; margin: 0;">Claim Details</h2>
+        <button class="modal-close" onclick="closeModal()" style="background: none; border: none; font-size: 28px; color: #888; cursor: pointer;">&times;</button>
       </div>
-      <div class="modal-body" id="claimDetailContent">
+      <div class="modal-body" id="claimDetailContent" style="padding: 24px; color: #fff;">
         <!-- Loaded dynamically -->
       </div>
     </div>
   </div>
 
   <!-- ==================== FILE CLAIM MODAL ==================== -->
-  <div id="fileClaimModal" class="modal-overlay" style="display: none;">
-    <div class="modal" style="max-width: 500px;">
-      <div class="modal-header">
-        <h2>📋 Mark Claim as Filed</h2>
-        <button class="modal-close" onclick="closeFileModal()">&times;</button>
+  <div id="fileClaimModal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;">
+    <div class="modal" style="max-width: 500px; background: #1a1a2e; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid #2d2d44;">
+        <h2 style="font-size: 18px; font-weight: 600; color: #fff; margin: 0;">📋 Mark Claim as Filed</h2>
+        <button class="modal-close" onclick="closeFileModal()" style="background: none; border: none; font-size: 28px; color: #888; cursor: pointer;">&times;</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="padding: 24px; color: #fff;">
         <p style="color: var(--text-secondary); margin-bottom: 20px;">
           After filing the claim through Shippo/XCover dashboard, record the claim ID here.
         </p>
@@ -525,13 +525,13 @@
   </div>
 
   <!-- ==================== APPROVE CLAIM MODAL ==================== -->
-  <div id="approveModal" class="modal-overlay" style="display: none;">
-    <div class="modal" style="max-width: 500px;">
-      <div class="modal-header">
-        <h2>✅ Approve Claim & Refund</h2>
-        <button class="modal-close" onclick="closeApproveModal()">&times;</button>
+  <div id="approveModal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;">
+    <div class="modal" style="max-width: 500px; background: #1a1a2e; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid #2d2d44;">
+        <h2 style="font-size: 18px; font-weight: 600; color: #fff; margin: 0;">✅ Approve Claim & Refund</h2>
+        <button class="modal-close" onclick="closeApproveModal()" style="background: none; border: none; font-size: 28px; color: #888; cursor: pointer;">&times;</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="padding: 24px; color: #fff;">
         <p style="color: var(--text-secondary); margin-bottom: 20px;">
           This will refund the buyer via Stripe and mark the claim as approved.
         </p>
@@ -553,13 +553,13 @@
   </div>
 
   <!-- ==================== DENY CLAIM MODAL ==================== -->
-  <div id="denyModal" class="modal-overlay" style="display: none;">
-    <div class="modal" style="max-width: 500px;">
-      <div class="modal-header">
-        <h2>❌ Deny Claim</h2>
-        <button class="modal-close" onclick="closeDenyModal()">&times;</button>
+  <div id="denyModal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;">
+    <div class="modal" style="max-width: 500px; background: #1a1a2e; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid #2d2d44;">
+        <h2 style="font-size: 18px; font-weight: 600; color: #fff; margin: 0;">❌ Deny Claim</h2>
+        <button class="modal-close" onclick="closeDenyModal()" style="background: none; border: none; font-size: 28px; color: #888; cursor: pointer;">&times;</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="padding: 24px; color: #fff;">
         <p style="color: var(--text-secondary); margin-bottom: 20px;">
           The buyer will be notified that their claim was denied.
         </p>
@@ -762,11 +762,14 @@
       const modal = document.getElementById('claimModal');
       const content = document.getElementById('claimDetailContent');
       
-      modal.style.display = 'flex';
+      // Force show modal with all necessary styles
+      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
+      console.log('🔓 Modal display set to flex');
+      
       content.innerHTML = `
         <div style="text-align: center; padding: 40px;">
           <div class="loading-spinner"></div>
-          <p style="margin-top: 12px; color: var(--text-muted);">Loading claim details...</p>
+          <p style="margin-top: 12px; color: #888;">Loading claim details...</p>
         </div>
       `;
 
@@ -925,7 +928,9 @@
       selectedClaimId = claimId;
       document.getElementById('claimIdInput').value = '';
       document.getElementById('fileNotesInput').value = '';
-      document.getElementById('fileClaimModal').style.display = 'flex';
+      const modal = document.getElementById('fileClaimModal');
+      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
+      console.log('🔓 File modal display set to flex');
     }
 
     function closeFileModal() {
@@ -961,7 +966,9 @@
       selectedClaimId = claimId;
       document.getElementById('refundAmountInput').value = '';
       document.getElementById('approveNotesInput').value = '';
-      document.getElementById('approveModal').style.display = 'flex';
+      const modal = document.getElementById('approveModal');
+      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
+      console.log('🔓 Approve modal display set to flex');
     }
 
     function closeApproveModal() {
@@ -1004,7 +1011,9 @@
       console.log('❌ openDenyModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('denyReasonInput').value = '';
-      document.getElementById('denyModal').style.display = 'flex';
+      const modal = document.getElementById('denyModal');
+      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
+      console.log('🔓 Deny modal display set to flex');
     }
 
     function closeDenyModal() {
