@@ -762,9 +762,23 @@
       const modal = document.getElementById('claimModal');
       const content = document.getElementById('claimDetailContent');
       
-      // Force show modal with all necessary styles
-      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
-      console.log('🔓 Modal display set to flex');
+      // Force show modal - override hidden visibility and zero opacity from styles.css
+      modal.style.setProperty('display', 'flex', 'important');
+      modal.style.setProperty('position', 'fixed', 'important');
+      modal.style.setProperty('top', '0', 'important');
+      modal.style.setProperty('left', '0', 'important');
+      modal.style.setProperty('right', '0', 'important');
+      modal.style.setProperty('bottom', '0', 'important');
+      modal.style.setProperty('background', 'rgba(0,0,0,0.8)', 'important');
+      modal.style.setProperty('z-index', '99999', 'important');
+      modal.style.setProperty('align-items', 'center', 'important');
+      modal.style.setProperty('justify-content', 'center', 'important');
+      modal.style.setProperty('visibility', 'visible', 'important');
+      modal.style.setProperty('opacity', '1', 'important');
+      modal.style.setProperty('pointer-events', 'auto', 'important');
+      // Also add active class in case styles.css uses it
+      modal.classList.add('active');
+      console.log('🔓 Modal now visible (visibility + opacity fixed)');
       
       content.innerHTML = `
         <div style="text-align: center; padding: 40px;">
@@ -919,7 +933,11 @@
     }
 
     function closeModal() {
-      document.getElementById('claimModal').style.display = 'none';
+      const modal = document.getElementById('claimModal');
+      modal.style.setProperty('display', 'none', 'important');
+      modal.style.setProperty('visibility', 'hidden', 'important');
+      modal.style.setProperty('opacity', '0', 'important');
+      modal.classList.remove('active');
     }
 
     // ==================== FILE CLAIM ====================
@@ -929,12 +947,17 @@
       document.getElementById('claimIdInput').value = '';
       document.getElementById('fileNotesInput').value = '';
       const modal = document.getElementById('fileClaimModal');
-      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
-      console.log('🔓 File modal display set to flex');
+      modal.style.setProperty('display', 'flex', 'important');
+      modal.style.setProperty('visibility', 'visible', 'important');
+      modal.style.setProperty('opacity', '1', 'important');
+      modal.classList.add('active');
     }
 
     function closeFileModal() {
-      document.getElementById('fileClaimModal').style.display = 'none';
+      const modal = document.getElementById('fileClaimModal');
+      modal.style.setProperty('display', 'none', 'important');
+      modal.style.setProperty('visibility', 'hidden', 'important');
+      modal.classList.remove('active');
     }
 
     async function submitFileClaim() {
@@ -967,12 +990,17 @@
       document.getElementById('refundAmountInput').value = '';
       document.getElementById('approveNotesInput').value = '';
       const modal = document.getElementById('approveModal');
-      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
-      console.log('🔓 Approve modal display set to flex');
+      modal.style.setProperty('display', 'flex', 'important');
+      modal.style.setProperty('visibility', 'visible', 'important');
+      modal.style.setProperty('opacity', '1', 'important');
+      modal.classList.add('active');
     }
 
     function closeApproveModal() {
-      document.getElementById('approveModal').style.display = 'none';
+      const modal = document.getElementById('approveModal');
+      modal.style.setProperty('display', 'none', 'important');
+      modal.style.setProperty('visibility', 'hidden', 'important');
+      modal.classList.remove('active');
     }
 
     async function submitApproveClaim() {
@@ -1012,12 +1040,17 @@
       selectedClaimId = claimId;
       document.getElementById('denyReasonInput').value = '';
       const modal = document.getElementById('denyModal');
-      modal.style.cssText = 'display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 9999; padding: 20px;';
-      console.log('🔓 Deny modal display set to flex');
+      modal.style.setProperty('display', 'flex', 'important');
+      modal.style.setProperty('visibility', 'visible', 'important');
+      modal.style.setProperty('opacity', '1', 'important');
+      modal.classList.add('active');
     }
 
     function closeDenyModal() {
-      document.getElementById('denyModal').style.display = 'none';
+      const modal = document.getElementById('denyModal');
+      modal.style.setProperty('display', 'none', 'important');
+      modal.style.setProperty('visibility', 'hidden', 'important');
+      modal.classList.remove('active');
     }
 
     async function submitDenyClaim() {
