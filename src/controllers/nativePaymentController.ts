@@ -169,8 +169,9 @@ export class NativePaymentController {
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
       const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
+      const insurancePremium = itemTotal * SHIPPING_INSURANCE_RATE;
       const shippingTotal = baseShipping > 0 
-        ? parseFloat((baseShipping * (1 + SHIPPING_INSURANCE_RATE)).toFixed(2)) 
+        ? parseFloat((baseShipping + insurancePremium).toFixed(2)) 
         : 0;
       const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
       const grandTotal = itemTotal + shippingTotal + platformFee;
@@ -288,7 +289,7 @@ export class NativePaymentController {
 
       // Calculate totals
       let itemsTotal = 0;
-      let shippingTotal = 0;
+      let baseShippingTotal = 0;
       const itemsMetadata: string[] = [];
 
       for (const cartItem of cartItems) {
@@ -298,12 +299,14 @@ export class NativePaymentController {
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
         
         itemsTotal += unitPrice * quantity;
-        const baseItemShipping = Math.ceil(quantity / 5) * shippingCost;
-        shippingTotal += baseItemShipping > 0 
-          ? parseFloat((baseItemShipping * (1 + SHIPPING_INSURANCE_RATE)).toFixed(2)) 
-          : 0;
+        baseShippingTotal += Math.ceil(quantity / 5) * shippingCost;
         itemsMetadata.push(`${listing.id}:${quantity}`);
       }
+
+      const insurancePremium = itemsTotal * SHIPPING_INSURANCE_RATE;
+      const shippingTotal = baseShippingTotal > 0 
+        ? parseFloat((baseShippingTotal + insurancePremium).toFixed(2)) 
+        : 0;
 
       const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
 const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * totalQuantity);
