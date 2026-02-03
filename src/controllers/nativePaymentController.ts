@@ -16,6 +16,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // Platform fee calculation (same as cart checkout)
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99 per item
+const SHIPPING_INSURANCE_RATE = 0.0125; // 1.25% shipping insurance premium
 const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
@@ -167,7 +168,10 @@ export class NativePaymentController {
       const unitPrice = parseFloat(listing.price.toString());
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
-      const shippingTotal = Math.ceil(orderQuantity / 5) * shippingCost;
+      const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
+      const shippingTotal = baseShipping > 0 
+        ? parseFloat((baseShipping * (1 + SHIPPING_INSURANCE_RATE)).toFixed(2)) 
+        : 0;
       const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
       const grandTotal = itemTotal + shippingTotal + platformFee;
 
@@ -294,7 +298,10 @@ export class NativePaymentController {
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
         
         itemsTotal += unitPrice * quantity;
-        shippingTotal += Math.ceil(quantity / 5) * shippingCost;
+        const baseItemShipping = Math.ceil(quantity / 5) * shippingCost;
+        shippingTotal += baseItemShipping > 0 
+          ? parseFloat((baseItemShipping * (1 + SHIPPING_INSURANCE_RATE)).toFixed(2)) 
+          : 0;
         itemsMetadata.push(`${listing.id}:${quantity}`);
       }
 
