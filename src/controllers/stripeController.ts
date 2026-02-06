@@ -195,7 +195,7 @@ export class StripeController {
       const itemPrice = unitPrice * orderQuantity;  // ✅ Total for all items
       const platformFeePercent = 0.075;
       const platformFeeFixed = 0.99;
-      const platformFee = (itemPrice * platformFeePercent) + platformFeeFixed;
+      const platformFee = (itemPrice * platformFeePercent) + (platformFeeFixed * orderQuantity);
       const totalPrice = itemPrice + platformFee;
 
       const totalAmountPence = Math.round(totalPrice * 100);

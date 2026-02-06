@@ -291,8 +291,8 @@ export class CartCheckoutController {
         0
       );
       
-      // £0.99 fee applies PER SELLER (not per item)
-      const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * Object.keys(sellerGroups).length);
+      // £0.99 fee applies PER ITEM, always (quantity-aware)
+const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * totalQuantity);
       const grandTotal = itemsTotal + insuredShippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);
