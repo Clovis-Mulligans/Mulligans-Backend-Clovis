@@ -102,7 +102,6 @@ model listings {
   images              images[]
   listing_attributes  listing_attributes[]
   users               users                @relation(fields: [seller_id], references: [id], onDelete: Cascade)
-  offers              offers[]
   orders              orders[]
 
   @@index([brand])
@@ -162,6 +161,7 @@ model orders {
   disputed_at                   DateTime?
   seller_payout                 Decimal?          @db.Decimal(10, 2)
   label_url                     String?
+  label_cost                Decimal?          @db.Decimal(10, 2)
   shipping_cost                 Decimal?          @db.Decimal(10, 2)
   shippo_shipment_id            String?
   shippo_transaction_id         String?
@@ -169,38 +169,32 @@ model orders {
   escrow_release_at             DateTime?
   reported_lost_at              DateTime?
   quantity                      Int               @default(1)
+  listing_title                 String?
   listing_image                 String?
   listing_price                 Decimal?          @db.Decimal(10, 2)
-  listing_title                 String?
   selected_size                 String?
-  label_cost                    Decimal?          @db.Decimal(10, 2)
-  lost_notification_sent_at     DateTime?
-  refund_amount                 Decimal?          @db.Decimal(10, 2)
-  refunded_at                   DateTime?
-  stripe_refund_id              String?
-  stripe_transfer_id            String?
-  insurance_claim_id            String?
-  insurance_claim_status        String?
-  insurance_premium             Decimal?          @db.Decimal(10, 2)
-  insured_value                 Decimal?          @db.Decimal(10, 2)
-  offer_id                      String?           @db.VarChar(255)
-  original_list_price           Decimal?          @db.Decimal(10, 2)
-  discount_amount               Decimal?          @default(0) @db.Decimal(10, 2)
-  disputes                      disputes?
   users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
   listings                      listings?         @relation(fields: [listing_id], references: [id])
-  offer                         offers?           @relation(fields: [offer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_orders_seller_idTousers users             @relation("orders_seller_idTousers", fields: [seller_id], references: [id])
-  return_requests               return_requests[]
   reviews                       reviews[]
   support_tickets               support_tickets[]
+  disputes                      disputes?         // ✅ NEW: Link to dispute
+  return_requests         return_requests[]
+  stripe_transfer_id         String?        // ✅ NEW: Track Stripe transfer to prevent double payment
+  refunded_at                DateTime?      // ✅ NEW: Track refund details  
+  refund_amount              Decimal?          @db.Decimal(10, 2)
+  stripe_refund_id           String?
+  lost_notification_sent_at  DateTime?        // ✅ NEW: Track lost notification to prevent spam
+  insurance_premium             Decimal?          @db.Decimal(10, 2)
+  insured_value                 Decimal?          @db.Decimal(10, 2)
+  insurance_claim_status        String?
+  insurance_claim_id            String?
 
   @@index([buyer_id])
   @@index([created_at])
   @@index([seller_id])
   @@index([status])
   @@index([auto_cancel_at])
-  @@index([offer_id], map: "idx_orders_offer_id")
 }
 
 model reviews {
@@ -227,7 +221,8 @@ model users {
   location                                     String?
   bio                                          String?
   avatar_url                                   String?
-  is_verified_seller                           Boolean           @default(false)
+  is_verified_seller                                  Boolean           @default(false)
+  verified_seller_at                                  DateTime?
   rating                                       Decimal           @default(0.00) @db.Decimal(3, 2)
   total_sales                                  Int               @default(0)
   total_purchases                              Int               @default(0)
@@ -252,36 +247,33 @@ model users {
   seller_cancellation_count                    Int               @default(0)
   push_token                                   String?
   push_token_platform                          String?           @db.VarChar(10)
-  password_reset_code                          String?
-  password_reset_code_expires                  DateTime?
-  verification_code                            String?
-  verification_code_expires                    DateTime?
-  verified_seller_at                           DateTime?
-  blocked_by                                   blocked_users[]   @relation("BlockedByBlocks")
-  users_blocked                                blocked_users[]   @relation("BlockerBlocks")
   cart_items                                   cart_items[]
   conversations_conversations_buyer_idTousers  conversations[]   @relation("conversations_buyer_idTousers")
   conversations_conversations_seller_idTousers conversations[]   @relation("conversations_seller_idTousers")
-  disputes_as_buyer                            disputes[]        @relation("disputes_buyer_idTousers")
-  disputes_as_seller                           disputes[]        @relation("disputes_seller_idTousers")
   favorites                                    favorites[]
   feedback                                     Feedback[]
   listings                                     listings[]
   messages_messages_receiver_idTousers         messages[]        @relation("messages_receiver_idTousers")
   messages_messages_sender_idTousers           messages[]        @relation("messages_sender_idTousers")
-  notifications_triggered                      notifications[]   @relation("notifications_related_user_idTousers")
   notifications_received                       notifications[]   @relation("notifications_user_idTousers")
-  offers_as_buyer                              offers[]          @relation("offers_buyer_idTousers")
-  offers_as_seller                             offers[]          @relation("offers_seller_idTousers")
+  notifications_triggered                      notifications[]   @relation("notifications_related_user_idTousers")
   orders_orders_buyer_idTousers                orders[]          @relation("orders_buyer_idTousers")
   orders_orders_seller_idTousers               orders[]          @relation("orders_seller_idTousers")
-  return_labels_paid                           return_requests[] @relation("return_payer")
-  return_requests_made                         return_requests[] @relation("return_requester")
   reviews_reviews_reviewed_user_idTousers      reviews[]         @relation("reviews_reviewed_user_idTousers")
   reviews_reviews_reviewer_idTousers           reviews[]         @relation("reviews_reviewer_idTousers")
   support_tickets                              support_tickets[]
-  reports_received                             user_reports[]    @relation("ReportedUserReports")
-  reports_made                                 user_reports[]    @relation("ReporterReports")
+  verification_code                            String?
+  verification_code_expires                    DateTime?
+  password_reset_code                          String?
+  password_reset_code_expires                  DateTime?
+  disputes_as_buyer                            disputes[]        @relation("disputes_buyer_idTousers")    // ✅ NEW
+  disputes_as_seller                           disputes[]        @relation("disputes_seller_idTousers")   // ✅ NEW
+  reports_made     user_reports[] @relation("ReporterReports")
+  reports_received user_reports[] @relation("ReportedUserReports")
+  users_blocked    blocked_users[] @relation("BlockerBlocks")
+  blocked_by       blocked_users[] @relation("BlockedByBlocks")
+  return_requests_made    return_requests[] @relation("return_requester")
+return_labels_paid      return_requests[] @relation("return_payer")
 }
 
 model notifications {
@@ -295,8 +287,9 @@ model notifications {
   is_read         Boolean  @default(false)
   created_at      DateTime @default(now())
   image_url       String?
-  related_user    users?   @relation("notifications_related_user_idTousers", fields: [related_user_id], references: [id])
+  
   user            users    @relation("notifications_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
+  related_user    users?   @relation("notifications_related_user_idTousers", fields: [related_user_id], references: [id], onDelete: SetNull)
 
   @@index([user_id])
   @@index([is_read])
@@ -330,9 +323,9 @@ model support_tickets {
   subject    String
   message    String
   status     String                  @default("open")
+  priority   String                  @default("normal")
   created_at DateTime                @default(now())
   updated_at DateTime                @updatedAt
-  priority   String                  @default("normal")
   images     support_ticket_images[]
   orders     orders?                 @relation(fields: [order_id], references: [id])
   users      users                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -363,8 +356,6 @@ model cart_items {
   expires_at    DateTime
   quantity      Int      @default(1)
   selected_size String?
-  offer_id      String?  @db.VarChar(255)
-  offer_price   Decimal? @db.Decimal(10, 2)
   listings      listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
   users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -372,7 +363,6 @@ model cart_items {
   @@index([user_id])
   @@index([listing_id])
   @@index([expires_at])
-  @@index([offer_id], map: "idx_cart_items_offer_id")
   @@map("cart_items")
 }
 
@@ -398,11 +388,12 @@ model user_reports {
   details          String?
   conversation_id  String?
   listing_id       String?
-  status           String   @default("pending")
+  status           String   @default("pending") // pending, reviewed, resolved, dismissed
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
-  reported_user    users    @relation("ReportedUserReports", fields: [reported_user_id], references: [id])
-  reporter         users    @relation("ReporterReports", fields: [reporter_id], references: [id])
+
+  reporter      users  @relation("ReporterReports", fields: [reporter_id], references: [id])
+  reported_user users  @relation("ReportedUserReports", fields: [reported_user_id], references: [id])
 
   @@index([reporter_id])
   @@index([reported_user_id])
@@ -414,45 +405,82 @@ model blocked_users {
   blocker_id String
   blocked_id String
   created_at DateTime @default(now())
-  blocked    users    @relation("BlockedByBlocks", fields: [blocked_id], references: [id])
-  blocker    users    @relation("BlockerBlocks", fields: [blocker_id], references: [id])
+
+  blocker users @relation("BlockerBlocks", fields: [blocker_id], references: [id])
+  blocked users @relation("BlockedByBlocks", fields: [blocked_id], references: [id])
 
   @@unique([blocker_id, blocked_id])
   @@index([blocker_id])
   @@index([blocked_id])
 }
 
+// ============================================
+// ✅ NEW: DISPUTE SYSTEM TABLES
+// ============================================
+
+// Main disputes table - tracks the full dispute lifecycle
 model disputes {
-  id                       String            @id @default(uuid())
-  order_id                 String            @unique
+  id                       String    @id @default(uuid())
+  order_id                 String    @unique
   buyer_id                 String
   seller_id                String
-  status                   String            @default("open")
-  reason_type              String
-  reason_text              String
-  requested_refund_percent Int
-  requested_refund_amount  Decimal           @db.Decimal(10, 2)
-  seller_response_type     String?
-  counter_offer_percent    Int?
-  counter_offer_amount     Decimal?          @db.Decimal(10, 2)
-  seller_response_text     String?
+  return_requests         return_requests[]
+  
+  // Status: open → counter_offered → buyer_accepted/seller_accepted → resolved
+  //         OR: open → escalated → admin_resolved
+  status                   String    @default("open")
+
+  // ============================================
+  // BUYER'S CLAIM
+  // ============================================
+  reason_type              String    // not_as_described, damaged, wrong_item, counterfeit, missing_parts, other
+  reason_text              String    @db.Text
+  requested_refund_percent Int       // 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+  requested_refund_amount  Decimal   @db.Decimal(10, 2)
+  
+  // ============================================
+  // SELLER'S RESPONSE
+  // ============================================
+  seller_response_type     String?   // accept, counter, reject
+  counter_offer_percent    Int?      
+  counter_offer_amount     Decimal?  @db.Decimal(10, 2)
+  seller_response_text     String?   @db.Text
   seller_responded_at      DateTime?
-  resolution_type          String?
-  resolution_amount        Decimal?          @db.Decimal(10, 2)
-  resolution_notes         String?
-  resolved_by              String?
+  
+  // ============================================
+  // RESOLUTION
+  // ============================================
+  resolution_type          String?   // full_refund, partial_refund, no_refund
+  resolution_amount        Decimal?  @db.Decimal(10, 2)
+  resolution_notes         String?   @db.Text
+  resolved_by              String?   // buyer, seller, admin
   resolved_at              DateTime?
-  seller_deadline          DateTime
-  auto_escalated           Boolean           @default(false)
-  created_at               DateTime          @default(now())
-  updated_at               DateTime          @updatedAt
-  escalated_at             DateTime?
-  escalation_reason        String?
+  
+  // ============================================
+  // 36-HOUR DEADLINE SYSTEM
+  // ============================================
+  seller_deadline          DateTime  // 36 hours from created_at
+  auto_escalated           Boolean   @default(false)
+  
+  // ============================================
+  // TIMESTAMPS
+  // ============================================
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @updatedAt
+
+  // ============================================
+  // ESCALATION TRACKING
+  // ============================================
+  escalated_at              DateTime?
+  escalation_reason         String?
+  
+  // ============================================
+  // RELATIONS
+  // ============================================
+  orders                   orders    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  users_disputes_buyer     users     @relation("disputes_buyer_idTousers", fields: [buyer_id], references: [id], onDelete: Cascade)
+  users_disputes_seller    users     @relation("disputes_seller_idTousers", fields: [seller_id], references: [id], onDelete: Cascade)
   dispute_images           dispute_images[]
-  users_disputes_buyer     users             @relation("disputes_buyer_idTousers", fields: [buyer_id], references: [id], onDelete: Cascade)
-  orders                   orders            @relation(fields: [order_id], references: [id], onDelete: Cascade)
-  users_disputes_seller    users             @relation("disputes_seller_idTousers", fields: [seller_id], references: [id], onDelete: Cascade)
-  return_requests          return_requests[]
 
   @@index([order_id])
   @@index([buyer_id])
@@ -463,77 +491,62 @@ model disputes {
   @@map("disputes")
 }
 
+// Images attached to disputes (evidence from buyer and seller)
 model dispute_images {
-  id          String   @id @default(uuid())
-  dispute_id  String
-  image_url   String
-  s3_key      String
-  uploaded_by String
-  created_at  DateTime @default(now())
-  disputes    disputes @relation(fields: [dispute_id], references: [id], onDelete: Cascade)
+  id           String   @id @default(uuid())
+  dispute_id   String
+  image_url    String
+  s3_key       String
+  uploaded_by  String   // buyer, seller
+  created_at   DateTime @default(now())
+  
+  disputes     disputes @relation(fields: [dispute_id], references: [id], onDelete: Cascade)
 
   @@index([dispute_id])
   @@map("dispute_images")
 }
-
 model return_requests {
-  id                     String    @id @default(cuid())
-  order_id               String
-  dispute_id             String?
-  requested_by           String
-  approved_by            String?
-  reason                 String
-  status                 String    @default("pending")
-  return_label_url       String?
-  return_tracking_number String?
-  return_carrier         String?
-  label_cost             Decimal?  @db.Decimal(10, 2)
-  paid_by                String?
-  shippo_transaction_id  String?
-  refund_amount          Decimal?  @db.Decimal(10, 2)
-  shipping_deducted      Decimal?  @db.Decimal(10, 2)
-  shipped_at             DateTime?
-  delivered_at           DateTime?
-  escrow_release_at      DateTime?
-  completed_at           DateTime?
-  created_at             DateTime  @default(now())
-  updated_at             DateTime  @updatedAt
-  return_ship_deadline   DateTime?
-  stripe_refund_id       String?
-  disputes               disputes? @relation(fields: [dispute_id], references: [id])
-  orders                 orders    @relation(fields: [order_id], references: [id])
-  payer                  users?    @relation("return_payer", fields: [paid_by], references: [id])
-  requester              users     @relation("return_requester", fields: [requested_by], references: [id])
+  id                      String    @id @default(cuid())
+  order_id                String
+  dispute_id              String?
+  requested_by            String
+  approved_by             String?
+  reason                  String    // dispute_ruling, mutual_agreement, wrong_item, buyer_remorse
+  status                  String    @default("pending") // pending, approved, awaiting_address, label_created, shipped, delivered, completed, cancelled
+  
+  // Return label info
+  return_label_url        String?
+  return_tracking_number  String?
+  return_carrier          String?
+  label_cost              Decimal?  @db.Decimal(10, 2)
+  paid_by                 String?   // buyer_id or seller_id
+  shippo_transaction_id   String?
+  
+  // Refund info
+  refund_amount           Decimal?  @db.Decimal(10, 2)
+  shipping_deducted       Decimal?  @db.Decimal(10, 2)
+  
+  // Timestamps
+  shipped_at              DateTime?
+  delivered_at            DateTime?
+  escrow_release_at       DateTime?
+  completed_at            DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
 
+   // ✅ NEW: Track Stripe refund ID
+  stripe_refund_id           String?
+  
+  // ✅ NEW: Auto-cancel if buyer doesn't ship within 5 days
+  return_ship_deadline       DateTime?
+  
+  // Relations
+  orders                  orders    @relation(fields: [order_id], references: [id])
+  disputes                disputes? @relation(fields: [dispute_id], references: [id])
+  requester               users     @relation("return_requester", fields: [requested_by], references: [id])
+  payer                   users?    @relation("return_payer", fields: [paid_by], references: [id])
+  
   @@index([order_id])
   @@index([dispute_id])
   @@index([status])
-}
-
-model offers {
-  id                    String    @id @default(uuid()) @db.VarChar(255)
-  listing_id            String    @db.VarChar(255)
-  buyer_id              String    @db.VarChar(255)
-  seller_id             String    @db.VarChar(255)
-  list_price            Decimal   @db.Decimal(10, 2)
-  offer_amount          Decimal   @db.Decimal(10, 2)
-  counter_amount        Decimal?  @db.Decimal(10, 2)
-  final_amount          Decimal?  @db.Decimal(10, 2)
-  status                String    @default("PENDING") @db.VarChar(20)
-  offer_number          Int
-  created_at            DateTime? @default(now()) @db.Timestamp(6)
-  expires_at            DateTime  @db.Timestamp(6)
-  responded_at          DateTime? @db.Timestamp(6)
-  acceptance_expires_at DateTime? @db.Timestamp(6)
-  purchased_at          DateTime? @db.Timestamp(6)
-  warning_sent          Boolean?  @default(false)
-  buyer                 users     @relation("offers_buyer_idTousers", fields: [buyer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  listings              listings  @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  seller                users     @relation("offers_seller_idTousers", fields: [seller_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  orders                orders[]
-
-  @@index([buyer_id], map: "idx_offers_buyer")
-  @@index([listing_id], map: "idx_offers_listing")
-  @@index([seller_id], map: "idx_offers_seller")
-  @@index([status], map: "idx_offers_status")
 }

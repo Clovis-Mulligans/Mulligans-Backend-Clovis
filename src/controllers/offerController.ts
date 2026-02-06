@@ -1214,11 +1214,11 @@ export class OfferController {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      // Offers I made that need MY action (counter offers from sellers)
+      // Offers I made that need MY action (counters to respond to + accepted offers to purchase)
       const offersMadePending = await prisma.offers.count({
         where: {
           buyer_id: userId,
-          status: 'COUNTERED',
+          status: { in: ['COUNTERED', 'ACCEPTED', 'COUNTER_ACCEPTED'] },
         },
       });
 
