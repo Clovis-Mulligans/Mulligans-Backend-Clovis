@@ -4,6 +4,16 @@
 // ✅ ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
 // ✅ QUANTITY UPDATE: Now reduces stock instead of marking sold immediately
 
+// ==========================================
+// OFFER SYSTEM CHANGES (5 Feb 2026)
+// ==========================================
+// - Line ~77: Added offer_id to request body
+// - Line ~126: Added offer validation and price override
+// - Line ~204: FIXED £0.99 fee from flat to PER ITEM
+// - Line ~243: Added offer_id to PaymentIntent metadata
+// - Line ~520: Mark offer as PURCHASED in fulfillOrder webhook
+// ==========================================
+
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { PrismaClient, Prisma } from '@prisma/client';
@@ -33,7 +43,7 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
 // ✅ SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
   if (!specifications || !selectedSize) return specifications;
-  
+
   const specs = { ...specifications };
   if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
     const currentStock = specs.sizeQuantities[selectedSize] || 0;
@@ -65,10 +75,11 @@ export class StripeController {
    * POST /api/stripe/create-checkout-session
    * ✅ ESCROW UPDATE: Funds now held in platform account, not transferred immediately
    * ✅ QUANTITY UPDATE: Now includes quantity in metadata
+   * ✅ OFFER SYSTEM: Supports offer-based checkout with discounted price
    */
   static async createCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id, quantity = 1, selected_size } = req.body;  // ✅ SIZE VARIANT
+      const { listing_id, quantity = 1, selected_size, offer_id } = req.body;  // ✅ SIZE VARIANT + OFFER SYSTEM
       const userId = req.user?.id || req.user?.sub;
       const orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
@@ -76,7 +87,7 @@ export class StripeController {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('🛒 Creating checkout session for listing:', listing_id, 'quantity:', orderQuantity);
+      console.log('🛒 Creating checkout session for listing:', listing_id, 'quantity:', orderQuantity, offer_id ? `offer: ${offer_id}` : '');
 
       // Get listing details
       const listing = await prisma.listings.findUnique({
@@ -97,9 +108,9 @@ export class StripeController {
       // ✅ SIZE VARIANT: Check if size selection is required
       const specs = listing.specifications as any;
       const hasSizeVariants = specs?.sizeQuantities && Object.keys(specs.sizeQuantities).length > 0;
-      
+
       if (hasSizeVariants && !selected_size) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Size selection required',
           message: 'Please select a size before purchasing',
           available_sizes: Object.keys(specs.sizeQuantities).filter(size => specs.sizeQuantities[size] > 0)
@@ -109,7 +120,7 @@ export class StripeController {
       // ✅ SIZE VARIANT: Check stock availability for specific size
       const availableStock = getStockForSize(listing, selected_size);
       if (availableStock < orderQuantity) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Not enough stock available',
           available: availableStock,
           requested: orderQuantity,
@@ -119,6 +130,43 @@ export class StripeController {
 
       if (listing.seller_id === userId) {
         return res.status(400).json({ error: 'You cannot buy your own listing' });
+      }
+
+      // ✅ OFFER SYSTEM: Check if this is an offer-based purchase
+      const unitPrice = parseFloat(listing.price.toString());
+      let effectiveUnitPrice = unitPrice;
+      let validatedOfferId: string | null = null;
+
+      if (offer_id) {
+        const offer = await prisma.offers.findUnique({
+          where: { id: offer_id },
+        });
+
+        if (!offer) {
+          return res.status(404).json({ error: 'Offer not found' });
+        }
+
+        if (offer.buyer_id !== userId) {
+          return res.status(403).json({ error: 'This offer does not belong to you' });
+        }
+
+        if (offer.status !== 'ACCEPTED' && offer.status !== 'COUNTER_ACCEPTED') {
+          return res.status(400).json({ error: 'This offer is not in an accepted state' });
+        }
+
+        if (offer.listing_id !== listing_id) {
+          return res.status(400).json({ error: 'Offer does not match this listing' });
+        }
+
+        // Check acceptance window hasn't expired
+        if (offer.acceptance_expires_at && new Date() > offer.acceptance_expires_at) {
+          return res.status(400).json({ error: 'The acceptance window for this offer has expired' });
+        }
+
+        effectiveUnitPrice = parseFloat(offer.final_amount!.toString());
+        validatedOfferId = offer.id;
+
+        console.log(`💰 Offer-based checkout: list price £${unitPrice.toFixed(2)} → offer price £${effectiveUnitPrice.toFixed(2)}`);
       }
 
       // Get seller details
@@ -190,11 +238,11 @@ export class StripeController {
         }
       }
 
-      // ✅ Calculate prices with quantity
-      const unitPrice = parseFloat(listing.price.toString());
-      const itemPrice = unitPrice * orderQuantity;  // ✅ Total for all items
+      // ✅ Calculate prices with quantity (using effective price which may be offer price)
+      const itemPrice = effectiveUnitPrice * orderQuantity;  // ✅ Total for all items
       const platformFeePercent = 0.075;
       const platformFeeFixed = 0.99;
+      // ✅ FIXED: £0.99 fee applies PER ITEM (multiplied by quantity)
       const platformFee = (itemPrice * platformFeePercent) + (platformFeeFixed * orderQuantity);
       const totalPrice = itemPrice + platformFee;
 
@@ -206,6 +254,7 @@ export class StripeController {
 
       console.log('💰 Price breakdown:', {
         unitPrice: unitPrice.toFixed(2),
+        effectiveUnitPrice: effectiveUnitPrice.toFixed(2),
         quantity: orderQuantity,
         itemPrice: itemPrice.toFixed(2),
         platformFee: platformFee.toFixed(2),
@@ -213,6 +262,7 @@ export class StripeController {
         sellerReceives: sellerPayout.toFixed(2),
         sellerConnectId,
         escrowNote: 'Funds held until delivery confirmed',
+        offerId: validatedOfferId || 'none',
       });
 
       // ✅ ESCROW: Create PaymentIntent WITHOUT transfer_data
@@ -228,12 +278,14 @@ export class StripeController {
           seller_connect_id: sellerConnectId || '',
           quantity: orderQuantity.toString(),
           selected_size: selected_size || '',  // ✅ SIZE VARIANT
-          unit_price: unitPrice.toFixed(2),    // ✅ Price per item
+          unit_price: unitPrice.toFixed(2),    // ✅ Original list price per item
+          effective_unit_price: effectiveUnitPrice.toFixed(2),  // ✅ OFFER SYSTEM: Actual price charged
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
           escrow: 'true',
+          offer_id: validatedOfferId || '',  // ✅ OFFER SYSTEM
         },
       });
 
@@ -247,12 +299,12 @@ export class StripeController {
               currency: 'gbp',
               product_data: {
                 name: listing.title,
-                description: `Sold by ${seller.display_name}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}`,
+                description: `Sold by ${seller.display_name}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}${validatedOfferId ? ' (Offer price)' : ''}`,
                 images: listing.images && listing.images.length > 0
                   ? [listing.images[0].image_url]
                   : undefined,
               },
-              unit_amount: Math.round(unitPrice * 100),  // ✅ Unit price in pence
+              unit_amount: Math.round(effectiveUnitPrice * 100),  // ✅ OFFER SYSTEM: Use effective price in pence
             },
             quantity: orderQuantity,  // ✅ Use actual quantity
           },
@@ -280,11 +332,13 @@ export class StripeController {
           seller_connect_id: sellerConnectId || '',
           quantity: orderQuantity.toString(),  // ✅ Include quantity
           unit_price: unitPrice.toFixed(2),
+          effective_unit_price: effectiveUnitPrice.toFixed(2),  // ✅ OFFER SYSTEM
           item_price: itemPrice.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
           escrow: 'true',
+          offer_id: validatedOfferId || '',  // ✅ OFFER SYSTEM
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
@@ -334,11 +388,11 @@ export class StripeController {
     switch (event.type) {
       case 'checkout.session.completed':
         const webhookSession = event.data.object as Stripe.Checkout.Session;
-        
+
         // Retrieve the full session to get shipping details
         console.log('🔄 Retrieving full session...');
         const fullSession = await stripe.checkout.sessions.retrieve(webhookSession.id);
-        
+
         // Debug: Log entire session to find shipping data location
         console.log('📦 FULL SESSION KEYS:', Object.keys(fullSession));
         console.log('📍 shipping_details:', (fullSession as any).shipping_details);
@@ -346,7 +400,7 @@ export class StripeController {
         console.log('📍 shipping_cost:', (fullSession as any).shipping_cost);
         console.log('📍 customer_details:', JSON.stringify((fullSession as any).customer_details, null, 2));
         console.log('📍 collected_information:', (fullSession as any).collected_information);
-        
+
         // Check if this is a cart checkout or single item
         if (fullSession.metadata?.type === 'cart_checkout') {
           console.log('🛒 Processing cart checkout...');
@@ -380,6 +434,7 @@ export class StripeController {
    * Fulfill Single Item Order
    * ✅ ESCROW UPDATE: Now stores seller_payout, uses 5-day shipping deadline
    * ✅ QUANTITY UPDATE: Reduces stock, only marks sold when qty = 0
+   * ✅ OFFER SYSTEM: Marks offer as PURCHASED when order is fulfilled
    */
   private static async fulfillOrder(session: Stripe.Checkout.Session) {
     try {
@@ -389,15 +444,16 @@ export class StripeController {
       const listing_id = metadata.listing_id;
       const buyer_id = metadata.buyer_id;
       const seller_id = metadata.seller_id;
-      
-      // ✅ Get quantity and size from metadata
+
+      // ✅ Get quantity, size, and offer_id from metadata
       const orderQuantity = parseInt(metadata.quantity || '1');
       const selectedSize = metadata.selected_size || null;  // ✅ SIZE VARIANT
+      const offerId = metadata.offer_id || null;  // ✅ OFFER SYSTEM
 
       // Check if order already exists (prevent duplicate processing)
       const existingOrder = await prisma.orders.findFirst({
-        where: { 
-          listing_id, 
+        where: {
+          listing_id,
           buyer_id,
           stripe_payment_intent_id: session.payment_intent as string
         },
@@ -426,7 +482,7 @@ export class StripeController {
 
       const listingImage = listing.images?.[0]?.image_url || null;
       const listingTitle = listing.title || 'your item';
-      
+
       // ✅ SIZE VARIANT: Get stock for specific size
       const currentStock = getStockForSize(listing, selectedSize);
 
@@ -471,9 +527,18 @@ export class StripeController {
 
       // ✅ Get seller payout from metadata (or calculate from item price)
       const itemPrice = parseFloat(metadata.item_price);
-      const sellerPayout = metadata.seller_payout 
-        ? parseFloat(metadata.seller_payout) 
+      const sellerPayout = metadata.seller_payout
+        ? parseFloat(metadata.seller_payout)
         : itemPrice;
+
+      // ✅ OFFER SYSTEM: Get original list price and calculate discount
+      const originalListPrice = parseFloat(metadata.unit_price);
+      const effectiveUnitPrice = metadata.effective_unit_price
+        ? parseFloat(metadata.effective_unit_price)
+        : originalListPrice;
+      const discountAmount = offerId
+        ? (originalListPrice - effectiveUnitPrice) * orderQuantity
+        : 0;
 
       // ✅ ESCROW: Auto-cancel date (5 days)
       const autoCancelAt = new Date();
@@ -482,21 +547,21 @@ export class StripeController {
       // ✅ SIZE VARIANT: Calculate new stock level
       let newTotalStock: number;
       let updatedSpecs = listing.specifications;
-      
+
       if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
         updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
         newTotalStock = getTotalStockFromSizes(updatedSpecs);
       } else {
         newTotalStock = listing.quantity - orderQuantity;
       }
-      
+
       const shouldMarkSold = newTotalStock <= 0;
 
       console.log(`📊 Stock update: ${currentStock} - ${orderQuantity} = ${newTotalStock}${selectedSize ? ` (size: ${selectedSize})` : ''} (Mark sold: ${shouldMarkSold})`);
 
       // ✅ Use transaction to ensure atomicity
       const order = await prisma.$transaction(async (tx) => {
-        // Create order with quantity
+        // Create order with quantity and offer data
         const createdOrder = await tx.orders.create({
           data: {
             id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -515,17 +580,21 @@ export class StripeController {
             auto_cancel_at: autoCancelAt,
             shipping_address: shippingAddressJson ?? Prisma.JsonNull,
             updated_at: new Date(),
+            // ✅ OFFER SYSTEM: Store offer details on the order
+            offer_id: offerId || null,
+            original_list_price: offerId ? originalListPrice : null,
+            discount_amount: offerId ? discountAmount : 0,
           },
         });
 
         // ✅ SIZE VARIANT: Update listing stock, specifications, and status
         await tx.listings.update({
           where: { id: listing_id },
-          data: { 
+          data: {
             quantity: Math.max(0, newTotalStock),
             specifications: updatedSpecs ?? undefined,  // ✅ Update size quantities
             status: shouldMarkSold ? 'sold' : 'active',
-            updated_at: new Date() 
+            updated_at: new Date()
           },
         });
 
@@ -537,6 +606,18 @@ export class StripeController {
           }
         });
 
+        // ✅ OFFER SYSTEM: Mark the offer as PURCHASED
+        if (offerId) {
+          await tx.offers.update({
+            where: { id: offerId },
+            data: {
+              status: 'PURCHASED',
+              purchased_at: new Date(),
+            },
+          });
+          console.log(`✅ Offer ${offerId} marked as PURCHASED`);
+        }
+
         return createdOrder;
       });
 
@@ -546,6 +627,9 @@ export class StripeController {
       console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
       console.log(`🔒 Funds held in escrow. Seller payout: £${sellerPayout.toFixed(2)}`);
       console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
+      if (offerId) {
+        console.log(`🤝 Offer-based purchase: original £${originalListPrice.toFixed(2)} → paid £${effectiveUnitPrice.toFixed(2)} (saved £${discountAmount.toFixed(2)})`);
+      }
 
       // Check if seller needs bank verification
       const sellerUser = await prisma.users.findUnique({
@@ -558,13 +642,14 @@ export class StripeController {
       // ✅ Notify buyer - WITH IMAGE, quantity, and size
       const sizeText = selectedSize ? ` (${selectedSize})` : '';
       const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
+      const offerText = offerId ? ` at your offer price of £${effectiveUnitPrice.toFixed(2)}` : '';
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: buyer_id,
           type: 'order',
           title: 'Payment Successful! 🎉',
-          message: `Your order for "${listingTitle}"${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          message: `Your order for "${listingTitle}"${qtyText}${offerText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
           image_url: listingImage,
           related_id: order.id,
         },
@@ -623,14 +708,14 @@ export class StripeController {
   private static async payoutPlatformFee(session: Stripe.Checkout.Session) {
     try {
       const platformFee = session.metadata?.platform_fee;
-      
+
       if (!platformFee) {
         console.log('⚠️ No platform fee in metadata, skipping payout');
         return;
       }
 
       const platformFeePence = Math.round(parseFloat(platformFee) * 100);
-      
+
       if (platformFeePence <= 0) {
         console.log('⚠️ Platform fee is zero, skipping payout');
         return;

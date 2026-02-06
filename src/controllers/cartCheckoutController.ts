@@ -1,3 +1,13 @@
+// ==========================================
+// OFFER SYSTEM CHANGES (5 Feb 2026)
+// ==========================================
+// - Line ~283-286: itemsTotal now uses offer_price when available
+// - Line ~301-302: FIXED £0.99 fee from PER SELLER to PER ITEM
+// - Line ~333: unit_amount now uses offer_price when available
+// - Line ~395-406: Added offer_id/offer_price to Stripe metadata
+// - Line ~658-661: Added offer_id/original_list_price/discount_amount to order creation
+// ==========================================
+
 // src/controllers/cartCheckoutController.ts
 // Handles checkout for cart with multiple items (potentially from multiple sellers)
 // ESCROW UPDATE: Removed immediate transfers - funds held until escrow releases
@@ -49,7 +59,7 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
 // SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
   if (!specifications || !selectedSize) return specifications;
-  
+
   const specs = { ...specifications };
   if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
     const currentStock = specs.sizeQuantities[selectedSize] || 0;
@@ -140,7 +150,7 @@ export class CartCheckoutController {
         const selectedSize = item.selected_size;
         const requestedQty = item.quantity || 1;
         const availableStock = getStockForSize(item.listings, selectedSize);
-        
+
         if (requestedQty > availableStock) {
           overStockItems.push({
             listing_id: item.listing_id,
@@ -197,11 +207,12 @@ export class CartCheckoutController {
           };
         }
 
-        const price = parseFloat(item.listings.price.toString());
+        // OFFER SYSTEM: Use offer_price if available, otherwise listing price
+        const price = parseFloat((item.offer_price || item.listings.price).toString());
         const shippingCost = parseFloat((item.listings as any).shipping_cost?.toString() || '0');
-        
+
         const listingShipping = Math.ceil(quantity / 5) * shippingCost;
-        
+
         sellerGroups[sellerId].items.push({
           listing_id: item.listing_id,
           title: item.listings.title,
@@ -210,6 +221,10 @@ export class CartCheckoutController {
           selected_size: item.selected_size || null,
           shipping_cost: shippingCost,
           image_url: item.listings.images[0]?.image_url || null,
+          // OFFER SYSTEM: Pass offer metadata through
+          offer_id: item.offer_id || null,
+          offer_price: item.offer_price ? parseFloat(item.offer_price.toString()) : null,
+          original_list_price: parseFloat(item.listings.price.toString()),
         });
         sellerGroups[sellerId].subtotal += price * quantity;
         sellerGroups[sellerId].shippingTotal = Math.max(sellerGroups[sellerId].shippingTotal, listingShipping);
@@ -273,16 +288,17 @@ export class CartCheckoutController {
       }
 
       // Calculate totals with quantity support
+      // OFFER SYSTEM: Use offer_price when available for accurate totals
       const itemsTotal = cartItems.reduce(
-        (sum, item) => sum + parseFloat(item.listings.price.toString()) * (item.quantity || 1),
+        (sum, item) => sum + parseFloat((item.offer_price || item.listings.price).toString()) * (item.quantity || 1),
         0
       );
       const baseShippingTotal = Object.values(sellerGroups).reduce(
         (sum, group) => sum + group.shippingTotal,
         0
       );
-      
-      // ✅ INSURANCE: Calculate insurance premium (1.25% of item value)
+
+      // INSURANCE: Calculate insurance premium (1.25% of item value)
       const insurancePremium = itemsTotal * INSURANCE_RATE;
       const insuredValue = itemsTotal;
       const insuredShippingTotal = baseShippingTotal + insurancePremium;
@@ -290,9 +306,9 @@ export class CartCheckoutController {
         (sum, item) => sum + (item.quantity || 1),
         0
       );
-      
-      // £0.99 fee applies PER ITEM, always (quantity-aware)
-const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * totalQuantity);
+
+      // FIXED: £0.99 fee applies PER ITEM, always (not per seller)
+      const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * totalQuantity);
       const grandTotal = itemsTotal + insuredShippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);
@@ -312,6 +328,7 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
       });
 
       // Build line items for Stripe Checkout with quantities
+      // OFFER SYSTEM: Use offer_price when available for Stripe line items
       const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = cartItems.map(
         (item) => ({
           price_data: {
@@ -323,7 +340,9 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
                 ? [item.listings.images[0].image_url]
                 : undefined,
             },
-            unit_amount: Math.round(parseFloat(item.listings.price.toString()) * 100),
+            unit_amount: Math.round(
+              parseFloat((item.offer_price || item.listings.price).toString()) * 100
+            ),
           },
           quantity: item.quantity || 1,
         })
@@ -342,7 +361,7 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
         quantity: 1,
       });
 
-      // ✅ INSURANCE: Add "Insured Shipping" as line item
+      // INSURANCE: Add "Insured Shipping" as line item
       if (insuredShippingPence > 0) {
         lineItems.push({
           price_data: {
@@ -361,6 +380,18 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
       const listingQuantities: Record<string, number> = {};
       for (const item of cartItems) {
         listingQuantities[item.listing_id] = item.quantity || 1;
+      }
+
+      // OFFER SYSTEM: Build offer metadata map for cart items with offers
+      const offerMap: Record<string, { offer_id: string; offer_price: string; original_price: string }> = {};
+      for (const item of cartItems) {
+        if (item.offer_id && item.offer_price) {
+          offerMap[item.listing_id] = {
+            offer_id: item.offer_id,
+            offer_price: parseFloat(item.offer_price.toString()).toFixed(2),
+            original_price: parseFloat(item.listings.price.toString()).toFixed(2),
+          };
+        }
       }
 
       // Create seller breakdown for metadata
@@ -397,14 +428,17 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
           grand_total: grandTotal.toFixed(2),
           item_count: cartItems.length.toString(),
           total_quantity: totalQuantity.toString(),
-          // ✅ FIXED: Truncate listing_ids to stay under 500 char limit
+          // FIXED: Truncate listing_ids to stay under 500 char limit
           listing_ids: cartItems.map((item) => item.listing_id).join(',').substring(0, 490),
-          // ✅ FIXED: Store quantities separately, truncated
+          // FIXED: Store quantities separately, truncated
           listing_quantities: JSON.stringify(listingQuantities).substring(0, 490),
-          // ✅ FIXED: Simplified seller breakdown (just IDs and totals)
+          // FIXED: Simplified seller breakdown (just IDs and totals)
           seller_ids: Object.keys(sellerGroups).join(',').substring(0, 490),
           first_item_image: (cartItems[0]?.listings.images[0]?.image_url || '').substring(0, 490),
           escrow: 'true',
+          // OFFER SYSTEM: Store offer metadata for fulfillment
+          offer_map: JSON.stringify(offerMap).substring(0, 490),
+          has_offers: Object.keys(offerMap).length > 0 ? 'true' : 'false',
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}cart`,
@@ -447,13 +481,22 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
       const buyerId = metadata.buyer_id;
       const listingIds = metadata.listing_ids.split(',');
       const listingQuantities = JSON.parse(metadata.listing_quantities || '{}');
-      // ✅ Reconstruct seller breakdown from database instead of metadata
+      // Reconstruct seller breakdown from database instead of metadata
       const sellerIds = (metadata.seller_ids || '').split(',').filter(Boolean);
       const firstItemImage = metadata.first_item_image || null;
 
-      // ✅ INSURANCE: Get insurance values from metadata
+      // INSURANCE: Get insurance values from metadata
       const insurancePremium = parseFloat(metadata.insurance_premium || '0');
       const insuredValue = parseFloat(metadata.insured_value || '0');
+
+      // OFFER SYSTEM: Parse offer metadata from Stripe session
+      const offerMap: Record<string, { offer_id: string; offer_price: string; original_price: string }> = {};
+      try {
+        const parsedOfferMap = JSON.parse(metadata.offer_map || '{}');
+        Object.assign(offerMap, parsedOfferMap);
+      } catch (e) {
+        console.warn('[CART] Could not parse offer_map from metadata:', e);
+      }
 
       // Fetch listings to reconstruct seller breakdown
       const listings = await prisma.listings.findMany({
@@ -484,13 +527,13 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
 
       // Group listings by seller
       const sellerMap: Record<string, typeof sellerBreakdown[0]> = {};
-      
+
       for (const listing of listings) {
         const sellerId = listing.seller_id;
         const quantity = listingQuantities[listing.id] || 1;
         // Parse selected_size from metadata if stored, otherwise null
         const selectedSize = null; // Will be populated from cart_items if needed
-        
+
         if (!sellerMap[sellerId]) {
           sellerMap[sellerId] = {
             seller_id: sellerId,
@@ -501,10 +544,14 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
             first_image: listing.images[0]?.image_url || null,
           };
         }
-        
-        const price = parseFloat(listing.price.toString());
+
+        // OFFER SYSTEM: Use offer price if available for seller subtotal calculation
+        const offerData = offerMap[listing.id];
+        const price = offerData
+          ? parseFloat(offerData.offer_price)
+          : parseFloat(listing.price.toString());
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
-        
+
         sellerMap[sellerId].subtotal += price * quantity;
         sellerMap[sellerId].shipping_total = Math.max(
           sellerMap[sellerId].shipping_total,
@@ -575,12 +622,12 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
       // Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
 
-        // ✅ INSURANCE: Calculate total items value for proportional insurance split
+        // INSURANCE: Calculate total items value for proportional insurance split
       const totalItemsValue = sellerBreakdown.reduce((sum, s) => sum + s.subtotal, 0);
 
         for (const sellerData of sellerBreakdown) {
           const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
-          
+
           for (const cartItem of (cart_items || [])) {
             const listingId = cartItem.listing_id;
             const orderQuantity = cartItem.quantity || 1;
@@ -589,8 +636,8 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
             // Get listing details
             const listing = await tx.listings.findUnique({
               where: { id: listingId },
-              select: { 
-                price: true, 
+              select: {
+                price: true,
                 shipping_cost: true,
                 quantity: true,
                 specifications: true,
@@ -604,10 +651,19 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
 
             if (!listing) continue;
 
-            const itemPrice = parseFloat(listing.price.toString());
+            // OFFER SYSTEM: Determine the effective price (offer or list)
+            const offerData = offerMap[listingId];
+            const effectivePrice = offerData
+              ? parseFloat(offerData.offer_price)
+              : parseFloat(listing.price.toString());
+            const originalListPrice = parseFloat(listing.price.toString());
+            const discountAmount = offerData
+              ? originalListPrice - effectivePrice
+              : 0;
+
             const itemShippingCost = parseFloat((listing.shipping_cost || 0).toString());
             const listingImage = listing.images[0]?.image_url || null;
-            
+
             const currentStock = getStockForSize(listing, selectedSize);
             const orderShipping = Math.ceil(orderQuantity / 5) * itemShippingCost;
 
@@ -620,42 +676,44 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
             // Calculate new stock
             let newTotalStock: number;
             let updatedSpecs = listing.specifications;
-            
+
             if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
               updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
               newTotalStock = getTotalStockFromSizes(updatedSpecs);
             } else {
               newTotalStock = listing.quantity - orderQuantity;
             }
-            
+
             const shouldMarkSold = newTotalStock <= 0;
 
             // Add to email items list
             const sizeText = selectedSize ? ` (${selectedSize})` : '';
+            const offerText = offerData ? ' (offer accepted)' : '';
             orderItems.push({
-              name: `${listing.title}${sizeText}`,
-              price: `£${(itemPrice * orderQuantity).toFixed(2)}`,
+              name: `${listing.title}${sizeText}${offerText}`,
+              price: `£${(effectivePrice * orderQuantity).toFixed(2)}`,
               quantity: orderQuantity,
             });
 
-            // ✅ INSURANCE: Calculate this order's item total for insurance proportion
-            const orderItemTotal = itemPrice * orderQuantity;
+            // INSURANCE: Calculate this order's item total for insurance proportion
+            const orderItemTotal = effectivePrice * orderQuantity;
 
             // Create order
+            // OFFER SYSTEM: Include offer_id, original_list_price, discount_amount
             const order = await tx.orders.create({
               data: {
                 id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 listing_id: listingId,
                 buyer_id: buyerId,
                 seller_id: seller_id,
-                amount: itemPrice * orderQuantity,
+                amount: effectivePrice * orderQuantity,
                 quantity: orderQuantity,
                 selected_size: selectedSize,
                 shipping_cost: orderShipping,
-                seller_payout: itemPrice * orderQuantity,
+                seller_payout: effectivePrice * orderQuantity,
                 listing_title: listing.title,
                 listing_image: listingImage,
-                listing_price: itemPrice,
+                listing_price: effectivePrice,
                 currency: 'GBP',
                 stripe_payment_intent_id: session.payment_intent as string,
                 status: 'to_ship',
@@ -663,25 +721,43 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
                 auto_cancel_at: autoCancelAt,
                 shipping_address: shippingAddressJson ?? Prisma.JsonNull,
                 updated_at: new Date(),
-                // ✅ INSURANCE: Store insurance values on order
+                // INSURANCE: Store insurance values on order
                 insurance_premium: (orderItemTotal / totalItemsValue) * insurancePremium,
                 insured_value: orderItemTotal,
+                // OFFER SYSTEM: Store offer details on order
+                offer_id: offerData?.offer_id || null,
+                original_list_price: offerData ? originalListPrice : null,
+                discount_amount: offerData ? discountAmount * orderQuantity : 0,
               },
             });
 
             createdOrders.push({ ...order, image_url: listingImage, title: listing.title, quantity: orderQuantity });
-            console.log(`[CART] Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})`);
+            console.log(`[CART] Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})${offerData ? ` [offer: ${offerData.offer_id}]` : ''}`);
 
             // Update listing stock
             await tx.listings.update({
               where: { id: listingId },
-              data: { 
+              data: {
                 quantity: Math.max(0, newTotalStock),
                 specifications: updatedSpecs ?? undefined,
                 status: shouldMarkSold ? 'sold' : 'active',
-                updated_at: new Date() 
+                updated_at: new Date()
               },
             });
+
+            // OFFER SYSTEM: Mark the offer as PURCHASED if this was an offer purchase
+            if (offerData?.offer_id) {
+              try {
+                await tx.offers.update({
+                  where: { id: offerData.offer_id },
+                  data: { status: 'PURCHASED' },
+                });
+                console.log(`[CART] Offer ${offerData.offer_id} marked as PURCHASED`);
+              } catch (offerUpdateErr) {
+                // Non-fatal: offer might not exist or already be completed
+                console.warn(`[CART] Could not update offer ${offerData.offer_id}:`, offerUpdateErr);
+              }
+            }
           }
         }
 
@@ -780,13 +856,13 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
           where: { id: seller_id },
           select: { email: true },
         });
-        
+
         if (sellerEmailRecord?.email) {
           try {
-            const shippingAddr = shippingAddressJson 
+            const shippingAddr = shippingAddressJson
               ? `${shippingAddressJson.name}<br>${shippingAddressJson.line1}${shippingAddressJson.line2 ? '<br>' + shippingAddressJson.line2 : ''}<br>${shippingAddressJson.city}<br>${shippingAddressJson.postal_code}`
               : 'See app for details';
-            
+
             await sendSaleNotification(sellerEmailRecord.email, {
               itemTitle: listing_ids.length === 1 ? createdOrders[0]?.title : `${listing_ids.length} items`,
               salePrice: subtotal.toFixed(2),
@@ -836,11 +912,11 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
       // Send order confirmation email to buyer
       if (buyer?.email) {
         try {
-          const formattedAddress = shippingAddressJson 
+          const formattedAddress = shippingAddressJson
             ? `${shippingAddressJson.name}\n${shippingAddressJson.line1}${shippingAddressJson.line2 ? '\n' + shippingAddressJson.line2 : ''}\n${shippingAddressJson.city}\n${shippingAddressJson.postal_code}`
             : 'Address not available';
 
-          const itemsListHtml = orderItems.map(item => 
+          const itemsListHtml = orderItems.map(item =>
             `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">${item.price}</td></tr>`
           ).join('');
 
@@ -851,7 +927,7 @@ const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * to
             totalAmount: `£${grandTotal}`,
             shippingAddress: formattedAddress.replace(/\n/g, '<br>'),
           });
-          
+
           console.log('[CART] Order confirmation email sent to:', buyer.email);
         } catch (emailError) {
           console.error('[CART] Failed to send order confirmation email:', emailError);

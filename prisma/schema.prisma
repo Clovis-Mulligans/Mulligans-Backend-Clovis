@@ -1,3 +1,14 @@
+// ==========================================
+// OFFER SYSTEM CHANGES (5 Feb 2026)
+// ==========================================
+// - Added new 'offers' model (line 417+)
+// - Added offer_id, original_list_price, discount_amount to 'orders' model (line 192-194)
+// - Added offer relation to 'orders' model (line 195)
+// - Added offers relation to 'listings' model (line 106)
+// - Added offers_as_buyer/offers_as_seller relations to 'users' model (line 278-279)
+// - Added offer_id, offer_price to 'cart_items' model (line 362-363)
+// ==========================================
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -103,6 +114,7 @@ model listings {
   listing_attributes  listing_attributes[]
   users               users                @relation(fields: [seller_id], references: [id], onDelete: Cascade)
   orders              orders[]
+  offers              offers[]             // ✅ OFFER SYSTEM: Link to offers
 
   @@index([brand])
   @@index([category])
@@ -181,7 +193,7 @@ model orders {
   disputes                      disputes?         // ✅ NEW: Link to dispute
   return_requests         return_requests[]
   stripe_transfer_id         String?        // ✅ NEW: Track Stripe transfer to prevent double payment
-  refunded_at                DateTime?      // ✅ NEW: Track refund details  
+  refunded_at                DateTime?      // ✅ NEW: Track refund details
   refund_amount              Decimal?          @db.Decimal(10, 2)
   stripe_refund_id           String?
   lost_notification_sent_at  DateTime?        // ✅ NEW: Track lost notification to prevent spam
@@ -189,12 +201,18 @@ model orders {
   insured_value                 Decimal?          @db.Decimal(10, 2)
   insurance_claim_status        String?
   insurance_claim_id            String?
+  // ✅ OFFER SYSTEM: Track offer-based purchases
+  offer_id                      String?
+  original_list_price           Decimal?          @db.Decimal(10, 2)
+  discount_amount               Decimal?          @db.Decimal(10, 2) @default(0)
+  offer                         offers?           @relation(fields: [offer_id], references: [id])
 
   @@index([buyer_id])
   @@index([created_at])
   @@index([seller_id])
   @@index([status])
   @@index([auto_cancel_at])
+  @@index([offer_id])
 }
 
 model reviews {
@@ -274,6 +292,9 @@ model users {
   blocked_by       blocked_users[] @relation("BlockedByBlocks")
   return_requests_made    return_requests[] @relation("return_requester")
 return_labels_paid      return_requests[] @relation("return_payer")
+  // ✅ OFFER SYSTEM: Buyer and seller offer relations
+  offers_as_buyer                              offers[]          @relation("offers_buyer_idTousers")
+  offers_as_seller                             offers[]          @relation("offers_seller_idTousers")
 }
 
 model notifications {
@@ -287,7 +308,7 @@ model notifications {
   is_read         Boolean  @default(false)
   created_at      DateTime @default(now())
   image_url       String?
-  
+
   user            users    @relation("notifications_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
   related_user    users?   @relation("notifications_related_user_idTousers", fields: [related_user_id], references: [id], onDelete: SetNull)
 
@@ -356,6 +377,9 @@ model cart_items {
   expires_at    DateTime
   quantity      Int      @default(1)
   selected_size String?
+  // ✅ OFFER SYSTEM: Track offer-based cart items
+  offer_id      String?
+  offer_price   Decimal? @db.Decimal(10, 2)
   listings      listings @relation(fields: [listing_id], references: [id], onDelete: Cascade)
   users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -363,6 +387,7 @@ model cart_items {
   @@index([user_id])
   @@index([listing_id])
   @@index([expires_at])
+  @@index([offer_id])
   @@map("cart_items")
 }
 
@@ -425,7 +450,7 @@ model disputes {
   buyer_id                 String
   seller_id                String
   return_requests         return_requests[]
-  
+
   // Status: open → counter_offered → buyer_accepted/seller_accepted → resolved
   //         OR: open → escalated → admin_resolved
   status                   String    @default("open")
@@ -437,16 +462,16 @@ model disputes {
   reason_text              String    @db.Text
   requested_refund_percent Int       // 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
   requested_refund_amount  Decimal   @db.Decimal(10, 2)
-  
+
   // ============================================
   // SELLER'S RESPONSE
   // ============================================
   seller_response_type     String?   // accept, counter, reject
-  counter_offer_percent    Int?      
+  counter_offer_percent    Int?
   counter_offer_amount     Decimal?  @db.Decimal(10, 2)
   seller_response_text     String?   @db.Text
   seller_responded_at      DateTime?
-  
+
   // ============================================
   // RESOLUTION
   // ============================================
@@ -455,13 +480,13 @@ model disputes {
   resolution_notes         String?   @db.Text
   resolved_by              String?   // buyer, seller, admin
   resolved_at              DateTime?
-  
+
   // ============================================
   // 36-HOUR DEADLINE SYSTEM
   // ============================================
   seller_deadline          DateTime  // 36 hours from created_at
   auto_escalated           Boolean   @default(false)
-  
+
   // ============================================
   // TIMESTAMPS
   // ============================================
@@ -473,7 +498,7 @@ model disputes {
   // ============================================
   escalated_at              DateTime?
   escalation_reason         String?
-  
+
   // ============================================
   // RELATIONS
   // ============================================
@@ -499,7 +524,7 @@ model dispute_images {
   s3_key       String
   uploaded_by  String   // buyer, seller
   created_at   DateTime @default(now())
-  
+
   disputes     disputes @relation(fields: [dispute_id], references: [id], onDelete: Cascade)
 
   @@index([dispute_id])
@@ -513,7 +538,7 @@ model return_requests {
   approved_by             String?
   reason                  String    // dispute_ruling, mutual_agreement, wrong_item, buyer_remorse
   status                  String    @default("pending") // pending, approved, awaiting_address, label_created, shipped, delivered, completed, cancelled
-  
+
   // Return label info
   return_label_url        String?
   return_tracking_number  String?
@@ -521,11 +546,11 @@ model return_requests {
   label_cost              Decimal?  @db.Decimal(10, 2)
   paid_by                 String?   // buyer_id or seller_id
   shippo_transaction_id   String?
-  
+
   // Refund info
   refund_amount           Decimal?  @db.Decimal(10, 2)
   shipping_deducted       Decimal?  @db.Decimal(10, 2)
-  
+
   // Timestamps
   shipped_at              DateTime?
   delivered_at            DateTime?
@@ -536,17 +561,64 @@ model return_requests {
 
    // ✅ NEW: Track Stripe refund ID
   stripe_refund_id           String?
-  
+
   // ✅ NEW: Auto-cancel if buyer doesn't ship within 5 days
   return_ship_deadline       DateTime?
-  
+
   // Relations
   orders                  orders    @relation(fields: [order_id], references: [id])
   disputes                disputes? @relation(fields: [dispute_id], references: [id])
   requester               users     @relation("return_requester", fields: [requested_by], references: [id])
   payer                   users?    @relation("return_payer", fields: [paid_by], references: [id])
-  
+
   @@index([order_id])
   @@index([dispute_id])
   @@index([status])
+}
+
+// ============================================
+// ✅ NEW: OFFER SYSTEM TABLE
+// ============================================
+
+model offers {
+  id                    String    @id @default(uuid())
+  listing_id            String
+  buyer_id              String
+  seller_id             String
+
+  // Pricing
+  list_price            Decimal   @db.Decimal(10, 2)
+  offer_amount          Decimal   @db.Decimal(10, 2)
+  counter_amount        Decimal?  @db.Decimal(10, 2)
+  final_amount          Decimal?  @db.Decimal(10, 2)
+
+  // Status: PENDING, ACCEPTED, DECLINED, COUNTERED, COUNTER_ACCEPTED,
+  //         COUNTER_DECLINED, EXPIRED, PURCHASED, VOID, WITHDRAWN
+  status                String    @default("PENDING")
+
+  // Tracking
+  offer_number          Int       // 1, 2, or 3 per buyer per listing
+
+  // Timestamps
+  created_at            DateTime  @default(now())
+  expires_at            DateTime
+  responded_at          DateTime?
+  acceptance_expires_at DateTime?
+  purchased_at          DateTime?
+
+  // Warning tracking (for 2-hour expiry warning)
+  warning_sent          Boolean   @default(false)
+
+  // Relations
+  listings              listings  @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+  buyer                 users     @relation("offers_buyer_idTousers", fields: [buyer_id], references: [id], onDelete: Cascade)
+  seller                users     @relation("offers_seller_idTousers", fields: [seller_id], references: [id], onDelete: Cascade)
+  orders                orders[]
+
+  @@index([listing_id])
+  @@index([buyer_id])
+  @@index([seller_id])
+  @@index([status])
+  @@index([expires_at])
+  @@index([acceptance_expires_at])
 }

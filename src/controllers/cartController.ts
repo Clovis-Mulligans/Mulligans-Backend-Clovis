@@ -1,5 +1,6 @@
 // src/controllers/cartController.ts
 // ✅ UPDATED: Added size variant support (selected_size) for clothing, shoes, grips, and shaft flex
+// ✅ UPDATED: Added offer system support (offer_id, offer_price) for negotiated prices
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -39,8 +40,8 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
 // ============================================
 function hasVariants(listing: any): boolean {
   const specs = listing.specifications as any;
-  return specs?.sizeQuantities && 
-         typeof specs.sizeQuantities === 'object' && 
+  return specs?.sizeQuantities &&
+         typeof specs.sizeQuantities === 'object' &&
          Object.keys(specs.sizeQuantities).length > 0;
 }
 
@@ -50,7 +51,7 @@ function hasVariants(listing: any): boolean {
 function getAvailableSizes(listing: any): { size: string; quantity: number }[] {
   const specs = listing.specifications as any;
   if (!specs?.sizeQuantities) return [];
-  
+
   return Object.entries(specs.sizeQuantities)
     .filter(([_, qty]) => (qty as number) > 0)
     .map(([size, qty]) => ({ size, quantity: qty as number }));
@@ -59,7 +60,7 @@ function getAvailableSizes(listing: any): { size: string; quantity: number }[] {
 export const CartController = {
   // ============================================
   // GET CART - Returns cart grouped by seller
-  // ✅ UPDATED: Now includes selected_size
+  // ✅ UPDATED: Now includes selected_size and offer fields
   // ============================================
   async getCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -101,19 +102,38 @@ export const CartController = {
         orderBy: { added_at: 'desc' }
       });
 
+      // ✅ OFFER SYSTEM: Batch-fetch offer expiry times for offer-based cart items
+      const offerIds = cartItems
+        .filter(item => item.offer_id)
+        .map(item => item.offer_id as string);
+
+      let offerExpiryMap: Record<string, string | null> = {};
+      if (offerIds.length > 0) {
+        const offers = await prisma.offers.findMany({
+          where: { id: { in: offerIds } },
+          select: { id: true, acceptance_expires_at: true, status: true },
+        });
+        for (const offer of offers) {
+          // Only include expiry if offer is still in an accepted state
+          if (offer.status === 'ACCEPTED' || offer.status === 'COUNTER_ACCEPTED') {
+            offerExpiryMap[offer.id] = offer.acceptance_expires_at?.toISOString() || null;
+          }
+        }
+      }
+
       // Check which items are still available and validate quantities
       const itemsWithAvailability = await Promise.all(
         cartItems.map(async (item) => {
           const listing = item.listings;
           const selectedSize = item.selected_size;
-          
+
           // ✅ Get stock for specific size (or total if no size)
           const availableStock = getStockForSize(listing, selectedSize);
           const isAvailable = listing.status === 'active' && availableStock > 0;
-          
+
           // ✅ Cap cart quantity to available stock for this size
           const validQuantity = Math.min(item.quantity, availableStock);
-          
+
           // If cart quantity exceeds stock, update it
           if (item.quantity > availableStock && availableStock > 0) {
             await prisma.cart_items.update({
@@ -121,7 +141,7 @@ export const CartController = {
               data: { quantity: availableStock }
             });
           }
-          
+
           // Count how many other users have this item+size in their cart
           const otherCartsCount = await prisma.cart_items.count({
             where: {
@@ -144,11 +164,11 @@ export const CartController = {
 
       // Group items by seller
       const sellerGroups: { [key: string]: any } = {};
-      
+
       for (const item of itemsWithAvailability) {
         const sellerId = item.listings.seller_id;
         const seller = item.listings.users;
-        
+
         if (!sellerGroups[sellerId]) {
           sellerGroups[sellerId] = {
             seller_id: sellerId,
@@ -163,22 +183,26 @@ export const CartController = {
           };
         }
 
-        const price = Number(item.listings.price);
+        // ✅ OFFER SYSTEM: Use offer_price when available, otherwise listing price
+        const price = item.offer_price
+          ? Number(item.offer_price)
+          : Number(item.listings.price);
+        const originalPrice = Number(item.listings.price);
         const shippingCost = Number(item.listings.shipping_cost) || 0;
         const quantity = item.quantity;
-        
+
         // ✅ Calculate line total based on quantity
         const lineTotal = price * quantity;
         // ✅ SHIPPING LOGIC: Every 5 items = 1 shipping charge
         const lineShipping = Math.ceil(quantity / 5) * shippingCost;
-        
+
         sellerGroups[sellerId].items.push({
           id: item.id,
           listing_id: item.listing_id,
           title: item.listings.title,
-          price: price,
+          price: originalPrice,
           quantity: quantity,
-          selected_size: item.selected_size,  // ✅ NEW: Include selected size
+          selected_size: item.selected_size,
           line_total: lineTotal,
           available_stock: item.available_stock,
           shipping_cost: shippingCost,
@@ -187,9 +211,13 @@ export const CartController = {
           added_at: item.added_at,
           expires_at: item.expires_at,
           is_available: item.is_available,
-          in_other_carts: item.in_other_carts > 0
+          in_other_carts: item.in_other_carts > 0,
+          // ✅ OFFER SYSTEM: Include offer fields in response
+          offer_id: item.offer_id || null,
+          offer_price: item.offer_price ? Number(item.offer_price) : null,
+          offer_expires_at: item.offer_id ? (offerExpiryMap[item.offer_id as string] || null) : null,
         });
-        
+
         sellerGroups[sellerId].subtotal += lineTotal;
         // ✅ SHIPPING: Take MAX shipping per seller (not sum)
         sellerGroups[sellerId].shipping_cost = Math.max(sellerGroups[sellerId].shipping_cost, lineShipping);
@@ -198,18 +226,18 @@ export const CartController = {
       // Convert to array
       const sellers = Object.values(sellerGroups);
 
-      
+
 // ✅ Calculate totals (using line totals which include quantity)
       const itemsTotal = sellers.reduce((sum, s) => sum + s.subtotal, 0);
       const baseShippingTotal = sellers.reduce((sum, s) => sum + (s.shipping_cost || 0), 0);
-      
+
       // ✅ Total items count (sum of quantities) - moved up for fee calculation
       const totalItemCount = itemsWithAvailability.reduce((sum, item) => sum + item.quantity, 0);
-      
+
       // ✅ INSURANCE: Calculate insurance premium (1.25% of item value)
       const insurancePremium = itemsTotal * INSURANCE_RATE;
       const insuredShippingTotal = baseShippingTotal + insurancePremium;
-      
+
       // ✅ FIXED: £0.99 fee applies PER ITEM, not per cart
       const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_PERCENTAGE) + (BUYER_PROTECTION_FIXED * totalItemCount);
       const grandTotal = itemsTotal + insuredShippingTotal + buyerProtectionFee;
@@ -230,7 +258,7 @@ export const CartController = {
           listing_id: item.listing_id,
           title: item.listings.title,
           selected_size: item.selected_size,
-          message: item.selected_size 
+          message: item.selected_size
             ? `Size ${item.selected_size} is no longer available`
             : 'This item is no longer available'
         }));
@@ -259,6 +287,7 @@ export const CartController = {
   // ============================================
   // ADD TO CART
   // ✅ UPDATED: Accepts selected_size for variants
+  // ✅ UPDATED: Accepts offer_id and offer_price for negotiated prices
   // ============================================
   async addToCart(req: AuthenticatedRequest, res: Response) {
     try {
@@ -267,7 +296,8 @@ export const CartController = {
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      const { listing_id, quantity = 1, selected_size = null } = req.body;
+      // ✅ OFFER SYSTEM: Accept offer_id and offer_price from request body
+      const { listing_id, quantity = 1, selected_size = null, offer_id = null, offer_price = null } = req.body;
       const requestedQty = Math.max(1, parseInt(quantity) || 1);
 
       if (!listing_id) {
@@ -296,7 +326,7 @@ export const CartController = {
       const listingHasVariants = hasVariants(listing);
       if (listingHasVariants && !selected_size) {
         const availableSizes = getAvailableSizes(listing);
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Please select a size',
           requires_size: true,
           available_sizes: availableSizes
@@ -307,9 +337,9 @@ export const CartController = {
       const availableStock = getStockForSize(listing, selected_size);
 
       if (availableStock < 1) {
-        return res.status(400).json({ 
-          error: selected_size 
-            ? `Size ${selected_size} is out of stock` 
+        return res.status(400).json({
+          error: selected_size
+            ? `Size ${selected_size} is out of stock`
             : 'This item is out of stock'
         });
       }
@@ -317,6 +347,42 @@ export const CartController = {
       // Can't add your own listing to cart
       if (listing.seller_id === userId) {
         return res.status(400).json({ error: 'You cannot add your own listing to cart' });
+      }
+
+      // ✅ OFFER SYSTEM: Validate offer if provided
+      let validatedOfferId: string | null = null;
+      let validatedOfferPrice: number | null = null;
+
+      if (offer_id) {
+        const offer = await prisma.offers.findUnique({
+          where: { id: offer_id },
+        });
+
+        if (!offer) {
+          return res.status(404).json({ error: 'Offer not found' });
+        }
+
+        if (offer.buyer_id !== userId) {
+          return res.status(403).json({ error: 'This offer does not belong to you' });
+        }
+
+        if (offer.status !== 'ACCEPTED' && offer.status !== 'COUNTER_ACCEPTED') {
+          return res.status(400).json({ error: 'This offer is not in an accepted state' });
+        }
+
+        if (offer.listing_id !== listing_id) {
+          return res.status(400).json({ error: 'Offer does not match this listing' });
+        }
+
+        // Check acceptance window hasn't expired
+        if (offer.acceptance_expires_at && new Date() > offer.acceptance_expires_at) {
+          return res.status(400).json({ error: 'The acceptance window for this offer has expired' });
+        }
+
+        validatedOfferId = offer.id;
+        validatedOfferPrice = parseFloat(offer.final_amount!.toString());
+
+        console.log(`[CART] Offer-based add: listing ${listing_id}, list £${Number(listing.price).toFixed(2)} → offer £${validatedOfferPrice.toFixed(2)}`);
       }
 
       // ✅ Check if already in cart (with same size)
@@ -330,24 +396,51 @@ export const CartController = {
       });
 
       if (existingCartItem) {
+        // ✅ OFFER SYSTEM: If adding with an offer, update existing item's offer fields
+        if (validatedOfferId) {
+          const updatedItem = await prisma.cart_items.update({
+            where: { id: existingCartItem.id },
+            data: {
+              offer_id: validatedOfferId,
+              offer_price: validatedOfferPrice,
+              expires_at: new Date(Date.now() + CART_EXPIRY_MS)
+            }
+          });
+
+          const cartItems = await prisma.cart_items.findMany({
+            where: { user_id: userId, expires_at: { gt: new Date() } }
+          });
+          const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+
+          return res.json({
+            message: 'Cart updated with offer price',
+            cart_item: updatedItem,
+            quantity: existingCartItem.quantity,
+            selected_size: selected_size,
+            available_stock: availableStock,
+            cart_count: cartCount,
+            offer_applied: true,
+          });
+        }
+
         // ✅ ADDITIVE: Add requested qty to existing qty
         const newQuantity = existingCartItem.quantity + requestedQty;
-        
+
         // ✅ Cap at available stock for this size
         const cappedQuantity = Math.min(newQuantity, availableStock);
-        
+
         if (cappedQuantity === existingCartItem.quantity) {
           // Already at max stock
-          return res.status(400).json({ 
+          return res.status(400).json({
             error: 'Maximum quantity reached',
-            message: selected_size 
+            message: selected_size
               ? `Only ${availableStock} available in size ${selected_size}`
               : `Only ${availableStock} available`,
             current_quantity: existingCartItem.quantity,
             available_stock: availableStock
           });
         }
-        
+
         const updatedItem = await prisma.cart_items.update({
           where: { id: existingCartItem.id },
           data: {
@@ -355,17 +448,17 @@ export const CartController = {
             expires_at: new Date(Date.now() + CART_EXPIRY_MS)
           }
         });
-        
+
         // Get updated cart count (sum of quantities)
         const cartItems = await prisma.cart_items.findMany({
-          where: { 
+          where: {
             user_id: userId,
             expires_at: { gt: new Date() }
           }
         });
         const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
-        return res.json({ 
+        return res.json({
           message: `Quantity updated to ${cappedQuantity}`,
           cart_item: updatedItem,
           quantity: cappedQuantity,
@@ -385,14 +478,17 @@ export const CartController = {
           user_id: userId,
           listing_id: listing_id,
           quantity: cappedQuantity,
-          selected_size: selected_size,  // ✅ NEW: Store selected size
+          selected_size: selected_size,
+          // ✅ OFFER SYSTEM: Store offer fields on cart item
+          offer_id: validatedOfferId,
+          offer_price: validatedOfferPrice,
           expires_at: new Date(Date.now() + CART_EXPIRY_MS)
         }
       });
 
       // Get updated cart count (sum of quantities)
       const cartItems = await prisma.cart_items.findMany({
-        where: { 
+        where: {
           user_id: userId,
           expires_at: { gt: new Date() }
         }
@@ -400,12 +496,13 @@ export const CartController = {
       const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
       res.status(201).json({
-        message: 'Item added to cart',
+        message: validatedOfferId ? 'Item added to cart at offer price' : 'Item added to cart',
         cart_item: cartItem,
         quantity: cappedQuantity,
         selected_size: selected_size,
         available_stock: availableStock,
-        cart_count: cartCount
+        cart_count: cartCount,
+        offer_applied: !!validatedOfferId,
       });
 
     } catch (error) {
@@ -448,14 +545,14 @@ export const CartController = {
         });
 
         const cartItems = await prisma.cart_items.findMany({
-          where: { 
+          where: {
             user_id: userId,
             expires_at: { gt: new Date() }
           }
         });
         const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
-        return res.json({ 
+        return res.json({
           message: 'Item removed from cart',
           cart_count: cartCount
         });
@@ -503,7 +600,7 @@ export const CartController = {
 
       // Get updated cart count
       const cartItems = await prisma.cart_items.findMany({
-        where: { 
+        where: {
           user_id: userId,
           expires_at: { gt: new Date() }
         }
@@ -560,14 +657,14 @@ export const CartController = {
 
       // Get updated cart count (sum of quantities)
       const cartItems = await prisma.cart_items.findMany({
-        where: { 
+        where: {
           user_id: userId,
           expires_at: { gt: new Date() }
         }
       });
       const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
-      res.json({ 
+      res.json({
         message: 'Item removed from cart',
         cart_count: cartCount
       });
@@ -592,7 +689,7 @@ export const CartController = {
         where: { user_id: userId }
       });
 
-      res.json({ 
+      res.json({
         message: 'Cart cleared',
         cart_count: 0
       });
@@ -622,7 +719,7 @@ export const CartController = {
       });
 
       const cartItems = await prisma.cart_items.findMany({
-        where: { 
+        where: {
           user_id: userId,
           expires_at: { gt: new Date() }
         }
@@ -652,7 +749,7 @@ export const CartController = {
 
       // Get all cart items
       const cartItems = await prisma.cart_items.findMany({
-        where: { 
+        where: {
           user_id: userId,
           expires_at: { gt: new Date() }
         },
@@ -672,9 +769,9 @@ export const CartController = {
       });
 
       if (cartItems.length === 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           valid: false,
-          error: 'Cart is empty' 
+          error: 'Cart is empty'
         });
       }
 
@@ -686,21 +783,21 @@ export const CartController = {
       for (const item of cartItems) {
         const listing = item.listings;
         const selectedSize = item.selected_size;
-        
+
         // ✅ Get stock for this specific size
         const availableStock = getStockForSize(listing, selectedSize);
-        
+
         if (listing.status !== 'active' || availableStock < 1) {
           // Item/size no longer available
           unavailable.push({
             listing_id: item.listing_id,
             title: listing.title,
             selected_size: selectedSize,
-            reason: selectedSize 
+            reason: selectedSize
               ? `Size ${selectedSize} is no longer available`
               : 'Item is no longer available'
           });
-          
+
           // Remove from cart
           await prisma.cart_items.delete({
             where: { id: item.id }
@@ -709,7 +806,7 @@ export const CartController = {
           // ✅ Quantity exceeds stock for this size - adjust it
           const oldQty = item.quantity;
           const newQty = availableStock;
-          
+
           quantityAdjusted.push({
             listing_id: item.listing_id,
             title: listing.title,
@@ -720,13 +817,13 @@ export const CartController = {
               ? `Only ${newQty} available in size ${selectedSize}`
               : `Only ${newQty} available`
           });
-          
+
           // Update cart quantity
           await prisma.cart_items.update({
             where: { id: item.id },
             data: { quantity: newQty }
           });
-          
+
           available.push({
             listing_id: item.listing_id,
             title: listing.title,
@@ -750,7 +847,7 @@ export const CartController = {
       if (unavailable.length > 0 || quantityAdjusted.length > 0) {
         return res.json({
           valid: quantityAdjusted.length > 0 && unavailable.length === 0,
-          message: unavailable.length > 0 
+          message: unavailable.length > 0
             ? `${unavailable.length} item(s) removed from cart`
             : `${quantityAdjusted.length} item(s) had quantity adjusted`,
           unavailable_items: unavailable,
@@ -796,7 +893,7 @@ export const CartController = {
 
       const isInCart = cartItem !== null && cartItem.expires_at > new Date();
 
-      res.json({ 
+      res.json({
         in_cart: isInCart,
         quantity: isInCart ? cartItem?.quantity : 0,
         selected_size: isInCart ? cartItem?.selected_size : null,
@@ -831,7 +928,7 @@ async getListingCartInfo(req: AuthenticatedRequest, res: Response) {
     let userHasInCart = false;
     let userCartQuantity = 0;
     let userCartItems: { selected_size: string | null; quantity: number }[] = [];
-    
+
     if (userId) {
       // ✅ If selected_size provided, only check for that specific size
       const whereClause: any = {
@@ -839,12 +936,12 @@ async getListingCartInfo(req: AuthenticatedRequest, res: Response) {
         listing_id: listing_id,
         expires_at: { gt: new Date() }
       };
-      
+
       // ✅ Only add size filter if a size was specified
       if (selected_size !== undefined) {
         whereClause.selected_size = selected_size || null;
       }
-      
+
       const userItems = await prisma.cart_items.findMany({
         where: whereClause,
         select: {
@@ -852,7 +949,7 @@ async getListingCartInfo(req: AuthenticatedRequest, res: Response) {
           quantity: true
         }
       });
-      
+
       userCartItems = userItems;
       userCartQuantity = userItems.reduce((sum, item) => sum + item.quantity, 0);
       userHasInCart = userCartQuantity > 0;

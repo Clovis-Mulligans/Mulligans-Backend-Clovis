@@ -1,3 +1,16 @@
+// ==========================================
+// OFFER SYSTEM CHANGES (5 Feb 2026)
+// ==========================================
+// - Line 34: Added import for offerRoutes
+// - Line 35: Added import for listingOfferRoutes
+// - Line 36: Added import for runOfferJobs
+// - Line 128-129: Added offer routes registration
+// - Line 130: Added listing offer routes (mounted on /api/listings)
+// - Line 165-175: Added offer jobs cron (every 5 minutes)
+// - Line 176-182: Added offer warning cron (every 15 minutes)
+// - Line 198-204: Added offer jobs to startup run
+// ==========================================
+
 // src/index.ts
 import dotenv from 'dotenv';
 dotenv.config();
@@ -31,6 +44,10 @@ import adminRoutes from './routes/adminRoutes';
 import connectRedirectRoutes from './routes/connectRedirectRoutes';
 import returnRoutes from './routes/returnRoutes';
 import testRoutes from './routes/testRoutes';
+// ✅ OFFER SYSTEM IMPORTS
+import offerRoutes from './routes/offerRoutes';
+import listingOfferRoutes from './routes/listingOfferRoutes';
+import { runOfferJobs, sendExpiryWarnings } from './jobs/offerJobs';
 
 
 const app = express();
@@ -124,6 +141,9 @@ app.use('/api/disputes', disputeRoutes);
 app.use('/admin', adminRoutes);
 app.use('/connect', connectRedirectRoutes);
 app.use('/api/returns', returnRoutes);
+// ✅ OFFER SYSTEM ROUTES
+app.use('/api/offers', offerRoutes);
+app.use('/api/listings', listingOfferRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -133,7 +153,7 @@ app.get('/health', (req, res) => {
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Error:', err);
-  
+
   if (err.message === 'Only image files are allowed') {
     res.status(400).json({ error: err.message });
     return;
@@ -159,7 +179,7 @@ app.use((req, res) => {
 cron.schedule('0 2 * * *', async () => {
   console.log('🕐 Starting daily jobs...');
   console.log(`📅 ${new Date().toISOString()}`);
-  
+
   try {
     await runEscrowJobs();
     console.log('✅ Escrow jobs completed');
@@ -177,6 +197,32 @@ cron.schedule('0 2 * * *', async () => {
   timezone: 'Europe/London'
 });
 
+// ============================================
+// ✅ OFFER SYSTEM CRON JOBS
+// ============================================
+
+// Run offer expiry/void jobs every 5 minutes
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    await runOfferJobs();
+  } catch (error) {
+    console.error('❌ Offer jobs failed:', error);
+  }
+}, {
+  timezone: 'Europe/London'
+});
+
+// Send 2-hour expiry warnings every 15 minutes
+cron.schedule('*/15 * * * *', async () => {
+  try {
+    await sendExpiryWarnings();
+  } catch (error) {
+    console.error('❌ Offer warning jobs failed:', error);
+  }
+}, {
+  timezone: 'Europe/London'
+});
+
 // Also run escrow jobs on server startup (after 30 seconds delay)
 // This catches any missed jobs if server was down
 setTimeout(async () => {
@@ -186,6 +232,15 @@ setTimeout(async () => {
     console.log('✅ Startup escrow jobs completed');
   } catch (error) {
     console.error('❌ Startup escrow jobs failed:', error);
+  }
+
+  // ✅ OFFER SYSTEM: Also run offer jobs on startup
+  console.log('🔄 Running offer jobs on startup...');
+  try {
+    await runOfferJobs();
+    console.log('✅ Startup offer jobs completed');
+  } catch (error) {
+    console.error('❌ Startup offer jobs failed:', error);
   }
 }, 30000);
 
@@ -206,9 +261,11 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`⭐ Reviews API: ${BASE_URL}/api/reviews`);
   console.log(`🛒 Cart API: ${BASE_URL}/api/cart`);
   console.log(`📮 Shipping API: ${BASE_URL}/api/shipping`);
+  console.log(`🤝 Offers API: ${BASE_URL}/api/offers`);
   console.log('═══════════════════════════════════════════');
   console.log('🌐 WebSocket: Enabled');
   console.log('🔒 Security: Helmet + Rate Limiting enabled');
   console.log('⏰ Escrow cron job: Daily at 2:00 AM UK time');
+  console.log('⏰ Offer cron jobs: Every 5 min (expiry) + 15 min (warnings)');
   console.log('═══════════════════════════════════════════');
 });
