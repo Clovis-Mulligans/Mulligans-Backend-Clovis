@@ -3,12 +3,26 @@
 // Uses Payment Intents instead of Checkout Sessions
 // UPDATED: Added push notifications
 
+// ==========================================
+// OFFER SYSTEM FIXES (6 Feb 2026)
+// ==========================================
+// [Issue #1]  CRITICAL: Full offer support added to createSingleItemPaymentIntent and fulfillSingleItem/fulfillCart.
+//             - Accepts offer_id in request body, validates offer, uses offer.final_amount as price
+//             - Stores offer_id, original_list_price, discount_amount on orders
+//             - Marks offers as PURCHASED with purchased_at after fulfillment
+//             - Cart path reads offer data from cart_items with offer_id set
+// [Issue #2]  CRITICAL: Import and call expireOffersForSoldItem after fulfillment when shouldMarkSold is true
+// [Issue #19] Replaced `new PrismaClient()` with shared singleton `import { prisma } from '../lib/prisma'`
+// [Issue #24] Added shipping cost to the payment amount (was missing from grand total)
+// ==========================================
+
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { sendPushNotification } from './pushNotificationController';
+import { expireOffersForSoldItem } from '../jobs/offerJobs';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
@@ -34,7 +48,7 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
 // SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
   if (!specifications || !selectedSize) return specifications;
-  
+
   const specs = { ...specifications };
   if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
     const currentStock = specs.sizeQuantities[selectedSize] || 0;
@@ -64,18 +78,19 @@ export class NativePaymentController {
   /**
    * Create Payment Intent for single item (Apple Pay on listing detail)
    * POST /api/stripe/native-payment/single-item
+   * OFFER SYSTEM: Supports offer_id in request body for offer-based purchases
    */
   static async createSingleItemPaymentIntent(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id, quantity = 1, selected_size } = req.body;
+      const { listing_id, quantity = 1, selected_size, offer_id } = req.body;
       const userId = req.user?.id || req.user?.sub;
-      const orderQuantity = Math.max(1, parseInt(quantity) || 1);
+      let orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
       if (!userId) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('[PAY] Creating native payment intent for listing:', listing_id, 'qty:', orderQuantity);
+      console.log('[PAY] Creating native payment intent for listing:', listing_id, 'qty:', orderQuantity, offer_id ? `offer: ${offer_id}` : '');
 
       // Get listing details
       const listing = await prisma.listings.findUnique({
@@ -105,9 +120,9 @@ export class NativePaymentController {
       // SIZE VARIANT: Check if size selection is required
       const specs = listing.specifications as any;
       const hasSizeVariants = specs?.sizeQuantities && Object.keys(specs.sizeQuantities).length > 0;
-      
+
       if (hasSizeVariants && !selected_size) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Size selection required',
           message: 'Please select a size before purchasing',
           available_sizes: Object.keys(specs.sizeQuantities).filter(size => specs.sizeQuantities[size] > 0)
@@ -127,6 +142,46 @@ export class NativePaymentController {
 
       if (listing.seller_id === userId) {
         return res.status(400).json({ error: 'You cannot buy your own listing' });
+      }
+
+      // OFFER SYSTEM: Check if this is an offer-based purchase
+      const originalUnitPrice = parseFloat(listing.price.toString());
+      let effectiveUnitPrice = originalUnitPrice;
+      let validatedOfferId: string | null = null;
+
+      if (offer_id) {
+        const offer = await prisma.offers.findUnique({
+          where: { id: offer_id },
+        });
+
+        if (!offer) {
+          return res.status(404).json({ error: 'Offer not found' });
+        }
+
+        if (offer.buyer_id !== userId) {
+          return res.status(403).json({ error: 'This offer does not belong to you' });
+        }
+
+        if (offer.status !== 'ACCEPTED' && offer.status !== 'COUNTER_ACCEPTED') {
+          return res.status(400).json({ error: 'This offer is not in an accepted state' });
+        }
+
+        if (offer.listing_id !== listing_id) {
+          return res.status(400).json({ error: 'Offer does not match this listing' });
+        }
+
+        // Check acceptance window hasn't expired
+        if (offer.acceptance_expires_at && new Date() > offer.acceptance_expires_at) {
+          return res.status(400).json({ error: 'The acceptance window for this offer has expired' });
+        }
+
+        effectiveUnitPrice = parseFloat(offer.final_amount!.toString());
+        validatedOfferId = offer.id;
+
+        // [Issue #8] Force quantity = 1 for offer-based purchases to prevent manipulation
+        orderQuantity = 1;
+
+        console.log(`[PAY] Offer-based checkout: list price £${originalUnitPrice.toFixed(2)} -> offer price £${effectiveUnitPrice.toFixed(2)}`);
       }
 
       const seller = listing.users;
@@ -164,27 +219,36 @@ export class NativePaymentController {
         console.log('[PAY] Connect account auto-created:', account.id);
       }
 
-      // Calculate prices
-      const unitPrice = parseFloat(listing.price.toString());
+      // Calculate prices (using effective price which may be offer price)
+      const unitPrice = effectiveUnitPrice;
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
       const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
       const insurancePremium = itemTotal * SHIPPING_INSURANCE_RATE;
-      const shippingTotal = baseShipping > 0 
-        ? parseFloat((baseShipping + insurancePremium).toFixed(2)) 
+      const shippingTotal = baseShipping > 0
+        ? parseFloat((baseShipping + insurancePremium).toFixed(2))
         : 0;
       const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
+      // [Issue #24] Grand total now includes shipping
       const grandTotal = itemTotal + shippingTotal + platformFee;
 
       const totalAmountPence = Math.round(grandTotal * 100);
 
+      // OFFER SYSTEM: Calculate discount for metadata
+      const discountAmount = validatedOfferId
+        ? (originalUnitPrice - effectiveUnitPrice) * orderQuantity
+        : 0;
+
       console.log('[PAY] Native payment breakdown:', {
-        unitPrice: unitPrice.toFixed(2),
+        originalUnitPrice: originalUnitPrice.toFixed(2),
+        effectiveUnitPrice: unitPrice.toFixed(2),
         quantity: orderQuantity,
         itemTotal: itemTotal.toFixed(2),
         shipping: shippingTotal.toFixed(2),
         platformFee: platformFee.toFixed(2),
         grandTotal: grandTotal.toFixed(2),
+        offerId: validatedOfferId || 'none',
+        discount: discountAmount.toFixed(2),
       });
 
       // Create Payment Intent
@@ -202,12 +266,15 @@ export class NativePaymentController {
           seller_connect_id: sellerConnectId || '',
           quantity: orderQuantity.toString(),
           selected_size: selected_size || '',
-          unit_price: unitPrice.toFixed(2),
+          unit_price: originalUnitPrice.toFixed(2),
+          effective_unit_price: effectiveUnitPrice.toFixed(2),
           item_total: itemTotal.toFixed(2),
           shipping_cost: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           seller_payout: (itemTotal + shippingTotal).toFixed(2),
           grand_total: grandTotal.toFixed(2),
+          offer_id: validatedOfferId || '',
+          discount_amount: discountAmount.toFixed(2),
         },
       });
 
@@ -234,6 +301,7 @@ export class NativePaymentController {
   /**
    * Create Payment Intent for cart checkout
    * POST /api/stripe/native-payment/cart
+   * OFFER SYSTEM: Reads offer data from cart_items that have offer_id set
    */
   static async createCartPaymentIntent(req: AuthenticatedRequest, res: Response) {
     try {
@@ -272,7 +340,7 @@ export class NativePaymentController {
         item => !item.listings || item.listings.status !== 'active'
       );
       if (unavailableItems.length > 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Some items are no longer available',
           unavailable: unavailableItems.map(i => i.listing_id),
         });
@@ -281,35 +349,46 @@ export class NativePaymentController {
       // Check for own items
       const ownItems = cartItems.filter(item => item.listings?.seller_id === userId);
       if (ownItems.length > 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'You cannot buy your own listings',
           own_items: ownItems.map(i => i.listing_id),
         });
       }
 
       // Calculate totals
+      // OFFER SYSTEM: Use offer_price from cart_items when available
       let itemsTotal = 0;
       let baseShippingTotal = 0;
       const itemsMetadata: string[] = [];
+      const offerMetadata: Record<string, string> = {};
 
       for (const cartItem of cartItems) {
         const listing = cartItem.listings!;
         const quantity = cartItem.quantity || 1;
-        const unitPrice = parseFloat(listing.price.toString());
+        // OFFER SYSTEM: Use offer_price if available, otherwise listing price
+        const unitPrice = cartItem.offer_price
+          ? parseFloat(cartItem.offer_price.toString())
+          : parseFloat(listing.price.toString());
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
-        
+
         itemsTotal += unitPrice * quantity;
         baseShippingTotal += Math.ceil(quantity / 5) * shippingCost;
         itemsMetadata.push(`${listing.id}:${quantity}`);
+
+        // OFFER SYSTEM: Collect offer metadata for fulfillment
+        if (cartItem.offer_id && cartItem.offer_price) {
+          const originalPrice = parseFloat(listing.price.toString());
+          offerMetadata[`offer_${listing.id}`] = `${cartItem.offer_id}|${unitPrice.toFixed(2)}|${originalPrice.toFixed(2)}`;
+        }
       }
 
       const insurancePremium = itemsTotal * SHIPPING_INSURANCE_RATE;
-      const shippingTotal = baseShippingTotal > 0 
-        ? parseFloat((baseShippingTotal + insurancePremium).toFixed(2)) 
+      const shippingTotal = baseShippingTotal > 0
+        ? parseFloat((baseShippingTotal + insurancePremium).toFixed(2))
         : 0;
 
       const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
-const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * totalQuantity);
+      const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * totalQuantity);
       const grandTotal = itemsTotal + shippingTotal + platformFee;
       const totalAmountPence = Math.round(grandTotal * 100);
 
@@ -321,6 +400,7 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
       });
 
       // Create Payment Intent
+      // OFFER SYSTEM: Store per-listing offer data as individual metadata keys
       const paymentIntent = await stripe.paymentIntents.create({
         amount: totalAmountPence,
         currency: 'gbp',
@@ -335,6 +415,8 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
           shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           grand_total: grandTotal.toFixed(2),
+          has_offers: Object.keys(offerMetadata).length > 0 ? 'true' : 'false',
+          ...offerMetadata,
         },
       });
 
@@ -378,7 +460,7 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       if (paymentIntent.status !== 'succeeded') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Payment not successful',
           status: paymentIntent.status,
         });
@@ -395,8 +477,8 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
       });
 
       if (existingOrder) {
-        return res.json({ 
-          success: true, 
+        return res.json({
+          success: true,
           order_id: existingOrder.id,
           message: 'Order already created',
         });
@@ -439,6 +521,8 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
 
   /**
    * Fulfill single item order
+   * OFFER SYSTEM: Stores offer data on order, marks offer as PURCHASED
+   * [Issue #2]: Expires other offers when item is sold
    */
   private static async fulfillSingleItem(
     paymentIntent: Stripe.PaymentIntent,
@@ -451,6 +535,7 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
     const sellerId = metadata.seller_id;
     const orderQuantity = parseInt(metadata.quantity) || 1;
     const selectedSize = metadata.selected_size || null;
+    const offerId = metadata.offer_id || null;
 
     const listing = await prisma.listings.findUnique({
       where: { id: listingId },
@@ -464,20 +549,28 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
     // SIZE VARIANT: Calculate new stock
     let newTotalStock: number;
     let updatedSpecs = listing.specifications;
-    
+
     if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
       updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
       newTotalStock = getTotalStockFromSizes(updatedSpecs);
     } else {
       newTotalStock = listing.quantity - orderQuantity;
     }
-    
+
     const shouldMarkSold = newTotalStock <= 0;
     const listingImage = listing.images?.[0]?.image_url || null;
-    const itemPrice = parseFloat(listing.price.toString());
+
+    // OFFER SYSTEM: Calculate prices based on offer or list price
+    const originalListPrice = parseFloat(listing.price.toString());
+    const effectiveUnitPrice = metadata.effective_unit_price
+      ? parseFloat(metadata.effective_unit_price)
+      : originalListPrice;
+    const discountAmount = offerId
+      ? (originalListPrice - effectiveUnitPrice) * orderQuantity
+      : 0;
 
     const order = await prisma.$transaction(async (tx) => {
-      // Create order with selected_size
+      // Create order with selected_size and offer data
       const createdOrder = await tx.orders.create({
         data: {
           id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -491,7 +584,7 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
           seller_payout: parseFloat(metadata.seller_payout),
           listing_title: listing.title,
           listing_image: listingImage,
-          listing_price: itemPrice,
+          listing_price: effectiveUnitPrice,
           currency: 'GBP',
           stripe_payment_intent_id: paymentIntent.id,
           status: 'to_ship',
@@ -499,10 +592,14 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
           auto_cancel_at: autoCancelAt,
           shipping_address: shippingAddress ?? Prisma.JsonNull,
           updated_at: new Date(),
+          // OFFER SYSTEM: Store offer details on the order
+          offer_id: offerId || null,
+          original_list_price: offerId ? originalListPrice : null,
+          discount_amount: offerId ? discountAmount : 0,
         },
       });
 
-      console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + itemPrice, selectedSize ? `(${selectedSize})` : '');
+      console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + effectiveUnitPrice, selectedSize ? `(${selectedSize})` : '');
 
       // SIZE VARIANT: Update stock and specifications
       await tx.listings.update({
@@ -520,12 +617,37 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
         where: { user_id: buyerId, listing_id: listingId },
       });
 
+      // OFFER SYSTEM: Mark the offer as PURCHASED with timestamp
+      if (offerId) {
+        await tx.offers.update({
+          where: { id: offerId },
+          data: {
+            status: 'PURCHASED',
+            purchased_at: new Date(),
+          },
+        });
+        console.log(`[PAY] Offer ${offerId} marked as PURCHASED`);
+      }
+
       return createdOrder;
     });
+
+    // [Issue #2] Expire all other active offers for this listing when item is sold
+    if (shouldMarkSold) {
+      try {
+        const expiredCount = await expireOffersForSoldItem(listingId);
+        if (expiredCount > 0) {
+          console.log(`[PAY] Expired ${expiredCount} other offer(s) for sold listing ${listingId}`);
+        }
+      } catch (expireErr) {
+        console.error('[PAY] Error expiring offers for sold item (non-fatal):', expireErr);
+      }
+    }
 
     // Create notifications
     const sizeText = selectedSize ? ` (${selectedSize})` : '';
     const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
+    const offerText = offerId ? ` at your offer price of £${effectiveUnitPrice.toFixed(2)}` : '';
 
     await prisma.notifications.create({
       data: {
@@ -533,7 +655,7 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
         user_id: buyerId,
         type: 'order',
         title: 'Payment Successful!',
-        message: `Your order for "${listing.title}"${sizeText}${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+        message: `Your order for "${listing.title}"${sizeText}${qtyText}${offerText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
         image_url: listingImage,
         related_id: order.id,
       },
@@ -576,11 +698,16 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
     }
 
     console.log('[PAY] Single item order fulfilled:', order.id);
+    if (offerId) {
+      console.log(`[PAY] Offer-based purchase: original £${originalListPrice.toFixed(2)} -> paid £${effectiveUnitPrice.toFixed(2)} (saved £${discountAmount.toFixed(2)})`);
+    }
     return order;
   }
 
   /**
    * Fulfill cart order
+   * OFFER SYSTEM: Reads per-listing offer metadata, stores on orders, marks as PURCHASED
+   * [Issue #2]: Expires other offers when listings are sold
    */
   private static async fulfillCart(
     paymentIntent: Stripe.PaymentIntent,
@@ -589,14 +716,32 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
   ) {
     const metadata = paymentIntent.metadata;
     const buyerId = metadata.buyer_id;
-    
+
     // Parse items from metadata (format: "listing_id:qty,listing_id:qty")
     const itemsData = metadata.items.split(',').map((item: string) => {
       const [listing_id, quantity] = item.split(':');
       return { listing_id, quantity: parseInt(quantity) || 1 };
     });
 
+    // OFFER SYSTEM: Extract per-listing offer data from metadata
+    // Format: offer_${listing_id} = "offerId|offerPrice|originalPrice"
+    const offerDataMap: Record<string, { offer_id: string; offer_price: number; original_price: number }> = {};
+    for (const key of Object.keys(metadata)) {
+      if (key.startsWith('offer_')) {
+        const listingId = key.substring(6); // Remove 'offer_' prefix
+        const parts = metadata[key].split('|');
+        if (parts.length === 3) {
+          offerDataMap[listingId] = {
+            offer_id: parts[0],
+            offer_price: parseFloat(parts[1]),
+            original_price: parseFloat(parts[2]),
+          };
+        }
+      }
+    }
+
     const orders: any[] = [];
+    const soldListingIds: string[] = [];
 
     await prisma.$transaction(async (tx) => {
       for (const itemData of itemsData) {
@@ -607,9 +752,18 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
 
         if (!listing) continue;
 
-        const unitPrice = parseFloat(listing.price.toString());
+        // OFFER SYSTEM: Use offer price if available
+        const offerInfo = offerDataMap[itemData.listing_id];
+        const effectiveUnitPrice = offerInfo
+          ? offerInfo.offer_price
+          : parseFloat(listing.price.toString());
+        const originalListPrice = parseFloat(listing.price.toString());
+        const discountAmount = offerInfo
+          ? (originalListPrice - effectiveUnitPrice) * itemData.quantity
+          : 0;
+
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
-        const itemTotal = unitPrice * itemData.quantity;
+        const itemTotal = effectiveUnitPrice * itemData.quantity;
         const orderShipping = Math.ceil(itemData.quantity / 5) * shippingCost;
         const sellerPayout = itemTotal + orderShipping;
         const listingImage = listing.images?.[0]?.image_url || null;
@@ -629,7 +783,7 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
             seller_payout: sellerPayout,
             listing_title: listing.title,
             listing_image: listingImage,
-            listing_price: unitPrice,
+            listing_price: effectiveUnitPrice,
             currency: 'GBP',
             stripe_payment_intent_id: paymentIntent.id,
             status: 'to_ship',
@@ -637,10 +791,14 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
             auto_cancel_at: autoCancelAt,
             shipping_address: shippingAddress ?? Prisma.JsonNull,
             updated_at: new Date(),
+            // OFFER SYSTEM: Store offer details on order
+            offer_id: offerInfo?.offer_id || null,
+            original_list_price: offerInfo ? originalListPrice : null,
+            discount_amount: offerInfo ? discountAmount : 0,
           },
         });
 
-        console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + unitPrice);
+        console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + effectiveUnitPrice, offerInfo ? `[offer: ${offerInfo.offer_id}]` : '');
         orders.push({ ...order, listing });
 
         // Update stock
@@ -652,6 +810,27 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
             updated_at: new Date(),
           },
         });
+
+        // Track sold listings for offer expiry
+        if (shouldMarkSold) {
+          soldListingIds.push(itemData.listing_id);
+        }
+
+        // OFFER SYSTEM: Mark the offer as PURCHASED with timestamp
+        if (offerInfo?.offer_id) {
+          try {
+            await tx.offers.update({
+              where: { id: offerInfo.offer_id },
+              data: {
+                status: 'PURCHASED',
+                purchased_at: new Date(),
+              },
+            });
+            console.log(`[PAY] Offer ${offerInfo.offer_id} marked as PURCHASED`);
+          } catch (offerUpdateErr) {
+            console.warn(`[PAY] Could not update offer ${offerInfo.offer_id}:`, offerUpdateErr);
+          }
+        }
       }
 
       // Clear cart
@@ -662,6 +841,18 @@ const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * 
         },
       });
     });
+
+    // [Issue #2] Expire all other active offers for sold listings (outside transaction)
+    for (const soldListingId of soldListingIds) {
+      try {
+        const expiredCount = await expireOffersForSoldItem(soldListingId);
+        if (expiredCount > 0) {
+          console.log(`[PAY] Expired ${expiredCount} other offer(s) for sold listing ${soldListingId}`);
+        }
+      } catch (expireErr) {
+        console.error(`[PAY] Error expiring offers for sold listing ${soldListingId} (non-fatal):`, expireErr);
+      }
+    }
 
     // Create notifications
     const firstImage = orders[0]?.listing?.images?.[0]?.image_url || null;

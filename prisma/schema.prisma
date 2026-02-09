@@ -1,3 +1,9 @@
+// prisma/schema.prisma
+//
+// CHANGELOG (Offer System Fixes — 2026-02-06):
+// [Issue #4]  Changed offers.status from VarChar(20) to VarChar(30) — prevents overflow for future statuses
+// [Issue #36] Added composite indexes: (status, expires_at), (status, acceptance_expires_at), (listing_id, buyer_id)
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -311,7 +317,6 @@ model Feedback {
   screenFeature String   @map("screen_feature") @db.VarChar(100)
   description   String
   severity      String   @db.VarChar(20)
-  deviceInfo    String?  @map("device_info")
   status        String   @default("new") @db.VarChar(20)
   createdAt     DateTime @default(now()) @map("created_at")
   user          users?   @relation(fields: [userId], references: [id])
@@ -519,7 +524,7 @@ model offers {
   offer_amount          Decimal   @db.Decimal(10, 2)
   counter_amount        Decimal?  @db.Decimal(10, 2)
   final_amount          Decimal?  @db.Decimal(10, 2)
-  status                String    @default("PENDING") @db.VarChar(20)
+  status                String    @default("PENDING") @db.VarChar(30) // [Issue #4] Was VarChar(20)
   offer_number          Int
   created_at            DateTime? @default(now()) @db.Timestamp(6)
   expires_at            DateTime  @db.Timestamp(6)
@@ -536,4 +541,7 @@ model offers {
   @@index([listing_id], map: "idx_offers_listing")
   @@index([seller_id], map: "idx_offers_seller")
   @@index([status], map: "idx_offers_status")
+  @@index([status, expires_at], map: "idx_offers_status_expires_at")                         // [Issue #36]
+  @@index([status, acceptance_expires_at], map: "idx_offers_status_acceptance_expires")       // [Issue #36]
+  @@index([listing_id, buyer_id], map: "idx_offers_listing_buyer")                           // [Issue #36]
 }

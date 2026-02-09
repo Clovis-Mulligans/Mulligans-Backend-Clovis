@@ -5,11 +5,15 @@
 // - Line 35: Added import for listingOfferRoutes
 // - Line 36: Added import for runOfferJobs
 // - Line 128-129: Added offer routes registration
-// - Line 130: Added listing offer routes (mounted on /api/listings)
+// - Line 130: Added listing offer routes (mounted on /api/listing-offers)
 // - Line 165-175: Added offer jobs cron (every 5 minutes)
 // - Line 176-182: Added offer warning cron (every 15 minutes)
 // - Line 198-204: Added offer jobs to startup run
 // ==========================================
+//
+// CHANGELOG (Offer System Fixes — 2026-02-06):
+// [Issue #34] Changed listingOfferRoutes mount from '/api/listings' to '/api/listing-offers'
+//             to avoid route conflicts with the main listing routes.
 
 // src/index.ts
 import dotenv from 'dotenv';
@@ -44,7 +48,7 @@ import adminRoutes from './routes/adminRoutes';
 import connectRedirectRoutes from './routes/connectRedirectRoutes';
 import returnRoutes from './routes/returnRoutes';
 import testRoutes from './routes/testRoutes';
-// ✅ OFFER SYSTEM IMPORTS
+// OFFER SYSTEM IMPORTS
 import offerRoutes from './routes/offerRoutes';
 import listingOfferRoutes from './routes/listingOfferRoutes';
 import { runOfferJobs, sendExpiryWarnings } from './jobs/offerJobs';
@@ -141,9 +145,10 @@ app.use('/api/disputes', disputeRoutes);
 app.use('/admin', adminRoutes);
 app.use('/connect', connectRedirectRoutes);
 app.use('/api/returns', returnRoutes);
-// ✅ OFFER SYSTEM ROUTES
+// OFFER SYSTEM ROUTES
 app.use('/api/offers', offerRoutes);
-app.use('/api/listings', listingOfferRoutes);
+// [Issue #34] Changed from '/api/listings' to '/api/listing-offers' to avoid route conflicts
+app.use('/api/listing-offers', listingOfferRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -198,7 +203,7 @@ cron.schedule('0 2 * * *', async () => {
 });
 
 // ============================================
-// ✅ OFFER SYSTEM CRON JOBS
+// OFFER SYSTEM CRON JOBS
 // ============================================
 
 // Run offer expiry/void jobs every 5 minutes
@@ -234,7 +239,7 @@ setTimeout(async () => {
     console.error('❌ Startup escrow jobs failed:', error);
   }
 
-  // ✅ OFFER SYSTEM: Also run offer jobs on startup
+  // OFFER SYSTEM: Also run offer jobs on startup
   console.log('🔄 Running offer jobs on startup...');
   try {
     await runOfferJobs();
@@ -262,6 +267,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🛒 Cart API: ${BASE_URL}/api/cart`);
   console.log(`📮 Shipping API: ${BASE_URL}/api/shipping`);
   console.log(`🤝 Offers API: ${BASE_URL}/api/offers`);
+  console.log(`🏷️ Listing Offers API: ${BASE_URL}/api/listing-offers`);
   console.log('═══════════════════════════════════════════');
   console.log('🌐 WebSocket: Enabled');
   console.log('🔒 Security: Helmet + Rate Limiting enabled');

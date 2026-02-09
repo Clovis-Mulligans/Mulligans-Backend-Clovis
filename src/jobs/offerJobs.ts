@@ -1,15 +1,18 @@
 // src/jobs/offerJobs.ts
 // Background jobs for the offer system - handles expiry, voiding, and warning notifications
 // Called by the cron scheduler at regular intervals
+//
+// CHANGELOG (Offer System Fixes — 2026-02-06):
+// [Issue #19] Replaced `new PrismaClient()` with shared singleton `import { prisma }`.
+// [Issue #20] Replaced Math.random() ID generation with crypto.randomUUID().
 
-import { PrismaClient } from '@prisma/client';
+import crypto from 'crypto';
+import { prisma } from '../lib/prisma';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 
-const prisma = new PrismaClient();
-
-// Helper to generate notification IDs matching existing convention
+// [Issue #20] Helper to generate notification IDs using crypto.randomUUID
 const generateNotifId = (): string =>
-  `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  `notif_${crypto.randomUUID()}`;
 
 // Helper to format price for display (e.g. "£45.00")
 const formatPrice = (amount: any): string => {

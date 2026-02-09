@@ -8,6 +8,18 @@
 // - Line ~658-661: Added offer_id/original_list_price/discount_amount to order creation
 // ==========================================
 
+// ==========================================
+// OFFER SYSTEM FIXES (6 Feb 2026)
+// ==========================================
+// [Issue #2]  Import and call expireOffersForSoldItem after cart fulfillment when listing stock hits zero
+// [Issue #11] Fix offer_map metadata truncation: store per-listing offer data as separate metadata keys
+//             (offer_${listing_id} = offerId|price|origPrice) instead of a single JSON blob
+// [Issue #12] Fix listing_ids truncation: validate that the last listing_id in the split array is a
+//             valid full ID before processing; skip truncated entries
+// [Issue #19] Replaced `new PrismaClient()` with shared singleton `import { prisma } from '../lib/prisma'`
+// [Issue #23] Added `purchased_at: new Date()` when marking offers as PURCHASED in cart fulfillment
+// ==========================================
+
 // src/controllers/cartCheckoutController.ts
 // Handles checkout for cart with multiple items (potentially from multiple sellers)
 // ESCROW UPDATE: Removed immediate transfers - funds held until escrow releases
@@ -19,11 +31,12 @@
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
+import { expireOffersForSoldItem } from '../jobs/offerJobs';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
@@ -382,15 +395,17 @@ export class CartCheckoutController {
         listingQuantities[item.listing_id] = item.quantity || 1;
       }
 
-      // OFFER SYSTEM: Build offer metadata map for cart items with offers
-      const offerMap: Record<string, { offer_id: string; offer_price: string; original_price: string }> = {};
+      // [Issue #11] OFFER SYSTEM: Store per-listing offer data as individual metadata keys
+      // Format: offer_${listing_id} = "offerId|offerPrice|originalPrice"
+      // This avoids the truncation issue with JSON.stringify(offerMap).substring(0, 490)
+      const offerMetadataKeys: Record<string, string> = {};
+      let hasOffers = false;
       for (const item of cartItems) {
         if (item.offer_id && item.offer_price) {
-          offerMap[item.listing_id] = {
-            offer_id: item.offer_id,
-            offer_price: parseFloat(item.offer_price.toString()).toFixed(2),
-            original_price: parseFloat(item.listings.price.toString()).toFixed(2),
-          };
+          const offerPrice = parseFloat(item.offer_price.toString()).toFixed(2);
+          const originalPrice = parseFloat(item.listings.price.toString()).toFixed(2);
+          offerMetadataKeys[`offer_${item.listing_id}`] = `${item.offer_id}|${offerPrice}|${originalPrice}`;
+          hasOffers = true;
         }
       }
 
@@ -409,6 +424,8 @@ export class CartCheckoutController {
       }));
 
       // Create Stripe Checkout Session
+      // [Issue #11] Per-listing offer data stored as individual keys instead of truncated JSON blob
+      // [Issue #12] listing_ids still stored but validated on read in fulfillCartOrder
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
@@ -428,17 +445,17 @@ export class CartCheckoutController {
           grand_total: grandTotal.toFixed(2),
           item_count: cartItems.length.toString(),
           total_quantity: totalQuantity.toString(),
-          // FIXED: Truncate listing_ids to stay under 500 char limit
+          // [Issue #12] Store listing_ids — validated on read in fulfillCartOrder
           listing_ids: cartItems.map((item) => item.listing_id).join(',').substring(0, 490),
-          // FIXED: Store quantities separately, truncated
+          // Store quantities separately, truncated
           listing_quantities: JSON.stringify(listingQuantities).substring(0, 490),
-          // FIXED: Simplified seller breakdown (just IDs and totals)
+          // Simplified seller breakdown (just IDs and totals)
           seller_ids: Object.keys(sellerGroups).join(',').substring(0, 490),
           first_item_image: (cartItems[0]?.listings.images[0]?.image_url || '').substring(0, 490),
           escrow: 'true',
-          // OFFER SYSTEM: Store offer metadata for fulfillment
-          offer_map: JSON.stringify(offerMap).substring(0, 490),
-          has_offers: Object.keys(offerMap).length > 0 ? 'true' : 'false',
+          // [Issue #11] OFFER SYSTEM: Store per-listing offer data as individual keys
+          has_offers: hasOffers ? 'true' : 'false',
+          ...offerMetadataKeys,
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}cart`,
@@ -479,7 +496,11 @@ export class CartCheckoutController {
 
       const metadata = session.metadata!;
       const buyerId = metadata.buyer_id;
-      const listingIds = metadata.listing_ids.split(',');
+      const rawListingIds = metadata.listing_ids.split(',');
+
+      // [Issue #12] Validate listing IDs — the last one may be truncated if the metadata
+      // hit the 500-char limit. We fetch all matching listings from DB and only process
+      // those that actually exist, which safely handles any truncated trailing ID.
       const listingQuantities = JSON.parse(metadata.listing_quantities || '{}');
       // Reconstruct seller breakdown from database instead of metadata
       const sellerIds = (metadata.seller_ids || '').split(',').filter(Boolean);
@@ -489,18 +510,27 @@ export class CartCheckoutController {
       const insurancePremium = parseFloat(metadata.insurance_premium || '0');
       const insuredValue = parseFloat(metadata.insured_value || '0');
 
-      // OFFER SYSTEM: Parse offer metadata from Stripe session
+      // [Issue #11] OFFER SYSTEM: Parse per-listing offer data from individual metadata keys
+      // Format: offer_${listing_id} = "offerId|offerPrice|originalPrice"
       const offerMap: Record<string, { offer_id: string; offer_price: string; original_price: string }> = {};
-      try {
-        const parsedOfferMap = JSON.parse(metadata.offer_map || '{}');
-        Object.assign(offerMap, parsedOfferMap);
-      } catch (e) {
-        console.warn('[CART] Could not parse offer_map from metadata:', e);
+      for (const key of Object.keys(metadata)) {
+        if (key.startsWith('offer_')) {
+          const listingId = key.substring(6); // Remove 'offer_' prefix
+          const parts = metadata[key].split('|');
+          if (parts.length === 3) {
+            offerMap[listingId] = {
+              offer_id: parts[0],
+              offer_price: parts[1],
+              original_price: parts[2],
+            };
+          }
+        }
       }
 
       // Fetch listings to reconstruct seller breakdown
+      // [Issue #12] We query by the raw IDs; any truncated/invalid ID simply won't match
       const listings = await prisma.listings.findMany({
-        where: { id: { in: listingIds } },
+        where: { id: { in: rawListingIds } },
         include: {
           images: {
             take: 1,
@@ -514,6 +544,12 @@ export class CartCheckoutController {
           },
         },
       });
+
+      // [Issue #12] Use the IDs that were actually found in the database as the canonical list
+      const listingIds = listings.map(l => l.id);
+      if (listingIds.length < rawListingIds.length) {
+        console.warn(`[CART] Only ${listingIds.length} of ${rawListingIds.length} listing IDs matched in DB (possible metadata truncation)`);
+      }
 
       // Build sellerBreakdown from fetched listings
       const sellerBreakdown: {
@@ -618,6 +654,7 @@ export class CartCheckoutController {
       // Create orders for each seller
       const createdOrders: any[] = [];
       const orderItems: { name: string; price: string; quantity: number }[] = [];
+      const soldListingIds: string[] = [];
 
       // Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
@@ -745,12 +782,21 @@ export class CartCheckoutController {
               },
             });
 
+            // [Issue #2] Track listings that sold out for offer expiry
+            if (shouldMarkSold) {
+              soldListingIds.push(listingId);
+            }
+
             // OFFER SYSTEM: Mark the offer as PURCHASED if this was an offer purchase
+            // [Issue #23] Added purchased_at: new Date() when marking as PURCHASED
             if (offerData?.offer_id) {
               try {
                 await tx.offers.update({
                   where: { id: offerData.offer_id },
-                  data: { status: 'PURCHASED' },
+                  data: {
+                    status: 'PURCHASED',
+                    purchased_at: new Date(),
+                  },
                 });
                 console.log(`[CART] Offer ${offerData.offer_id} marked as PURCHASED`);
               } catch (offerUpdateErr) {
@@ -769,6 +815,18 @@ export class CartCheckoutController {
           },
         });
       });
+
+      // [Issue #2] Expire all other active offers for sold listings (outside transaction)
+      for (const soldListingId of soldListingIds) {
+        try {
+          const expiredCount = await expireOffersForSoldItem(soldListingId);
+          if (expiredCount > 0) {
+            console.log(`[CART] Expired ${expiredCount} other offer(s) for sold listing ${soldListingId}`);
+          }
+        } catch (expireErr) {
+          console.error(`[CART] Error expiring offers for sold listing ${soldListingId} (non-fatal):`, expireErr);
+        }
+      }
 
       // Process seller notifications (outside transaction)
       for (const sellerData of sellerBreakdown) {

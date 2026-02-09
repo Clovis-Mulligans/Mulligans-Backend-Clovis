@@ -1,4 +1,9 @@
 // src/middleware/validation.ts
+//
+// CHANGELOG (Offer System Fixes — 2026-02-06):
+// [Issue #33] Added createOfferSchema and counterOfferSchema for Zod validation
+//             on the offer creation and counter-offer routes.
+
 import { Request, Response, NextFunction } from 'express';
 import { z, ZodError } from 'zod';
 
@@ -108,5 +113,28 @@ export const getListingsSchema = z.object({
     search: z.string().optional(),
     location: z.string().optional(),
     status: z.string().optional(),
+  }),
+});
+
+// ============================================
+// [Issue #33] OFFER VALIDATION SCHEMAS
+// ============================================
+
+/**
+ * Schema for POST /api/offers (create a new offer)
+ */
+export const createOfferSchema = z.object({
+  body: z.object({
+    listing_id: z.string().min(1, 'listing_id is required'),
+    offer_amount: z.number().positive('offer_amount must be a positive number'),
+  }),
+});
+
+/**
+ * Schema for PUT /api/offers/:id/counter (send a counter offer)
+ */
+export const counterOfferSchema = z.object({
+  body: z.object({
+    counter_amount: z.number().positive('counter_amount must be a positive number'),
   }),
 });

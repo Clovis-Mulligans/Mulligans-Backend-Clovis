@@ -5,12 +5,27 @@
 // - Buyers can accept/decline counters or withdraw offers
 // - 24-hour expiry on offers and accepted offers
 // - In-app + push notifications on all state changes
+//
+// CHANGELOG (Offer System Fixes — 2026-02-06):
+// [Issue #3]  CRITICAL: Race condition fix — all status-changing endpoints now use
+//             prisma.offers.updateMany with conditional where clause instead of
+//             read-then-update. Returns 409 Conflict if another request changed status first.
+// [Issue #9]  HIGH: acceptOffer now checks expires_at before accepting.
+// [Issue #10] HIGH: counterOffer, declineOffer, acceptCounter, declineCounter also
+//             check expires_at before proceeding.
+// [Issue #13] Removed offer_price from destructured request body — validated price
+//             comes from the offer object only.
+// [Issue #19] Replaced `new PrismaClient()` with shared singleton `import { prisma }`.
+// [Issue #20] Replaced Math.random() ID generation with crypto.randomUUID().
+// [Issue #21] acceptOffer now voids all OTHER active offers on the same listing
+//             after accepting one.
+// [Issue #22] All notification messages now include the £ symbol before amounts.
+// [Issue #35] getOfferCounts now filters out expired offers from pending counts.
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import crypto from 'crypto';
+import { prisma } from '../lib/prisma';
 import { sendPushNotification } from './pushNotificationController';
-
-const prisma = new PrismaClient();
 
 // ============================================
 // CONSTANTS
@@ -27,16 +42,18 @@ const ACTIVE_OFFER_STATUSES = ['PENDING', 'ACCEPTED', 'COUNTERED', 'COUNTER_ACCE
 
 // ============================================
 // HELPER: Generate notification ID
+// [Issue #20] crypto.randomUUID replaces Math.random
 // ============================================
 function generateNotificationId(): string {
-  return `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return `notif_${crypto.randomUUID()}`;
 }
 
 // ============================================
 // HELPER: Generate offer ID
+// [Issue #20] crypto.randomUUID replaces Math.random
 // ============================================
 function generateOfferId(): string {
-  return `offer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return `offer_${crypto.randomUUID()}`;
 }
 
 // ============================================
@@ -141,7 +158,7 @@ export class OfferController {
       // Validate offer amount range
       if (offerAmount < minOffer) {
         return res.status(400).json({
-          error: `Offer must be at least 50% of the list price (${minOffer.toFixed(2)})`,
+          error: `Offer must be at least 50% of the list price (£${minOffer.toFixed(2)})`,
           min_offer: Number(minOffer.toFixed(2)),
           list_price: listPrice,
         });
@@ -215,17 +232,18 @@ export class OfferController {
         select: { display_name: true },
       });
 
+      // [Issue #22] £ symbol in notification
       // Notify seller
       await notifyUser(
         listing.seller_id,
         'New Offer Received',
-        `${buyer?.display_name || 'A buyer'} offered ${offerAmount.toFixed(2)} for "${listing.title}"`,
+        `${buyer?.display_name || 'A buyer'} offered £${offerAmount.toFixed(2)} for "${listing.title}"`,
         offer.id,
         listingImage,
         offer.id
       );
 
-      console.log(`[OFFERS] Offer created: ${offer.id} - ${offerAmount.toFixed(2)} on listing ${listing_id}`);
+      console.log(`[OFFERS] Offer created: ${offer.id} - £${offerAmount.toFixed(2)} on listing ${listing_id}`);
 
       res.status(201).json({
         success: true,
@@ -479,6 +497,10 @@ export class OfferController {
   // ============================================
   // ACCEPT OFFER (seller accepts buyer's offer)
   // PUT /api/offers/:id/accept
+  // [Issue #3]  Race condition fix: conditional updateMany
+  // [Issue #9]  Expiry check before accepting
+  // [Issue #21] Void other active offers on same listing
+  // [Issue #22] £ symbol in notification
   // ============================================
   static async acceptOffer(req: Request, res: Response) {
     try {
@@ -525,13 +547,18 @@ export class OfferController {
         return res.status(400).json({ error: `Cannot accept an offer with status "${offer.status}"` });
       }
 
+      // [Issue #9] Check if offer has expired
+      if (offer.expires_at && new Date(offer.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This offer has expired' });
+      }
+
       const now = new Date();
       const acceptanceExpiresAt = new Date(now.getTime() + ACCEPTANCE_EXPIRY_MS);
       const offerAmount = Number(offer.offer_amount);
 
-      // Update offer
-      const updatedOffer = await prisma.offers.update({
-        where: { id },
+      // [Issue #3] Atomic conditional update — only update if status is still PENDING
+      const updateResult = await prisma.offers.updateMany({
+        where: { id, status: 'PENDING' },
         data: {
           status: 'ACCEPTED',
           responded_at: now,
@@ -540,13 +567,31 @@ export class OfferController {
         },
       });
 
+      if (updateResult.count === 0) {
+        return res.status(409).json({ error: 'Offer status has already changed. Please refresh and try again.' });
+      }
+
+      // [Issue #21] Void all OTHER active offers on the same listing
+      await prisma.offers.updateMany({
+        where: {
+          listing_id: offer.listing_id,
+          id: { not: offer.id },
+          status: { in: ['PENDING', 'COUNTERED'] },
+        },
+        data: {
+          status: 'VOID',
+          responded_at: now,
+        },
+      });
+
       const listingImage = offer.listings.images[0]?.image_url || null;
 
+      // [Issue #22] £ symbol in notification
       // Notify buyer
       await notifyUser(
         offer.buyer_id,
         'Offer Accepted!',
-        `Your offer of ${offerAmount.toFixed(2)} for "${offer.listings.title}" has been accepted! Complete your purchase within 24 hours.`,
+        `Your offer of £${offerAmount.toFixed(2)} for "${offer.listings.title}" has been accepted! Complete your purchase within 24 hours.`,
         offer.id,
         listingImage,
         offer.id
@@ -558,11 +603,11 @@ export class OfferController {
         success: true,
         message: 'Offer accepted',
         offer: {
-          id: updatedOffer.id,
-          status: updatedOffer.status,
-          final_amount: Number(updatedOffer.final_amount),
-          acceptance_expires_at: updatedOffer.acceptance_expires_at?.toISOString() || null,
-          responded_at: updatedOffer.responded_at?.toISOString() || null,
+          id: offer.id,
+          status: 'ACCEPTED',
+          final_amount: offerAmount,
+          acceptance_expires_at: acceptanceExpiresAt.toISOString(),
+          responded_at: now.toISOString(),
         },
       });
     } catch (error: any) {
@@ -574,6 +619,9 @@ export class OfferController {
   // ============================================
   // DECLINE OFFER (seller declines buyer's offer)
   // PUT /api/offers/:id/decline
+  // [Issue #3]  Race condition fix: conditional updateMany
+  // [Issue #10] Expiry check before declining
+  // [Issue #22] £ symbol in notification
   // ============================================
   static async declineOffer(req: Request, res: Response) {
     try {
@@ -613,24 +661,35 @@ export class OfferController {
         return res.status(400).json({ error: `Cannot decline an offer with status "${offer.status}"` });
       }
 
+      // [Issue #10] Check if offer has expired
+      if (offer.expires_at && new Date(offer.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This offer has expired' });
+      }
+
       const now = new Date();
 
-      const updatedOffer = await prisma.offers.update({
-        where: { id },
+      // [Issue #3] Atomic conditional update
+      const updateResult = await prisma.offers.updateMany({
+        where: { id, status: 'PENDING' },
         data: {
           status: 'DECLINED',
           responded_at: now,
         },
       });
 
+      if (updateResult.count === 0) {
+        return res.status(409).json({ error: 'Offer status has already changed. Please refresh and try again.' });
+      }
+
       const listingImage = offer.listings.images[0]?.image_url || null;
       const offerAmount = Number(offer.offer_amount);
 
+      // [Issue #22] £ symbol in notification
       // Notify buyer
       await notifyUser(
         offer.buyer_id,
         'Offer Declined',
-        `Your offer of ${offerAmount.toFixed(2)} for "${offer.listings.title}" was declined by the seller.`,
+        `Your offer of £${offerAmount.toFixed(2)} for "${offer.listings.title}" was declined by the seller.`,
         offer.id,
         listingImage,
         offer.id
@@ -642,9 +701,9 @@ export class OfferController {
         success: true,
         message: 'Offer declined',
         offer: {
-          id: updatedOffer.id,
-          status: updatedOffer.status,
-          responded_at: updatedOffer.responded_at?.toISOString() || null,
+          id: offer.id,
+          status: 'DECLINED',
+          responded_at: now.toISOString(),
         },
       });
     } catch (error: any) {
@@ -656,6 +715,9 @@ export class OfferController {
   // ============================================
   // COUNTER OFFER (seller counters buyer's offer)
   // PUT /api/offers/:id/counter
+  // [Issue #3]  Race condition fix: conditional updateMany
+  // [Issue #10] Expiry check before countering
+  // [Issue #22] £ symbol in notification
   // ============================================
   static async counterOffer(req: Request, res: Response) {
     try {
@@ -706,6 +768,11 @@ export class OfferController {
         return res.status(400).json({ error: `Cannot counter an offer with status "${offer.status}"` });
       }
 
+      // [Issue #10] Check if offer has expired
+      if (offer.expires_at && new Date(offer.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This offer has expired' });
+      }
+
       const offerAmount = Number(offer.offer_amount);
       const listPrice = Number(offer.listings.price);
 
@@ -729,8 +796,9 @@ export class OfferController {
       const now = new Date();
       const newExpiresAt = new Date(now.getTime() + OFFER_EXPIRY_MS);
 
-      const updatedOffer = await prisma.offers.update({
-        where: { id },
+      // [Issue #3] Atomic conditional update
+      const updateResult = await prisma.offers.updateMany({
+        where: { id, status: 'PENDING' },
         data: {
           status: 'COUNTERED',
           counter_amount: counterAmount,
@@ -739,29 +807,34 @@ export class OfferController {
         },
       });
 
+      if (updateResult.count === 0) {
+        return res.status(409).json({ error: 'Offer status has already changed. Please refresh and try again.' });
+      }
+
       const listingImage = offer.listings.images[0]?.image_url || null;
 
+      // [Issue #22] £ symbol in notification
       // Notify buyer
       await notifyUser(
         offer.buyer_id,
         'Counter Offer Received',
-        `The seller has countered your offer with ${counterAmount.toFixed(2)} for "${offer.listings.title}". You have 24 hours to respond.`,
+        `The seller has countered your offer with £${counterAmount.toFixed(2)} for "${offer.listings.title}". You have 24 hours to respond.`,
         offer.id,
         listingImage,
         offer.id
       );
 
-      console.log(`[OFFERS] Offer countered: ${offer.id} - counter: ${counterAmount.toFixed(2)}`);
+      console.log(`[OFFERS] Offer countered: ${offer.id} - counter: £${counterAmount.toFixed(2)}`);
 
       res.json({
         success: true,
         message: 'Counter offer sent',
         offer: {
-          id: updatedOffer.id,
-          status: updatedOffer.status,
-          counter_amount: Number(updatedOffer.counter_amount),
-          expires_at: updatedOffer.expires_at.toISOString(),
-          responded_at: updatedOffer.responded_at?.toISOString() || null,
+          id: offer.id,
+          status: 'COUNTERED',
+          counter_amount: counterAmount,
+          expires_at: newExpiresAt.toISOString(),
+          responded_at: now.toISOString(),
         },
       });
     } catch (error: any) {
@@ -773,6 +846,9 @@ export class OfferController {
   // ============================================
   // ACCEPT COUNTER (buyer accepts seller's counter)
   // PUT /api/offers/:id/accept-counter
+  // [Issue #3]  Race condition fix: conditional updateMany
+  // [Issue #10] Expiry check before accepting counter
+  // [Issue #22] £ symbol in notification
   // ============================================
   static async acceptCounter(req: Request, res: Response) {
     try {
@@ -818,12 +894,18 @@ export class OfferController {
         return res.status(400).json({ error: `Cannot accept counter on an offer with status "${offer.status}"` });
       }
 
+      // [Issue #10] Check if countered offer has expired
+      if (offer.expires_at && new Date(offer.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This offer has expired' });
+      }
+
       const now = new Date();
       const acceptanceExpiresAt = new Date(now.getTime() + ACCEPTANCE_EXPIRY_MS);
       const counterAmount = Number(offer.counter_amount);
 
-      const updatedOffer = await prisma.offers.update({
-        where: { id },
+      // [Issue #3] Atomic conditional update
+      const updateResult = await prisma.offers.updateMany({
+        where: { id, status: 'COUNTERED' },
         data: {
           status: 'COUNTER_ACCEPTED',
           acceptance_expires_at: acceptanceExpiresAt,
@@ -831,13 +913,18 @@ export class OfferController {
         },
       });
 
+      if (updateResult.count === 0) {
+        return res.status(409).json({ error: 'Offer status has already changed. Please refresh and try again.' });
+      }
+
       const listingImage = offer.listings.images[0]?.image_url || null;
 
+      // [Issue #22] £ symbol in notification
       // Notify seller
       await notifyUser(
         offer.seller_id,
         'Counter Offer Accepted!',
-        `The buyer accepted your counter offer of ${counterAmount.toFixed(2)} for "${offer.listings.title}". Waiting for them to complete the purchase.`,
+        `The buyer accepted your counter offer of £${counterAmount.toFixed(2)} for "${offer.listings.title}". Waiting for them to complete the purchase.`,
         offer.id,
         listingImage,
         offer.id
@@ -849,10 +936,10 @@ export class OfferController {
         success: true,
         message: 'Counter offer accepted',
         offer: {
-          id: updatedOffer.id,
-          status: updatedOffer.status,
-          final_amount: Number(updatedOffer.final_amount),
-          acceptance_expires_at: updatedOffer.acceptance_expires_at?.toISOString() || null,
+          id: offer.id,
+          status: 'COUNTER_ACCEPTED',
+          final_amount: counterAmount,
+          acceptance_expires_at: acceptanceExpiresAt.toISOString(),
         },
       });
     } catch (error: any) {
@@ -864,6 +951,9 @@ export class OfferController {
   // ============================================
   // DECLINE COUNTER (buyer declines seller's counter)
   // PUT /api/offers/:id/decline-counter
+  // [Issue #3]  Race condition fix: conditional updateMany
+  // [Issue #10] Expiry check before declining counter
+  // [Issue #22] £ symbol in notification
   // ============================================
   static async declineCounter(req: Request, res: Response) {
     try {
@@ -903,21 +993,32 @@ export class OfferController {
         return res.status(400).json({ error: `Cannot decline counter on an offer with status "${offer.status}"` });
       }
 
-      const updatedOffer = await prisma.offers.update({
-        where: { id },
+      // [Issue #10] Check if countered offer has expired
+      if (offer.expires_at && new Date(offer.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This offer has expired' });
+      }
+
+      // [Issue #3] Atomic conditional update
+      const updateResult = await prisma.offers.updateMany({
+        where: { id, status: 'COUNTERED' },
         data: {
           status: 'COUNTER_DECLINED',
         },
       });
 
+      if (updateResult.count === 0) {
+        return res.status(409).json({ error: 'Offer status has already changed. Please refresh and try again.' });
+      }
+
       const listingImage = offer.listings.images[0]?.image_url || null;
       const counterAmount = Number(offer.counter_amount);
 
+      // [Issue #22] £ symbol in notification
       // Notify seller
       await notifyUser(
         offer.seller_id,
         'Counter Offer Declined',
-        `The buyer declined your counter offer of ${counterAmount.toFixed(2)} for "${offer.listings.title}".`,
+        `The buyer declined your counter offer of £${counterAmount.toFixed(2)} for "${offer.listings.title}".`,
         offer.id,
         listingImage,
         offer.id
@@ -929,8 +1030,8 @@ export class OfferController {
         success: true,
         message: 'Counter offer declined',
         offer: {
-          id: updatedOffer.id,
-          status: updatedOffer.status,
+          id: offer.id,
+          status: 'COUNTER_DECLINED',
         },
       });
     } catch (error: any) {
@@ -942,6 +1043,8 @@ export class OfferController {
   // ============================================
   // WITHDRAW OFFER (buyer withdraws their offer)
   // PUT /api/offers/:id/withdraw
+  // [Issue #3]  Race condition fix: conditional updateMany
+  // [Issue #22] £ symbol in notification
   // ============================================
   static async withdrawOffer(req: Request, res: Response) {
     try {
@@ -981,21 +1084,27 @@ export class OfferController {
         return res.status(400).json({ error: `Cannot withdraw an offer with status "${offer.status}"` });
       }
 
-      const updatedOffer = await prisma.offers.update({
-        where: { id },
+      // [Issue #3] Atomic conditional update — match either PENDING or COUNTERED
+      const updateResult = await prisma.offers.updateMany({
+        where: { id, status: { in: ['PENDING', 'COUNTERED'] } },
         data: {
           status: 'WITHDRAWN',
         },
       });
 
+      if (updateResult.count === 0) {
+        return res.status(409).json({ error: 'Offer status has already changed. Please refresh and try again.' });
+      }
+
       const listingImage = offer.listings.images[0]?.image_url || null;
       const offerAmount = Number(offer.offer_amount);
 
+      // [Issue #22] £ symbol in notification
       // Notify seller
       await notifyUser(
         offer.seller_id,
         'Offer Withdrawn',
-        `The buyer withdrew their offer of ${offerAmount.toFixed(2)} for "${offer.listings.title}".`,
+        `The buyer withdrew their offer of £${offerAmount.toFixed(2)} for "${offer.listings.title}".`,
         offer.id,
         listingImage,
         offer.id
@@ -1007,8 +1116,8 @@ export class OfferController {
         success: true,
         message: 'Offer withdrawn',
         offer: {
-          id: updatedOffer.id,
-          status: updatedOffer.status,
+          id: offer.id,
+          status: 'WITHDRAWN',
         },
       });
     } catch (error: any) {
@@ -1206,6 +1315,7 @@ export class OfferController {
   // ============================================
   // GET OFFER COUNTS (for notification badges)
   // GET /api/offers/counts
+  // [Issue #35] Filter out expired offers from counts
   // ============================================
   static async getOfferCounts(req: Request, res: Response) {
     try {
@@ -1214,19 +1324,33 @@ export class OfferController {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      // Offers I made that need MY action (counters to respond to + accepted offers to purchase)
-      const offersMadePending = await prisma.offers.count({
+      const now = new Date();
+
+      // [Issue #35] Offers I made that need MY action — exclude expired
+      // Countered offers expire based on expires_at (the counter expiry)
+      const counteredCount = await prisma.offers.count({
         where: {
           buyer_id: userId,
-          status: { in: ['COUNTERED', 'ACCEPTED', 'COUNTER_ACCEPTED'] },
+          status: 'COUNTERED',
+          expires_at: { gt: now },
         },
       });
+      // Accepted offers expire based on acceptance_expires_at (the 24h payment window)
+      const acceptedCount = await prisma.offers.count({
+        where: {
+          buyer_id: userId,
+          status: { in: ['ACCEPTED', 'COUNTER_ACCEPTED'] },
+          acceptance_expires_at: { gt: now },
+        },
+      });
+      const offersMadePending = counteredCount + acceptedCount;
 
-      // Offers I received that need MY action (pending offers from buyers)
+      // [Issue #35] Offers I received that need MY action — exclude expired
       const offersReceivedPending = await prisma.offers.count({
         where: {
           seller_id: userId,
           status: 'PENDING',
+          expires_at: { gt: now },
         },
       });
 

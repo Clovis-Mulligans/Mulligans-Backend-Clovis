@@ -1,10 +1,15 @@
 // src/routes/offerRoutes.ts
 // Routes for the Offer System
 // Date: 5 Feb 2026
+//
+// CHANGELOG (Offer System Fixes — 2026-02-06):
+// [Issue #33] Added Zod validation middleware to createOffer and counterOffer routes.
+//             Schemas imported from '../middleware/validation'.
 
 import { Router } from 'express';
 import { OfferController } from '../controllers/offerController';
 import { authenticateToken } from '../middleware/auth';
+import { validate, createOfferSchema, counterOfferSchema } from '../middleware/validation';
 
 const router = Router();
 
@@ -27,8 +32,8 @@ router.get('/received', OfferController.getReceivedOffers);
 // Get single offer details
 router.get('/:id', OfferController.getOfferById);
 
-// Create new offer
-router.post('/', OfferController.createOffer);
+// [Issue #33] Create new offer — with Zod validation
+router.post('/', validate(createOfferSchema), OfferController.createOffer);
 
 // ============================================
 // SELLER ACTIONS
@@ -40,8 +45,8 @@ router.put('/:id/accept', OfferController.acceptOffer);
 // Decline an offer
 router.put('/:id/decline', OfferController.declineOffer);
 
-// Send counter offer
-router.put('/:id/counter', OfferController.counterOffer);
+// [Issue #33] Send counter offer — with Zod validation
+router.put('/:id/counter', validate(counterOfferSchema), OfferController.counterOffer);
 
 // ============================================
 // BUYER ACTIONS
