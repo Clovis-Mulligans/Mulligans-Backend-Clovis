@@ -1,11 +1,10 @@
 // src/controllers/supportController.ts
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { S3Service } from '../services/s3Service';
 import { v4 as uuidv4 } from 'uuid';
 import { sendEmail } from '../utils/email';
 
-const prisma = new PrismaClient();
 
 export class SupportController {
   /**

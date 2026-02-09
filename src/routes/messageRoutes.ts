@@ -1,11 +1,10 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import rateLimit from 'express-rate-limit';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Rate limiter: 10 messages per minute per user
 const messageLimiter = rateLimit({
@@ -68,13 +67,12 @@ router.patch('/conversations/:id/read', authenticateToken, async (req: any, res)
 // Create or get conversation
 router.post('/conversations', authenticateToken, async (req: any, res) => {
   try {
-    const { listing_id, seller_id, buyer_id: providedBuyerId } = req.body;
+    const { listing_id, seller_id } = req.body;
     const userId = req.user.sub || req.user.id;
 
     console.log('[MSG] Create conversation request:');
     console.log('   listing_id:', listing_id);
     console.log('   seller_id:', seller_id);
-    console.log('   providedBuyerId:', providedBuyerId);
     console.log('   authenticated userId:', userId);
 
     const buyer = await prisma.users.findUnique({
@@ -85,7 +83,7 @@ router.post('/conversations', authenticateToken, async (req: any, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const buyer_id = providedBuyerId || buyer.id;
+    const buyer_id = buyer.id;
 
     let conversation = await prisma.conversations.findFirst({
       where: {

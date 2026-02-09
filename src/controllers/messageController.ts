@@ -2,11 +2,10 @@
 // Handles messaging between users with notifications
 
 import { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { sendPushNotification } from './pushNotificationController';
 
-const prisma = new PrismaClient();
 
 export class MessageController {
   /**

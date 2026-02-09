@@ -6,7 +6,7 @@ import path from 'path';
 import { adminAuth, verifyAdminPassword } from '../middleware/adminAuth';
 import { DisputeController } from '../controllers/disputeController';
 import { AdminReportsController } from '../controllers/adminReportsController';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { 
@@ -29,7 +29,6 @@ const adminLimiter = rateLimit({
 });
 
 const router = express.Router();
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });

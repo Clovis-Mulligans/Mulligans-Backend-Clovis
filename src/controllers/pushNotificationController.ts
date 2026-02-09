@@ -2,9 +2,8 @@
 // Handles push token storage and sending push notifications via Expo
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 
-const prisma = new PrismaClient();
 
 // Expo Push API endpoint
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';

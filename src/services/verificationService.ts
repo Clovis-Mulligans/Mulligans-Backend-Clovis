@@ -2,10 +2,9 @@
 // Handles verified seller status checks
 // UPDATED: Added push notifications
 
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 
-const prisma = new PrismaClient();
 
 // ============================================
 // VERIFICATION CRITERIA

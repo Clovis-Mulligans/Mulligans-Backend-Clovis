@@ -10,7 +10,7 @@
 // - ✅ PUSH NOTIFICATIONS: All parties notified via push
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
@@ -24,7 +24,6 @@ import {
 } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });

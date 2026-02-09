@@ -1,11 +1,10 @@
 // src/routes/favoriteRoutes.ts
 // UPDATED: Explicitly includes listing status for sold badge display
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Get user's favorites
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {

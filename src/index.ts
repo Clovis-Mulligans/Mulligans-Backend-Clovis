@@ -103,7 +103,16 @@ app.use(generalLimiter);
 
 // CORS configuration
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: (origin, callback) => {
+    // Mobile apps and server-to-server requests have no Origin header — always allow
+    if (!origin) return callback(null, true);
+    // If FRONTEND_URL is set, check against it (supports comma-separated list)
+    const allowed = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : [];
+    if (allowed.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 

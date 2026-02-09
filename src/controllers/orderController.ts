@@ -8,13 +8,12 @@
 // ✅ NEW: Dispute resolution data included in order details
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller } from '../services/emailService';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
@@ -1221,6 +1220,9 @@ if (isBuyerCancelling) {
       console.log(`📊 Cancellation by ${isBuyer ? 'buyer' : 'seller'}, previous count: ${cancellationCount}`);
 
       // Process refund via Stripe
+      let refundSucceeded = false;
+      let refundId: string | null = null;
+
       if (order.stripe_payment_intent_id) {
         try {
           const refund = await stripe.refunds.create({
@@ -1232,22 +1234,28 @@ if (isBuyerCancelling) {
               cancelled_by: isBuyer ? 'buyer' : 'seller',
             },
           });
-          console.log(`💸 Refund created: ${refund.id}`);
+          console.log(`[ORDER] Refund created: ${refund.id} for order: ${order.id}`);
+          refundSucceeded = true;
+          refundId = refund.id;
         } catch (refundError: any) {
-          console.error('⚠️ Refund failed:', refundError.message);
-          // Continue with cancellation - we can process refund manually
+          console.error(`[ORDER] Refund FAILED for order ${order.id}:`, refundError.message);
+          // Continue with cancellation but flag the refund failure on the order
         }
       }
 
       const now = new Date();
 
-      // Update order to cancelled
+      // Update order to cancelled — include refund failure flag in cancel_reason if refund failed
       await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'cancelled',
           cancelled_at: now,
-          cancel_reason: fullCancelReason,
+          cancel_reason: refundSucceeded
+            ? fullCancelReason
+            : `${fullCancelReason} [REFUND FAILED - MANUAL REFUND REQUIRED]`,
+          refunded_at: refundSucceeded ? now : undefined,
+          stripe_refund_id: refundId || undefined,
           updated_at: now,
         },
       });

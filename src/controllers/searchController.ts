@@ -1,10 +1,9 @@
 // src/controllers/searchController.ts
 // ✅ FIXED: Strict matching for suggestions - no more false positives
 import { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { AuthenticatedRequest } from '../middleware/auth';
 
-const prisma = new PrismaClient();
 
 // ============================================================================
 // BRAND & CATEGORY DATA FOR SUGGESTIONS

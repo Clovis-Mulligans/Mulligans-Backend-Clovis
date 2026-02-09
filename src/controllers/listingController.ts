@@ -1,10 +1,9 @@
 // src/controllers/listingController.ts
 import { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
 
-const prisma = new PrismaClient();
 
 // ✅ SIZE VARIANT: Helper to calculate total quantity from size quantities
 function calculateTotalFromSizeQuantities(specifications: any): number | null {
@@ -768,6 +767,14 @@ if (keyword) {
               orderBy: { display_order: 'asc' },
               take: 1,
             },
+            users: {
+              select: {
+                id: true,
+                display_name: true,
+                rating: true,
+                is_verified_seller: true,
+              },
+            },
           },
           orderBy: { created_at: 'desc' },
           // ✅ Use offset if provided, otherwise calculate from page
@@ -779,21 +786,8 @@ if (keyword) {
 
       console.log(`✅ Returning ${listings.length} listings (total: ${total})`);
 
-      // Get seller info separately for each listing
-      const listingsWithSellers = await Promise.all(
-        listings.map(async (listing) => {
-          const users = await prisma.users.findUnique({
-            where: { id: listing.seller_id },
-            select: {
-              id: true,
-              display_name: true,
-              rating: true,
-              is_verified_seller: true,
-            },
-          });
-          return { ...listing, users };
-        })
-      );
+      // listings already include users from the JOIN above
+      const listingsWithSellers = listings;
 
       res.json({
         listings: listingsWithSellers,

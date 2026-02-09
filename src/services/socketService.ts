@@ -1,10 +1,9 @@
 // src/services/socketService.ts
 import { Server as HTTPServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
-const prisma = new PrismaClient();
 
 const verifier = CognitoJwtVerifier.create({
   userPoolId: process.env.COGNITO_USER_POOL_ID!,

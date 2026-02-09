@@ -20,6 +20,15 @@
 // [Issue #23] Added `purchased_at: new Date()` when marking offers as PURCHASED in cart fulfillment
 // ==========================================
 
+// ==========================================
+// CRITICAL FIXES (9 Feb 2026)
+// ==========================================
+// [E-C3]  Removed non-null assertion on session.metadata; added explicit null checks
+// [P-C2]  seller_payout now includes shipping: (effectivePrice * orderQuantity) + orderShipping
+// [D-C2]  Order ID generation changed from Math.random() to crypto.randomUUID()
+// [D-C1]  Atomic stock update with updateMany WHERE guard for non-size-variant listings
+// ==========================================
+
 // src/controllers/cartCheckoutController.ts
 // Handles checkout for cart with multiple items (potentially from multiple sellers)
 // ESCROW UPDATE: Removed immediate transfers - funds held until escrow releases
@@ -36,6 +45,7 @@ import { prisma } from '../lib/prisma';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
+import crypto from 'crypto';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -494,7 +504,11 @@ export class CartCheckoutController {
     try {
       console.log('[CART] Fulfilling cart order for session:', session.id);
 
-      const metadata = session.metadata!;
+      // [E-C3] Removed non-null assertion; added explicit null checks for required metadata fields
+      const metadata = session.metadata;
+      if (!metadata || !metadata.buyer_id || !metadata.listing_ids) {
+        throw new Error(`[CART] Session ${session.id} missing required metadata fields (buyer_id: ${metadata?.buyer_id}, listing_ids: ${metadata?.listing_ids})`);
+      }
       const buyerId = metadata.buyer_id;
       const rawListingIds = metadata.listing_ids.split(',');
 
@@ -737,9 +751,11 @@ export class CartCheckoutController {
 
             // Create order
             // OFFER SYSTEM: Include offer_id, original_list_price, discount_amount
+            // [D-C2] Order ID now uses crypto.randomUUID() instead of Math.random()
+            // [P-C2] seller_payout now includes shipping cost
             const order = await tx.orders.create({
               data: {
-                id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: `order_${crypto.randomUUID()}`,
                 listing_id: listingId,
                 buyer_id: buyerId,
                 seller_id: seller_id,
@@ -747,7 +763,7 @@ export class CartCheckoutController {
                 quantity: orderQuantity,
                 selected_size: selectedSize,
                 shipping_cost: orderShipping,
-                seller_payout: effectivePrice * orderQuantity,
+                seller_payout: (effectivePrice * orderQuantity) + orderShipping,
                 listing_title: listing.title,
                 listing_image: listingImage,
                 listing_price: effectivePrice,
@@ -771,16 +787,38 @@ export class CartCheckoutController {
             createdOrders.push({ ...order, image_url: listingImage, title: listing.title, quantity: orderQuantity });
             console.log(`[CART] Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})${offerData ? ` [offer: ${offerData.offer_id}]` : ''}`);
 
-            // Update listing stock
-            await tx.listings.update({
-              where: { id: listingId },
-              data: {
-                quantity: Math.max(0, newTotalStock),
-                specifications: updatedSpecs ?? undefined,
-                status: shouldMarkSold ? 'sold' : 'active',
-                updated_at: new Date()
-              },
-            });
+            // [D-C1] ATOMIC stock update with WHERE guard (optimistic locking)
+            // For non-size-variant: use updateMany with quantity check to prevent race conditions
+            // For size-variant: use standard update (JSON field can't be checked atomically in WHERE)
+            if (!selectedSize || !(listing.specifications as any)?.sizeQuantities) {
+              // Non-size-variant: atomic check prevents race condition
+              const stockResult = await tx.listings.updateMany({
+                where: {
+                  id: listingId,
+                  quantity: { gte: orderQuantity },
+                },
+                data: {
+                  quantity: { decrement: orderQuantity },
+                  status: shouldMarkSold ? 'sold' : 'active',
+                  updated_at: new Date(),
+                },
+              });
+
+              if (stockResult.count === 0) {
+                throw new Error(`Stock race condition detected for listing ${listingId}`);
+              }
+            } else {
+              // Size-variant: update with computed values (race window minimised by being inside tx)
+              await tx.listings.update({
+                where: { id: listingId },
+                data: {
+                  quantity: Math.max(0, newTotalStock),
+                  specifications: updatedSpecs ?? undefined,
+                  status: shouldMarkSold ? 'sold' : 'active',
+                  updated_at: new Date(),
+                },
+              });
+            }
 
             // [Issue #2] Track listings that sold out for offer expiry
             if (shouldMarkSold) {

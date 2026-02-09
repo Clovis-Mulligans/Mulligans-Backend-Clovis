@@ -15,6 +15,13 @@
 // [Issue #19] Replaced `new PrismaClient()` with shared singleton `import { prisma } from '../lib/prisma'`
 // [Issue #24] Added shipping cost to the payment amount (was missing from grand total)
 // ==========================================
+// CRITICAL FIXES (9 Feb 2026)
+// ==========================================
+// [D-C1]  Race condition fix: stock reads and validation moved inside transaction; atomic updateMany with WHERE guard
+// [D-C2]  Order ID generation uses crypto.randomUUID() instead of Math.random()
+// [E-C2]  Connect account auto-creation wrapped in try/catch
+// [EC-C1] Cart query filters out expired cart items (expires_at > now)
+// ==========================================
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
@@ -22,6 +29,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
+import crypto from 'crypto';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -186,37 +194,45 @@ export class NativePaymentController {
 
       const seller = listing.users;
 
-      // Auto-create Connect account if needed
+      // [E-C2] Auto-create Connect account if needed — wrapped in try/catch
       let sellerConnectId = seller.stripe_connect_id;
       if (!sellerConnectId) {
         console.log('[PAY] Auto-creating Connect account for seller:', seller.id);
-        const account = await stripe.accounts.create({
-          type: 'express',
-          country: 'GB',
-          email: seller.email,
-          capabilities: {
-            card_payments: { requested: true },
-            transfers: { requested: true },
-          },
-          business_type: 'individual',
-          metadata: {
-            user_id: seller.id,
-            platform: 'mulligans',
-            auto_created: 'true',
-          },
-        });
+        try {
+          const account = await stripe.accounts.create({
+            type: 'express',
+            country: 'GB',
+            email: seller.email,
+            capabilities: {
+              card_payments: { requested: true },
+              transfers: { requested: true },
+            },
+            business_type: 'individual',
+            metadata: {
+              user_id: seller.id,
+              platform: 'mulligans',
+              auto_created: 'true',
+            },
+          });
 
-        sellerConnectId = account.id;
+          sellerConnectId = account.id;
 
-        await prisma.users.update({
-          where: { id: seller.id },
-          data: {
-            stripe_connect_id: account.id,
-            stripe_connect_status: 'pending',
-            updated_at: new Date(),
-          },
-        });
-        console.log('[PAY] Connect account auto-created:', account.id);
+          await prisma.users.update({
+            where: { id: seller.id },
+            data: {
+              stripe_connect_id: account.id,
+              stripe_connect_status: 'pending',
+              updated_at: new Date(),
+            },
+          });
+          console.log('[PAY] Connect account auto-created:', account.id);
+        } catch (error: any) {
+          console.error('[PAY] Failed to create Connect account for seller:', seller.id, error.message);
+          return res.status(500).json({
+            error: 'Failed to set up seller payments',
+            details: error.message,
+          });
+        }
       }
 
       // Calculate prices (using effective price which may be offer price)
@@ -313,9 +329,12 @@ export class NativePaymentController {
 
       console.log('[PAY] Creating cart payment intent for user:', userId);
 
-      // Get user's cart items
+      // [EC-C1] Get user's cart items (exclude expired)
       const cartItems = await prisma.cart_items.findMany({
-        where: { user_id: userId },
+        where: {
+          user_id: userId,
+          expires_at: { gt: new Date() },
+        },
         include: {
           listings: {
             include: {
@@ -523,6 +542,8 @@ export class NativePaymentController {
    * Fulfill single item order
    * OFFER SYSTEM: Stores offer data on order, marks offer as PURCHASED
    * [Issue #2]: Expires other offers when item is sold
+   * [D-C1]: Race condition fix — stock read and validation inside transaction with atomic updateMany
+   * [D-C2]: Order ID uses crypto.randomUUID()
    */
   private static async fulfillSingleItem(
     paymentIntent: Stripe.PaymentIntent,
@@ -537,6 +558,7 @@ export class NativePaymentController {
     const selectedSize = metadata.selected_size || null;
     const offerId = metadata.offer_id || null;
 
+    // Initial listing read for metadata only (image, title, price) — NOT for stock decisions
     const listing = await prisma.listings.findUnique({
       where: { id: listingId },
       include: { images: { take: 1 } },
@@ -546,21 +568,9 @@ export class NativePaymentController {
       throw new Error('Listing not found');
     }
 
-    // SIZE VARIANT: Calculate new stock
-    let newTotalStock: number;
-    let updatedSpecs = listing.specifications;
-
-    if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
-      updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
-      newTotalStock = getTotalStockFromSizes(updatedSpecs);
-    } else {
-      newTotalStock = listing.quantity - orderQuantity;
-    }
-
-    const shouldMarkSold = newTotalStock <= 0;
     const listingImage = listing.images?.[0]?.image_url || null;
 
-    // OFFER SYSTEM: Calculate prices based on offer or list price
+    // OFFER SYSTEM: Calculate prices based on offer or list price (safe outside tx — based on metadata, not stock)
     const originalListPrice = parseFloat(listing.price.toString());
     const effectiveUnitPrice = metadata.effective_unit_price
       ? parseFloat(metadata.effective_unit_price)
@@ -569,11 +579,42 @@ export class NativePaymentController {
       ? (originalListPrice - effectiveUnitPrice) * orderQuantity
       : 0;
 
-    const order = await prisma.$transaction(async (tx) => {
-      // Create order with selected_size and offer data
+    // [D-C1] Transaction with fresh stock read and atomic decrement
+    const { createdOrder, shouldMarkSold } = await prisma.$transaction(async (tx) => {
+      // RACE CONDITION FIX: Fresh stock read inside transaction
+      const freshListing = await tx.listings.findUnique({
+        where: { id: listingId },
+        select: { quantity: true, specifications: true, status: true },
+      });
+
+      if (!freshListing || freshListing.status === 'sold') {
+        throw new Error(`Listing ${listingId} is no longer available`);
+      }
+
+      const currentStock = getStockForSize(freshListing, selectedSize);
+      if (currentStock < orderQuantity) {
+        throw new Error(
+          `Insufficient stock for listing ${listingId}: requested ${orderQuantity}, available ${currentStock}`
+        );
+      }
+
+      // SIZE VARIANT: Calculate new stock from fresh data
+      let newTotalStock: number;
+      let updatedSpecs = freshListing.specifications;
+
+      if (selectedSize && (freshListing.specifications as any)?.sizeQuantities) {
+        updatedSpecs = decrementSizeStock(freshListing.specifications, selectedSize, orderQuantity);
+        newTotalStock = getTotalStockFromSizes(updatedSpecs);
+      } else {
+        newTotalStock = freshListing.quantity - orderQuantity;
+      }
+
+      const shouldMarkSold = newTotalStock <= 0;
+
+      // [D-C2] Create order with crypto.randomUUID() and offer data
       const createdOrder = await tx.orders.create({
         data: {
-          id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: `order_${crypto.randomUUID()}`,
           listing_id: listingId,
           buyer_id: buyerId,
           seller_id: sellerId,
@@ -601,16 +642,36 @@ export class NativePaymentController {
 
       console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + effectiveUnitPrice, selectedSize ? `(${selectedSize})` : '');
 
-      // SIZE VARIANT: Update stock and specifications
-      await tx.listings.update({
-        where: { id: listingId },
-        data: {
-          quantity: Math.max(0, newTotalStock),
-          specifications: updatedSpecs ?? undefined,
-          status: shouldMarkSold ? 'sold' : 'active',
-          updated_at: new Date(),
-        },
-      });
+      // Atomic stock update with WHERE guard (optimistic locking)
+      if (!selectedSize || !(freshListing.specifications as any)?.sizeQuantities) {
+        // Non-size-variant: atomic check prevents race condition
+        const stockResult = await tx.listings.updateMany({
+          where: {
+            id: listingId,
+            quantity: { gte: orderQuantity },
+          },
+          data: {
+            quantity: { decrement: orderQuantity },
+            status: shouldMarkSold ? 'sold' : 'active',
+            updated_at: new Date(),
+          },
+        });
+
+        if (stockResult.count === 0) {
+          throw new Error(`Stock race condition detected for listing ${listingId}`);
+        }
+      } else {
+        // Size-variant: update with computed values (race window minimised by being inside tx)
+        await tx.listings.update({
+          where: { id: listingId },
+          data: {
+            quantity: Math.max(0, newTotalStock),
+            specifications: updatedSpecs ?? undefined,
+            status: shouldMarkSold ? 'sold' : 'active',
+            updated_at: new Date(),
+          },
+        });
+      }
 
       // Remove from cart if present
       await tx.cart_items.deleteMany({
@@ -629,7 +690,7 @@ export class NativePaymentController {
         console.log(`[PAY] Offer ${offerId} marked as PURCHASED`);
       }
 
-      return createdOrder;
+      return { createdOrder, shouldMarkSold };
     });
 
     // [Issue #2] Expire all other active offers for this listing when item is sold
@@ -657,7 +718,7 @@ export class NativePaymentController {
         title: 'Payment Successful!',
         message: `Your order for "${listing.title}"${sizeText}${qtyText}${offerText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
         image_url: listingImage,
-        related_id: order.id,
+        related_id: createdOrder.id,
       },
     });
 
@@ -667,7 +728,7 @@ export class NativePaymentController {
         buyerId,
         'Payment Successful!',
         `Your order for "${listing.title}" is confirmed. Shipping within ${SHIPPING_DEADLINE_DAYS} days.`,
-        { type: 'order', order_id: order.id }
+        { type: 'order', order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to buyer failed:', pushErr);
@@ -681,7 +742,7 @@ export class NativePaymentController {
         title: 'Item Sold!',
         message: `"${listing.title}"${qtyText} sold for £${metadata.item_total}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
         image_url: listingImage,
-        related_id: order.id,
+        related_id: createdOrder.id,
       },
     });
 
@@ -691,23 +752,25 @@ export class NativePaymentController {
         sellerId,
         'You Made a Sale!',
         `"${listing.title}" sold for £${metadata.item_total}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
-        { type: 'sale', order_id: order.id }
+        { type: 'sale', order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to seller failed:', pushErr);
     }
 
-    console.log('[PAY] Single item order fulfilled:', order.id);
+    console.log('[PAY] Single item order fulfilled:', createdOrder.id);
     if (offerId) {
       console.log(`[PAY] Offer-based purchase: original £${originalListPrice.toFixed(2)} -> paid £${effectiveUnitPrice.toFixed(2)} (saved £${discountAmount.toFixed(2)})`);
     }
-    return order;
+    return createdOrder;
   }
 
   /**
    * Fulfill cart order
    * OFFER SYSTEM: Reads per-listing offer metadata, stores on orders, marks as PURCHASED
    * [Issue #2]: Expires other offers when listings are sold
+   * [D-C1]: Race condition fix — stock validation and atomic updateMany added
+   * [D-C2]: Order ID uses crypto.randomUUID()
    */
   private static async fulfillCart(
     paymentIntent: Stripe.PaymentIntent,
@@ -768,12 +831,19 @@ export class NativePaymentController {
         const sellerPayout = itemTotal + orderShipping;
         const listingImage = listing.images?.[0]?.image_url || null;
 
+        // [D-C1] STOCK VALIDATION: Check before decrementing
+        if (listing.quantity < itemData.quantity) {
+          console.error(`[PAY-CART] Insufficient stock for ${itemData.listing_id}: requested ${itemData.quantity}, available ${listing.quantity}`);
+          throw new Error(`Insufficient stock for ${listing.title}`);
+        }
+
         const newStock = listing.quantity - itemData.quantity;
         const shouldMarkSold = newStock <= 0;
 
+        // [D-C2] Create order with crypto.randomUUID()
         const order = await tx.orders.create({
           data: {
-            id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: `order_${crypto.randomUUID()}`,
             listing_id: itemData.listing_id,
             buyer_id: buyerId,
             seller_id: listing.seller_id,
@@ -801,15 +871,22 @@ export class NativePaymentController {
         console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + effectiveUnitPrice, offerInfo ? `[offer: ${offerInfo.offer_id}]` : '');
         orders.push({ ...order, listing });
 
-        // Update stock
-        await tx.listings.update({
-          where: { id: itemData.listing_id },
+        // [D-C1] Atomic stock update with WHERE guard (optimistic locking)
+        const stockResult = await tx.listings.updateMany({
+          where: {
+            id: itemData.listing_id,
+            quantity: { gte: itemData.quantity },
+          },
           data: {
-            quantity: Math.max(0, newStock),
+            quantity: { decrement: itemData.quantity },
             status: shouldMarkSold ? 'sold' : 'active',
             updated_at: new Date(),
           },
         });
+
+        if (stockResult.count === 0) {
+          throw new Error(`Stock race condition detected for listing ${itemData.listing_id}`);
+        }
 
         // Track sold listings for offer expiry
         if (shouldMarkSold) {
