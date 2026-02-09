@@ -3,6 +3,7 @@ import express from 'express';
 import multer from 'multer';
 import { DisputeController } from '../controllers/disputeController';
 import { authenticateToken } from '../middleware/auth';
+import { adminAuth } from '../middleware/adminAuth';
 
 const router = express.Router();
 
@@ -66,15 +67,15 @@ router.put('/:id/respond', authenticateToken, DisputeController.respondToDispute
 
 // Get all disputes (admin)
 // GET /api/admin/disputes
-router.get('/admin/list', DisputeController.getAdminDisputes);
+router.get('/admin/list', adminAuth, DisputeController.getAdminDisputes);
 
 // Get single dispute detail (admin) - includes full listing
 // GET /api/admin/disputes/:id
-router.get('/admin/:id', DisputeController.getAdminDisputeDetail);
+router.get('/admin/:id', adminAuth, DisputeController.getAdminDisputeDetail);
 
 // Admin resolves dispute
 // PUT /api/disputes/:id/resolve
-router.put('/:id/resolve', DisputeController.adminResolveDispute);
+router.put('/:id/resolve', adminAuth, DisputeController.adminResolveDispute);
 
 // ============================================
 // SYSTEM ENDPOINTS (CRON JOBS)
@@ -82,6 +83,6 @@ router.put('/:id/resolve', DisputeController.adminResolveDispute);
 
 // Auto-escalate expired disputes
 // POST /api/disputes/auto-escalate
-router.post('/auto-escalate', DisputeController.autoEscalateExpired);
+router.post('/auto-escalate', adminAuth, DisputeController.autoEscalateExpired);
 
 export default router;

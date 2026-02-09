@@ -5,7 +5,7 @@
 // ✅ Full notifications: In-app, Push, and Email
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
@@ -16,7 +16,6 @@ import {
   sendReturnRefundProcessed,
 } from '../services/emailService';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });

@@ -3,9 +3,8 @@
 // No placeholders, no demo data - production ready
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 
-const prisma = new PrismaClient();
 
 export class AdminStatsController {
   /**
@@ -186,81 +185,98 @@ export class AdminStatsController {
   static async getChartData(req: Request, res: Response): Promise<void> {
     try {
       const now = new Date();
-      
-      // ===== ORDERS - Last 7 days =====
+
+      // Date boundaries
+      const sevenDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+      const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+      // ===== Batch query: Orders + Revenue (last 7 days) =====
+      const ordersByDay = await prisma.$queryRaw<Array<{ day: Date; count: bigint; revenue: any }>>`
+        SELECT
+          DATE(created_at) as day,
+          COUNT(*)::bigint as count,
+          SUM(CASE WHEN status IN ('completed', 'delivered', 'shipped', 'paid') THEN amount ELSE 0 END) as revenue
+        FROM orders
+        WHERE created_at >= ${sevenDaysAgo} AND created_at < ${tomorrow}
+        GROUP BY DATE(created_at)
+        ORDER BY day
+      `;
+
+      // ===== Batch query: Signups (last 30 days) =====
+      const signupsByDay = await prisma.$queryRaw<Array<{ day: Date; count: bigint }>>`
+        SELECT DATE(created_at) as day, COUNT(*)::bigint as count
+        FROM users
+        WHERE created_at >= ${thirtyDaysAgo} AND created_at < ${tomorrow}
+        GROUP BY DATE(created_at)
+        ORDER BY day
+      `;
+
+      // ===== Batch query: GMV (last 30 days) =====
+      const gmvByDay = await prisma.$queryRaw<Array<{ day: Date; gmv: any }>>`
+        SELECT DATE(created_at) as day,
+          SUM(CASE WHEN status IN ('completed', 'delivered', 'shipped', 'paid') THEN amount ELSE 0 END) as gmv
+        FROM orders
+        WHERE created_at >= ${thirtyDaysAgo} AND created_at < ${tomorrow}
+        GROUP BY DATE(created_at)
+        ORDER BY day
+      `;
+
+      // Build lookup maps (date string -> value)
+      const ordersMap = new Map<string, { count: number; revenue: number }>();
+      for (const row of ordersByDay) {
+        const key = new Date(row.day).toISOString().split('T')[0];
+        ordersMap.set(key, {
+          count: Number(row.count),
+          revenue: Number(row.revenue || 0),
+        });
+      }
+
+      const signupsMap = new Map<string, number>();
+      for (const row of signupsByDay) {
+        const key = new Date(row.day).toISOString().split('T')[0];
+        signupsMap.set(key, Number(row.count));
+      }
+
+      const gmvMap = new Map<string, number>();
+      for (const row of gmvByDay) {
+        const key = new Date(row.day).toISOString().split('T')[0];
+        gmvMap.set(key, Number(row.gmv || 0));
+      }
+
+      // ===== Build arrays for 7-day charts (orders + revenue) =====
       const ordersData: number[] = [];
       const ordersLabels: string[] = [];
-      for (let i = 6; i >= 0; i--) {
-        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        
-        const count = await prisma.orders.count({
-          where: {
-            created_at: { gte: dayStart, lt: dayEnd }
-          }
-        });
-        
-        ordersData.push(count);
-        ordersLabels.push(dayStart.toLocaleDateString('en-GB', { weekday: 'short' }));
-      }
-
-      // ===== REVENUE - Last 7 days =====
       const revenueData: number[] = [];
       const revenueLabels: string[] = [];
+
       for (let i = 6; i >= 0; i--) {
-        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        
-        const result = await prisma.orders.aggregate({
-          _sum: { amount: true },
-          where: {
-            created_at: { gte: dayStart, lt: dayEnd },
-            status: { in: ['completed', 'delivered', 'shipped', 'paid'] }
-          }
-        });
-        
-        revenueData.push(Number(result._sum.amount || 0));
-        revenueLabels.push(dayStart.toLocaleDateString('en-GB', { weekday: 'short' }));
+        const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        const key = day.toISOString().split('T')[0];
+        const entry = ordersMap.get(key);
+
+        ordersData.push(entry?.count || 0);
+        ordersLabels.push(day.toLocaleDateString('en-GB', { weekday: 'short' }));
+
+        revenueData.push(entry?.revenue || 0);
+        revenueLabels.push(day.toLocaleDateString('en-GB', { weekday: 'short' }));
       }
 
-      // ===== SIGNUPS - Last 30 days =====
+      // ===== Build arrays for 30-day charts (signups + GMV) =====
       const signupsData: number[] = [];
       const signupsLabels: string[] = [];
-      for (let i = 29; i >= 0; i--) {
-        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        
-        const count = await prisma.users.count({
-          where: {
-            created_at: { gte: dayStart, lt: dayEnd }
-          }
-        });
-        
-        signupsData.push(count);
-        signupsLabels.push(dayStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
-      }
-
-      // ===== GMV - Last 30 days =====
       const gmvData: number[] = [];
       const gmvLabels: string[] = [];
+
       for (let i = 29; i >= 0; i--) {
-        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        
-        const result = await prisma.orders.aggregate({
-          _sum: { amount: true },
-          where: {
-            created_at: { gte: dayStart, lt: dayEnd },
-            status: { in: ['completed', 'delivered', 'shipped', 'paid'] }
-          }
-        });
-        
-        gmvData.push(Number(result._sum.amount || 0));
-        gmvLabels.push(dayStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
+        const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        const key = day.toISOString().split('T')[0];
+
+        signupsData.push(signupsMap.get(key) || 0);
+        signupsLabels.push(day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
+
+        gmvData.push(gmvMap.get(key) || 0);
+        gmvLabels.push(day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
       }
 
       // ===== CATEGORY BREAKDOWN =====

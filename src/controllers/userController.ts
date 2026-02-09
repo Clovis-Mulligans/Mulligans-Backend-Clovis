@@ -1,11 +1,10 @@
 // src/controllers/userController.ts
 // UPDATED: Added getCurrentUser and updateCurrentUser methods for /me endpoint
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
 
-const prisma = new PrismaClient();
 
 export class UserController {
   /**

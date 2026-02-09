@@ -1,9 +1,8 @@
 // src/controllers/adminReportsController.ts
 // Admin endpoints for managing user reports
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 
-const prisma = new PrismaClient();
 
 export class AdminReportsController {
   /**

@@ -5,11 +5,10 @@
 // ✅ NEW: Saves label_cost to order for escrow deduction
 
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
 
-const prisma = new PrismaClient();
 
 // ✅ FIXED: Initialize Shippo with correct API key format
 // The SDK expects "ShippoToken <your_api_key>" format

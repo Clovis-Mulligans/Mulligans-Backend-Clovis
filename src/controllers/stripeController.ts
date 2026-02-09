@@ -1,24 +1,56 @@
 // src/controllers/stripeController.ts
 // Updated to handle both single-item and cart checkout webhooks
-// ✅ ESCROW UPDATE: Removed immediate transfer_data - funds held until escrow releases
-// ✅ ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
-// ✅ QUANTITY UPDATE: Now reduces stock instead of marking sold immediately
+// ESCROW UPDATE: Removed immediate transfer_data - funds held until escrow releases
+// ESCROW UPDATE: Shipping deadline changed from 7 to 5 days
+// QUANTITY UPDATE: Now reduces stock instead of marking sold immediately
+
+// ==========================================
+// OFFER SYSTEM CHANGES (5 Feb 2026)
+// ==========================================
+// - Line ~77: Added offer_id to request body
+// - Line ~126: Added offer validation and price override
+// - Line ~204: FIXED 0.99 fee from flat to PER ITEM
+// - Line ~243: Added offer_id to PaymentIntent metadata
+// - Line ~520: Mark offer as PURCHASED in fulfillOrder webhook
+// ==========================================
+
+// ==========================================
+// OFFER SYSTEM FIXES (6 Feb 2026)
+// ==========================================
+// [Issue #2]  Import and call expireOffersForSoldItem after fulfillment when shouldMarkSold
+// [Issue #8]  Force orderQuantity = 1 when offer_id is present to prevent quantity manipulation
+// [Issue #19] Replaced `new PrismaClient()` with shared singleton `import { prisma } from '../lib/prisma'`
+// [Issue #24] Added shipping cost line item to the Stripe checkout session
+// ==========================================
+
+// ==========================================
+// CRITICAL FIXES (9 Feb 2026)
+// ==========================================
+// [P-C1]  Removed standalone PaymentIntent creation in createCheckoutSession (double-charge fix)
+// [E-C1]  Wrapped webhook fulfillment in try/catch, removed debug console.logs
+// [EC-C2] Structured logging for native payment_intent.succeeded events
+// [D-C1]  Race condition fix: stock read + check moved inside transaction with atomic decrement
+// [D-C2]  Order ID generation uses crypto.randomUUID() instead of Math.random()
+// [D-C4]  Automatic refund on failed fulfillment (prevents charge without order)
+// ==========================================
 
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
+import { expireOffersForSoldItem } from '../jobs/offerJobs';
+import crypto from 'crypto';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 
-// ✅ Constants for escrow system
+// Constants for escrow system
 const SHIPPING_DEADLINE_DAYS = 5;
 
-// ✅ SIZE VARIANT: Helper to get stock for a specific size
+// SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
   if (!selectedSize) {
     return listing.quantity || 1;
@@ -30,10 +62,10 @@ function getStockForSize(listing: any, selectedSize: string | null): number {
   return listing.quantity || 1;
 }
 
-// ✅ SIZE VARIANT: Helper to decrement stock for a specific size
+// SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
   if (!specifications || !selectedSize) return specifications;
-  
+
   const specs = { ...specifications };
   if (specs.sizeQuantities && typeof specs.sizeQuantities === 'object') {
     const currentStock = specs.sizeQuantities[selectedSize] || 0;
@@ -45,7 +77,7 @@ function decrementSizeStock(specifications: any, selectedSize: string, quantity:
   return specs;
 }
 
-// ✅ SIZE VARIANT: Helper to calculate total stock from all sizes
+// SIZE VARIANT: Helper to calculate total stock from all sizes
 function getTotalStockFromSizes(specifications: any): number {
   if (!specifications?.sizeQuantities) return 0;
   return Object.values(specifications.sizeQuantities).reduce((sum: number, qty: any) => sum + (qty || 0), 0);
@@ -63,20 +95,21 @@ export class StripeController {
   /**
    * Create Stripe Checkout Session (Single Item - Legacy)
    * POST /api/stripe/create-checkout-session
-   * ✅ ESCROW UPDATE: Funds now held in platform account, not transferred immediately
-   * ✅ QUANTITY UPDATE: Now includes quantity in metadata
+   * ESCROW UPDATE: Funds now held in platform account, not transferred immediately
+   * QUANTITY UPDATE: Now includes quantity in metadata
+   * OFFER SYSTEM: Supports offer-based checkout with discounted price
    */
   static async createCheckoutSession(req: AuthenticatedRequest, res: Response) {
     try {
-      const { listing_id, quantity = 1, selected_size } = req.body;  // ✅ SIZE VARIANT
+      const { listing_id, quantity = 1, selected_size, offer_id } = req.body;  // SIZE VARIANT + OFFER SYSTEM
       const userId = req.user?.id || req.user?.sub;
-      const orderQuantity = Math.max(1, parseInt(quantity) || 1);
+      let orderQuantity = Math.max(1, parseInt(quantity) || 1);
 
       if (!userId) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      console.log('🛒 Creating checkout session for listing:', listing_id, 'quantity:', orderQuantity);
+      console.log('Creating checkout session for listing:', listing_id, 'quantity:', orderQuantity, offer_id ? `offer: ${offer_id}` : '');
 
       // Get listing details
       const listing = await prisma.listings.findUnique({
@@ -94,22 +127,22 @@ export class StripeController {
         return res.status(400).json({ error: 'This item is no longer available' });
       }
 
-      // ✅ SIZE VARIANT: Check if size selection is required
+      // SIZE VARIANT: Check if size selection is required
       const specs = listing.specifications as any;
       const hasSizeVariants = specs?.sizeQuantities && Object.keys(specs.sizeQuantities).length > 0;
-      
+
       if (hasSizeVariants && !selected_size) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Size selection required',
           message: 'Please select a size before purchasing',
           available_sizes: Object.keys(specs.sizeQuantities).filter(size => specs.sizeQuantities[size] > 0)
         });
       }
 
-      // ✅ SIZE VARIANT: Check stock availability for specific size
+      // SIZE VARIANT: Check stock availability for specific size
       const availableStock = getStockForSize(listing, selected_size);
       if (availableStock < orderQuantity) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Not enough stock available',
           available: availableStock,
           requested: orderQuantity,
@@ -119,6 +152,46 @@ export class StripeController {
 
       if (listing.seller_id === userId) {
         return res.status(400).json({ error: 'You cannot buy your own listing' });
+      }
+
+      // OFFER SYSTEM: Check if this is an offer-based purchase
+      const unitPrice = parseFloat(listing.price.toString());
+      let effectiveUnitPrice = unitPrice;
+      let validatedOfferId: string | null = null;
+
+      if (offer_id) {
+        const offer = await prisma.offers.findUnique({
+          where: { id: offer_id },
+        });
+
+        if (!offer) {
+          return res.status(404).json({ error: 'Offer not found' });
+        }
+
+        if (offer.buyer_id !== userId) {
+          return res.status(403).json({ error: 'This offer does not belong to you' });
+        }
+
+        if (offer.status !== 'ACCEPTED' && offer.status !== 'COUNTER_ACCEPTED') {
+          return res.status(400).json({ error: 'This offer is not in an accepted state' });
+        }
+
+        if (offer.listing_id !== listing_id) {
+          return res.status(400).json({ error: 'Offer does not match this listing' });
+        }
+
+        // Check acceptance window hasn't expired
+        if (offer.acceptance_expires_at && new Date() > offer.acceptance_expires_at) {
+          return res.status(400).json({ error: 'The acceptance window for this offer has expired' });
+        }
+
+        effectiveUnitPrice = parseFloat(offer.final_amount!.toString());
+        validatedOfferId = offer.id;
+
+        // [Issue #8] Force quantity = 1 for offer-based purchases to prevent quantity manipulation
+        orderQuantity = 1;
+
+        console.log(`Offer-based checkout: list price \u00a3${unitPrice.toFixed(2)} -> offer price \u00a3${effectiveUnitPrice.toFixed(2)}`);
       }
 
       // Get seller details
@@ -142,7 +215,7 @@ export class StripeController {
       let sellerConnectId = seller.stripe_connect_id;
 
       if (!sellerConnectId) {
-        console.log('🔗 Auto-creating Connect account for seller:', seller.id);
+        console.log('Auto-creating Connect account for seller:', seller.id);
 
         try {
           const account = await stripe.accounts.create({
@@ -180,9 +253,9 @@ export class StripeController {
             },
           });
 
-          console.log('✅ Connect account auto-created:', account.id);
+          console.log('Connect account auto-created:', account.id);
         } catch (error: any) {
-          console.error('❌ Failed to create Connect account:', error);
+          console.error('Failed to create Connect account:', error);
           return res.status(500).json({
             error: 'Failed to set up seller payments',
             details: error.message,
@@ -190,85 +263,98 @@ export class StripeController {
         }
       }
 
-      // ✅ Calculate prices with quantity
-      const unitPrice = parseFloat(listing.price.toString());
-      const itemPrice = unitPrice * orderQuantity;  // ✅ Total for all items
+      // Calculate prices with quantity (using effective price which may be offer price)
+      const itemPrice = effectiveUnitPrice * orderQuantity;  // Total for all items
       const platformFeePercent = 0.075;
       const platformFeeFixed = 0.99;
+      // FIXED: 0.99 fee applies PER ITEM (multiplied by quantity)
       const platformFee = (itemPrice * platformFeePercent) + (platformFeeFixed * orderQuantity);
-      const totalPrice = itemPrice + platformFee;
+
+      // [Issue #24] Calculate shipping cost
+      const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
+      const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
+      const shippingInsuranceRate = 0.0125;
+      const insurancePremium = itemPrice * shippingInsuranceRate;
+      const shippingTotal = baseShipping > 0
+        ? parseFloat((baseShipping + insurancePremium).toFixed(2))
+        : 0;
+
+      // [Issue #24] Grand total now includes shipping
+      const totalPrice = itemPrice + platformFee + shippingTotal;
 
       const totalAmountPence = Math.round(totalPrice * 100);
       const platformFeePence = Math.round(platformFee * 100);
+      const shippingTotalPence = Math.round(shippingTotal * 100);
 
-      // ✅ Calculate seller payout (what they'll receive after escrow)
-      const sellerPayout = itemPrice;
+      // Calculate seller payout (what they'll receive after escrow)
+      const sellerPayout = itemPrice + shippingTotal;
 
-      console.log('💰 Price breakdown:', {
+      console.log('Price breakdown:', {
         unitPrice: unitPrice.toFixed(2),
+        effectiveUnitPrice: effectiveUnitPrice.toFixed(2),
         quantity: orderQuantity,
         itemPrice: itemPrice.toFixed(2),
+        shippingTotal: shippingTotal.toFixed(2),
         platformFee: platformFee.toFixed(2),
         totalPrice: totalPrice.toFixed(2),
         sellerReceives: sellerPayout.toFixed(2),
         sellerConnectId,
         escrowNote: 'Funds held until delivery confirmed',
+        offerId: validatedOfferId || 'none',
       });
 
-      // ✅ ESCROW: Create PaymentIntent WITHOUT transfer_data
+      // [P-C1] ESCROW: Create checkout session WITHOUT transfer_data
       // Funds stay in Mulligans platform account until escrow releases
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: totalAmountPence,
-        currency: 'gbp',
-        metadata: {
-          type: 'single_item',
-          listing_id: listing.id,
-          buyer_id: userId,
-          seller_id: listing.seller_id,
-          seller_connect_id: sellerConnectId || '',
-          quantity: orderQuantity.toString(),
-          selected_size: selected_size || '',  // ✅ SIZE VARIANT
-          unit_price: unitPrice.toFixed(2),    // ✅ Price per item
-          item_price: itemPrice.toFixed(2),
-          platform_fee: platformFee.toFixed(2),
-          seller_payout: sellerPayout.toFixed(2),
-          total_price: totalPrice.toFixed(2),
-          escrow: 'true',
+      // NOTE: The Checkout Session creates its own PaymentIntent internally.
+      // Do NOT create a standalone PaymentIntent here -- that would double-charge.
+      const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+        {
+          price_data: {
+            currency: 'gbp',
+            product_data: {
+              name: listing.title,
+              description: `Sold by ${seller.display_name}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}${validatedOfferId ? ' (Offer price)' : ''}`,
+              images: listing.images && listing.images.length > 0
+                ? [listing.images[0].image_url]
+                : undefined,
+            },
+            unit_amount: Math.round(effectiveUnitPrice * 100),  // OFFER SYSTEM: Use effective price in pence
+          },
+          quantity: orderQuantity,  // Use actual quantity
         },
-      });
+        // Add platform fee as separate line item
+        {
+          price_data: {
+            currency: 'gbp',
+            product_data: {
+              name: 'Buyer Protection',
+              description: 'Secure payment & purchase protection',
+            },
+            unit_amount: platformFeePence,
+          },
+          quantity: 1,
+        },
+      ];
 
-      // ✅ ESCROW: Create checkout session WITHOUT transfer_data
+      // [Issue #24] Add shipping as a separate line item if applicable
+      if (shippingTotalPence > 0) {
+        lineItems.push({
+          price_data: {
+            currency: 'gbp',
+            product_data: {
+              name: 'Insured Shipping',
+              description: `Delivery with full loss & damage protection`,
+            },
+            unit_amount: shippingTotalPence,
+          },
+          quantity: 1,
+        });
+      }
+
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
-        line_items: [
-          {
-            price_data: {
-              currency: 'gbp',
-              product_data: {
-                name: listing.title,
-                description: `Sold by ${seller.display_name}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}`,
-                images: listing.images && listing.images.length > 0
-                  ? [listing.images[0].image_url]
-                  : undefined,
-              },
-              unit_amount: Math.round(unitPrice * 100),  // ✅ Unit price in pence
-            },
-            quantity: orderQuantity,  // ✅ Use actual quantity
-          },
-          // ✅ Add platform fee as separate line item
-          {
-            price_data: {
-              currency: 'gbp',
-              product_data: {
-                name: 'Buyer Protection',
-                description: 'Secure payment & purchase protection',
-              },
-              unit_amount: platformFeePence,
-            },
-            quantity: 1,
-          },
-        ],
+        line_items: lineItems,
         shipping_address_collection: {
           allowed_countries: ['GB'],
         },
@@ -278,29 +364,32 @@ export class StripeController {
           buyer_id: userId,
           seller_id: listing.seller_id,
           seller_connect_id: sellerConnectId || '',
-          quantity: orderQuantity.toString(),  // ✅ Include quantity
+          quantity: orderQuantity.toString(),  // Include quantity
+          selected_size: selected_size || '',  // [P-C1] SIZE VARIANT: Now included in session metadata
           unit_price: unitPrice.toFixed(2),
+          effective_unit_price: effectiveUnitPrice.toFixed(2),  // OFFER SYSTEM
           item_price: itemPrice.toFixed(2),
+          shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
           escrow: 'true',
+          offer_id: validatedOfferId || '',  // OFFER SYSTEM
         },
         success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
       });
 
-      console.log('✅ Payment intent created:', paymentIntent.id);
-      console.log('✅ Checkout session created:', session.id);
-      console.log('🔒 Funds will be held in escrow until delivery + 5 days');
+      console.log('Checkout session created:', session.id);
+      console.log('Funds will be held in escrow until delivery + 5 days');
 
+      // [P-C1] Return only session data -- no standalone PaymentIntent clientSecret
       res.json({
-        clientSecret: paymentIntent.client_secret,
         sessionId: session.id,
         url: session.url,
       });
     } catch (error: any) {
-      console.error('❌ Checkout session error:', error);
+      console.error('Checkout session error:', error);
       res.status(500).json({
         error: 'Failed to create checkout session',
         details: error.message,
@@ -312,6 +401,8 @@ export class StripeController {
    * Stripe Webhook Handler
    * Updated to handle both single-item and cart checkouts
    * FIXED: Now retrieves full session to get shipping details
+   * [E-C1] Wrapped fulfillment in try/catch to prevent unhandled crashes
+   * [EC-C2] Structured logging for native payment_intent.succeeded
    */
   static async handleWebhook(req: Request, res: Response) {
     const sig = req.headers['stripe-signature'] as string;
@@ -325,48 +416,70 @@ export class StripeController {
         process.env.STRIPE_WEBHOOK_SECRET!
       );
     } catch (err: any) {
-      console.error('❌ Webhook signature verification failed:', err.message);
+      console.error('Webhook signature verification failed:', err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    console.log('📨 Webhook event received:', event.type);
+    console.log('[WEBHOOK] Event received:', event.type);
 
     switch (event.type) {
       case 'checkout.session.completed':
         const webhookSession = event.data.object as Stripe.Checkout.Session;
-        
-        // Retrieve the full session to get shipping details
-        console.log('🔄 Retrieving full session...');
-        const fullSession = await stripe.checkout.sessions.retrieve(webhookSession.id);
-        
-        // Debug: Log entire session to find shipping data location
-        console.log('📦 FULL SESSION KEYS:', Object.keys(fullSession));
-        console.log('📍 shipping_details:', (fullSession as any).shipping_details);
-        console.log('📍 shipping:', (fullSession as any).shipping);
-        console.log('📍 shipping_cost:', (fullSession as any).shipping_cost);
-        console.log('📍 customer_details:', JSON.stringify((fullSession as any).customer_details, null, 2));
-        console.log('📍 collected_information:', (fullSession as any).collected_information);
-        
-        // Check if this is a cart checkout or single item
-        if (fullSession.metadata?.type === 'cart_checkout') {
-          console.log('🛒 Processing cart checkout...');
-          await CartCheckoutController.fulfillCartOrder(fullSession);
-        } else {
-          console.log('📦 Processing single item checkout...');
-          await StripeController.fulfillOrder(fullSession);
-        }
 
-        // Immediately payout platform fee to bank account
-        await StripeController.payoutPlatformFee(fullSession);
+        // [E-C1] Wrap entire fulfillment block in try/catch to prevent
+        // unhandled exceptions from crashing the webhook handler.
+        // If fulfillment fails, we still return 200 to prevent Stripe retries
+        // that could cause duplicate orders.
+        try {
+          // Retrieve the full session to get shipping details
+          const fullSession = await stripe.checkout.sessions.retrieve(webhookSession.id);
+
+          // Check if this is a cart checkout or single item
+          if (fullSession.metadata?.type === 'cart_checkout') {
+            console.log('[WEBHOOK] Processing cart checkout for session:', fullSession.id);
+            await CartCheckoutController.fulfillCartOrder(fullSession);
+          } else {
+            console.log('[WEBHOOK] Processing single item checkout for session:', fullSession.id);
+            await StripeController.fulfillOrder(fullSession);
+          }
+
+          // Immediately payout platform fee to bank account
+          await StripeController.payoutPlatformFee(fullSession);
+        } catch (fulfillmentError: any) {
+          // Log the full error for investigation
+          console.error('[WEBHOOK] Order fulfillment failed for session:', webhookSession.id, fulfillmentError);
+          // Still return 200 to prevent Stripe retries that could cause duplicates.
+          // The idempotency checks in fulfillOrder/fulfillCartOrder provide some protection,
+          // but uncontrolled retries are still dangerous.
+          // Failed fulfillments must be investigated manually via Stripe dashboard.
+        }
         break;
 
       case 'payment_intent.succeeded':
-        console.log('💰 Payment succeeded - funds held in escrow');
+        // [EC-C2] Structured logging for native payment events
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const piType = pi.metadata?.type;
+
+        // TODO: Phase 3 -- Implement webhook-based fulfilment for native payments.
+        // Currently native payments rely on the client calling POST /confirm.
+        // If the client crashes after payment but before calling /confirm,
+        // the buyer is charged but no order is created.
+        // Workaround: admin monitors logs for these warnings and manually
+        // checks for orphaned PaymentIntents in the Stripe dashboard.
+        if (piType === 'native_single_item' || piType === 'native_cart') {
+          console.warn(
+            `[WEBHOOK] Native payment succeeded but requires client /confirm call. ` +
+            `PaymentIntent: ${pi.id}, type: ${piType}, amount: ${pi.amount}, ` +
+            `buyer: ${pi.metadata?.buyer_id || 'unknown'}`
+          );
+        } else {
+          console.log('Payment succeeded - funds held in escrow');
+        }
         break;
 
       case 'transfer.created':
         const transfer = event.data.object as Stripe.Transfer;
-        console.log('💸 Escrow transfer created to Connect account:', transfer.destination);
+        console.log('Escrow transfer created to Connect account:', transfer.destination);
         break;
 
       default:
@@ -378,37 +491,43 @@ export class StripeController {
 
   /**
    * Fulfill Single Item Order
-   * ✅ ESCROW UPDATE: Now stores seller_payout, uses 5-day shipping deadline
-   * ✅ QUANTITY UPDATE: Reduces stock, only marks sold when qty = 0
+   * ESCROW UPDATE: Now stores seller_payout, uses 5-day shipping deadline
+   * QUANTITY UPDATE: Reduces stock, only marks sold when qty = 0
+   * OFFER SYSTEM: Marks offer as PURCHASED when order is fulfilled
+   * [Issue #2]: Expires other offers when item is sold
+   * [D-C1]: Stock check moved inside transaction with atomic decrement
+   * [D-C2]: Order ID uses crypto.randomUUID()
+   * [D-C4]: Automatic refund on failed fulfillment
    */
   private static async fulfillOrder(session: Stripe.Checkout.Session) {
     try {
-      console.log('📦 Fulfilling order for session:', session.id);
+      console.log('Fulfilling order for session:', session.id);
 
       const metadata = session.metadata!;
       const listing_id = metadata.listing_id;
       const buyer_id = metadata.buyer_id;
       const seller_id = metadata.seller_id;
-      
-      // ✅ Get quantity and size from metadata
+
+      // Get quantity, size, and offer_id from metadata
       const orderQuantity = parseInt(metadata.quantity || '1');
-      const selectedSize = metadata.selected_size || null;  // ✅ SIZE VARIANT
+      const selectedSize = metadata.selected_size || null;  // SIZE VARIANT
+      const offerId = metadata.offer_id || null;  // OFFER SYSTEM
 
       // Check if order already exists (prevent duplicate processing)
       const existingOrder = await prisma.orders.findFirst({
-        where: { 
-          listing_id, 
+        where: {
+          listing_id,
           buyer_id,
           stripe_payment_intent_id: session.payment_intent as string
         },
       });
 
       if (existingOrder) {
-        console.log('⚠️ Order already exists:', existingOrder.id);
+        console.log('Order already exists:', existingOrder.id);
         return;
       }
 
-      // ✅ Get listing with current stock level
+      // [D-C1] Get listing for metadata (image, title) -- NOT for stock decisions
       const listing = await prisma.listings.findUnique({
         where: { id: listing_id },
         include: {
@@ -420,21 +539,12 @@ export class StripeController {
       });
 
       if (!listing) {
-        console.error('❌ Listing not found:', listing_id);
+        console.error('Listing not found:', listing_id);
         return;
       }
 
       const listingImage = listing.images?.[0]?.image_url || null;
       const listingTitle = listing.title || 'your item';
-      
-      // ✅ SIZE VARIANT: Get stock for specific size
-      const currentStock = getStockForSize(listing, selectedSize);
-
-      // ✅ Validate stock (should have been checked at checkout, but double-check)
-      if (currentStock < orderQuantity) {
-        console.error(`❌ Insufficient stock! Requested: ${orderQuantity}, Available: ${currentStock}${selectedSize ? ` (size: ${selectedSize})` : ''}`);
-        return;
-      }
 
       // Get shipping address from session
       const collectedInfo = (session as any).collected_information;
@@ -442,7 +552,7 @@ export class StripeController {
       const shippingAddress = shippingDetails?.address;
       const shippingName = shippingDetails?.name;
 
-      console.log('📍 Shipping details:', { name: shippingName, address: shippingAddress });
+      console.log('Shipping details:', { name: shippingName, address: shippingAddress });
 
       // Build shipping address JSON for storage
       const shippingAddressJson = shippingAddress ? {
@@ -454,7 +564,7 @@ export class StripeController {
         country: shippingAddress.country || 'GB',
       } : null;
 
-      console.log('📦 Shipping address JSON:', shippingAddressJson);
+      console.log('Shipping address JSON:', shippingAddressJson);
 
       // Get payment method
       let paymentMethodId: string | null = null;
@@ -465,87 +575,211 @@ export class StripeController {
           );
           paymentMethodId = paymentIntent.payment_method as string;
         } catch (error) {
-          console.warn('⚠️ Could not retrieve payment method');
+          console.warn('Could not retrieve payment method');
         }
       }
 
-      // ✅ Get seller payout from metadata (or calculate from item price)
+      // Get seller payout from metadata (or calculate from item price)
       const itemPrice = parseFloat(metadata.item_price);
-      const sellerPayout = metadata.seller_payout 
-        ? parseFloat(metadata.seller_payout) 
+      const sellerPayout = metadata.seller_payout
+        ? parseFloat(metadata.seller_payout)
         : itemPrice;
 
-      // ✅ ESCROW: Auto-cancel date (5 days)
+      // OFFER SYSTEM: Get original list price and calculate discount
+      const originalListPrice = parseFloat(metadata.unit_price);
+      const effectiveUnitPrice = metadata.effective_unit_price
+        ? parseFloat(metadata.effective_unit_price)
+        : originalListPrice;
+      const discountAmount = offerId
+        ? (originalListPrice - effectiveUnitPrice) * orderQuantity
+        : 0;
+
+      // ESCROW: Auto-cancel date (5 days)
       const autoCancelAt = new Date();
       autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
 
-      // ✅ SIZE VARIANT: Calculate new stock level
-      let newTotalStock: number;
-      let updatedSpecs = listing.specifications;
-      
-      if (selectedSize && (listing.specifications as any)?.sizeQuantities) {
-        updatedSpecs = decrementSizeStock(listing.specifications, selectedSize, orderQuantity);
-        newTotalStock = getTotalStockFromSizes(updatedSpecs);
-      } else {
-        newTotalStock = listing.quantity - orderQuantity;
-      }
-      
-      const shouldMarkSold = newTotalStock <= 0;
+      // [D-C4] Wrap the transaction in try/catch to issue refund on failure
+      let order: any;
+      let shouldMarkSold = false;
 
-      console.log(`📊 Stock update: ${currentStock} - ${orderQuantity} = ${newTotalStock}${selectedSize ? ` (size: ${selectedSize})` : ''} (Mark sold: ${shouldMarkSold})`);
+      try {
+        // [D-C1] Use transaction to ensure atomicity -- stock check happens INSIDE
+        const txResult = await prisma.$transaction(async (tx) => {
+          // [D-C1] RACE CONDITION FIX: Re-read listing inside transaction for fresh stock data
+          const freshListing = await tx.listings.findUnique({
+            where: { id: listing_id },
+            select: { quantity: true, specifications: true, status: true },
+          });
 
-      // ✅ Use transaction to ensure atomicity
-      const order = await prisma.$transaction(async (tx) => {
-        // Create order with quantity
-        const createdOrder = await tx.orders.create({
-          data: {
-            id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            listing_id,
-            buyer_id,
-            seller_id,
-            amount: parseFloat(metadata.total_price),
-            quantity: orderQuantity,
-            selected_size: selectedSize,  // ✅ SIZE VARIANT
-            seller_payout: sellerPayout,
-            currency: 'GBP',
-            stripe_payment_intent_id: session.payment_intent as string,
-            stripe_payment_method_id: paymentMethodId,
-            status: 'to_ship',
-            paid_at: new Date(),
-            auto_cancel_at: autoCancelAt,
-            shipping_address: shippingAddressJson ?? Prisma.JsonNull,
-            updated_at: new Date(),
-          },
-        });
-
-        // ✅ SIZE VARIANT: Update listing stock, specifications, and status
-        await tx.listings.update({
-          where: { id: listing_id },
-          data: { 
-            quantity: Math.max(0, newTotalStock),
-            specifications: updatedSpecs ?? undefined,  // ✅ Update size quantities
-            status: shouldMarkSold ? 'sold' : 'active',
-            updated_at: new Date() 
-          },
-        });
-
-        // ✅ Remove from buyer's cart (if was in cart)
-        await tx.cart_items.deleteMany({
-          where: {
-            user_id: buyer_id,
-            listing_id: listing_id
+          if (!freshListing || freshListing.status === 'sold') {
+            throw new Error(`Listing ${listing_id} is no longer available`);
           }
+
+          // SIZE VARIANT: Get stock for specific size from FRESH data
+          const currentStock = getStockForSize(freshListing, selectedSize);
+
+          if (currentStock < orderQuantity) {
+            throw new Error(
+              `Insufficient stock for listing ${listing_id}: requested ${orderQuantity}, available ${currentStock}${selectedSize ? ` (size: ${selectedSize})` : ''}`
+            );
+          }
+
+          // SIZE VARIANT: Calculate new stock level from FRESH data
+          let newTotalStock: number;
+          let updatedSpecs = freshListing.specifications;
+
+          if (selectedSize && (freshListing.specifications as any)?.sizeQuantities) {
+            updatedSpecs = decrementSizeStock(freshListing.specifications, selectedSize, orderQuantity);
+            newTotalStock = getTotalStockFromSizes(updatedSpecs);
+          } else {
+            newTotalStock = freshListing.quantity - orderQuantity;
+          }
+
+          const computedShouldMarkSold = newTotalStock <= 0;
+
+          console.log(`Stock update: ${currentStock} - ${orderQuantity} = ${newTotalStock}${selectedSize ? ` (size: ${selectedSize})` : ''} (Mark sold: ${computedShouldMarkSold})`);
+
+          // [D-C2] Create order with crypto.randomUUID() for collision-safe IDs
+          const createdOrder = await tx.orders.create({
+            data: {
+              id: `order_${crypto.randomUUID()}`,
+              listing_id,
+              buyer_id,
+              seller_id,
+              amount: parseFloat(metadata.total_price),
+              quantity: orderQuantity,
+              selected_size: selectedSize,  // SIZE VARIANT
+              seller_payout: sellerPayout,
+              currency: 'GBP',
+              stripe_payment_intent_id: session.payment_intent as string,
+              stripe_payment_method_id: paymentMethodId,
+              status: 'to_ship',
+              paid_at: new Date(),
+              auto_cancel_at: autoCancelAt,
+              shipping_address: shippingAddressJson ?? Prisma.JsonNull,
+              updated_at: new Date(),
+              // OFFER SYSTEM: Store offer details on the order
+              offer_id: offerId || null,
+              original_list_price: offerId ? originalListPrice : null,
+              discount_amount: offerId ? discountAmount : 0,
+            },
+          });
+
+          // [D-C1] ATOMIC stock decrement with WHERE guard (optimistic locking)
+          // For non-size-variant: use updateMany with quantity check
+          // For size-variant: use standard update (JSON field can't be checked atomically)
+          if (!selectedSize || !(freshListing.specifications as any)?.sizeQuantities) {
+            // Non-size-variant: atomic check prevents race condition
+            const stockResult = await tx.listings.updateMany({
+              where: {
+                id: listing_id,
+                quantity: { gte: orderQuantity },
+              },
+              data: {
+                quantity: { decrement: orderQuantity },
+                status: computedShouldMarkSold ? 'sold' : 'active',
+                updated_at: new Date(),
+              },
+            });
+
+            if (stockResult.count === 0) {
+              throw new Error(`Stock race condition detected for listing ${listing_id}`);
+            }
+          } else {
+            // Size-variant: update with computed values (race window minimised by being inside tx)
+            await tx.listings.update({
+              where: { id: listing_id },
+              data: {
+                quantity: Math.max(0, newTotalStock),
+                specifications: updatedSpecs ?? undefined,
+                status: computedShouldMarkSold ? 'sold' : 'active',
+                updated_at: new Date(),
+              },
+            });
+          }
+
+          // Remove from buyer's cart (if was in cart)
+          await tx.cart_items.deleteMany({
+            where: {
+              user_id: buyer_id,
+              listing_id: listing_id
+            }
+          });
+
+          // OFFER SYSTEM: Mark the offer as PURCHASED
+          if (offerId) {
+            await tx.offers.update({
+              where: { id: offerId },
+              data: {
+                status: 'PURCHASED',
+                purchased_at: new Date(),
+              },
+            });
+            console.log(`Offer ${offerId} marked as PURCHASED`);
+          }
+
+          return { createdOrder, shouldMarkSold: computedShouldMarkSold };
         });
 
-        return createdOrder;
-      });
+        // Extract results from the transaction
+        order = txResult.createdOrder;
+        shouldMarkSold = txResult.shouldMarkSold;
+      } catch (txError: any) {
+        // [D-C4] Transaction failed -- issue refund to buyer
+        console.error(`[STRIPE] Order creation failed for listing ${listing_id}:`, txError.message);
 
-      console.log('✅ Order created:', order.id);
-      console.log(`📦 Quantity: ${orderQuantity}`);
-     console.log(`📊 New stock: ${newTotalStock}${shouldMarkSold ? ' (listing marked as SOLD)' : ''}`);
-      console.log('📍 With shipping address:', shippingAddressJson ? 'YES' : 'NO');
-      console.log(`🔒 Funds held in escrow. Seller payout: £${sellerPayout.toFixed(2)}`);
-      console.log(`⏰ Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
+        // CRITICAL: Refund the buyer since we cannot fulfill the order
+        if (session.payment_intent) {
+          try {
+            await stripe.refunds.create({
+              payment_intent: session.payment_intent as string,
+              reason: 'requested_by_customer',
+              metadata: {
+                reason: 'fulfillment_failed',
+                listing_id,
+                error: txError.message?.substring(0, 200) || 'unknown',
+                buyer_id,
+                session_id: session.id,
+              },
+            });
+            console.log(`[STRIPE] Refund issued for unfulfillable order -- listing ${listing_id}, buyer ${buyer_id}`);
+          } catch (refundErr: any) {
+            // This is the worst case: buyer is charged AND refund failed.
+            // Log as CRITICAL so it can be caught by monitoring.
+            console.error(
+              `[STRIPE] CRITICAL: Failed to refund buyer ${buyer_id} for listing ${listing_id}:`,
+              refundErr.message
+            );
+            // TODO: Add alerting/monitoring hook here (e.g., email to admin)
+          }
+        }
+
+        return; // Exit fulfillOrder -- webhook still returns 200 to Stripe
+      }
+
+      // Post-transaction: logging, notifications, offer expiry
+      // Only reached if the transaction succeeded
+      console.log('Order created:', order.id);
+      console.log(`Quantity: ${orderQuantity}`);
+      console.log(`New stock updated${shouldMarkSold ? ' (listing marked as SOLD)' : ''}`);
+      console.log('With shipping address:', shippingAddressJson ? 'YES' : 'NO');
+      console.log(`Funds held in escrow. Seller payout: \u00a3${sellerPayout.toFixed(2)}`);
+      console.log(`Auto-cancel if not shipped by: ${autoCancelAt.toISOString()}`);
+      if (offerId) {
+        console.log(`Offer-based purchase: original \u00a3${originalListPrice.toFixed(2)} -> paid \u00a3${effectiveUnitPrice.toFixed(2)} (saved \u00a3${discountAmount.toFixed(2)})`);
+      }
+
+      // [Issue #2] Expire all other active offers for this listing when item is sold
+      if (shouldMarkSold) {
+        try {
+          const expiredCount = await expireOffersForSoldItem(listing_id);
+          if (expiredCount > 0) {
+            console.log(`Expired ${expiredCount} other offer(s) for sold listing ${listing_id}`);
+          }
+        } catch (expireErr) {
+          console.error('Error expiring offers for sold item (non-fatal):', expireErr);
+        }
+      }
 
       // Check if seller needs bank verification
       const sellerUser = await prisma.users.findUnique({
@@ -555,22 +789,23 @@ export class StripeController {
 
       const needsVerification = sellerUser?.stripe_connect_status !== 'active';
 
-      // ✅ Notify buyer - WITH IMAGE, quantity, and size
+      // Notify buyer - WITH IMAGE, quantity, and size
       const sizeText = selectedSize ? ` (${selectedSize})` : '';
       const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
+      const offerText = offerId ? ` at your offer price of \u00a3${effectiveUnitPrice.toFixed(2)}` : '';
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: buyer_id,
           type: 'order',
-          title: 'Payment Successful! 🎉',
-          message: `Your order for "${listingTitle}"${qtyText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          title: 'Payment Successful!',
+          message: `Your order for "${listingTitle}"${qtyText}${offerText} has been confirmed. The seller will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
           image_url: listingImage,
           related_id: order.id,
         },
       });
 
-      // ✅ Notify seller - WITH IMAGE (different message if needs verification)
+      // Notify seller - WITH IMAGE (different message if needs verification)
       const totalSaleValue = itemPrice.toFixed(2);
       if (needsVerification) {
         await prisma.notifications.create({
@@ -578,8 +813,8 @@ export class StripeController {
             id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             user_id: seller_id,
             type: 'payout',
-            title: 'Congratulations on your sale! 🎉',
-            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. Add your bank details to receive payment after delivery.`,
+            title: 'Congratulations on your sale!',
+            message: `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Add your bank details to receive payment after delivery.`,
             image_url: listingImage,
             related_id: order.id,
           },
@@ -590,29 +825,29 @@ export class StripeController {
             id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             user_id: seller_id,
             type: 'sale',
-            title: 'Item Sold! 🎉',
-            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
+            title: 'Item Sold!',
+            message: `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
             image_url: listingImage,
             related_id: order.id,
           },
         });
       }
 
-      // ✅ PUSH NOTIFICATION - New sale to seller
+      // PUSH NOTIFICATION - New sale to seller
       try {
         await sendPushNotification(
           seller_id,
-          '🎉 You made a sale!',
-          `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          'You made a sale!',
+          `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
           { type: 'sale', order_id: order.id }
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);
       }
 
-      console.log('✅ Order fulfilled successfully (escrow mode with quantity support)');
+      console.log('Order fulfilled successfully (escrow mode with quantity support)');
     } catch (error) {
-      console.error('❌ Error fulfilling order:', error);
+      console.error('Error fulfilling order:', error);
       throw error;
     }
   }
@@ -623,16 +858,16 @@ export class StripeController {
   private static async payoutPlatformFee(session: Stripe.Checkout.Session) {
     try {
       const platformFee = session.metadata?.platform_fee;
-      
+
       if (!platformFee) {
-        console.log('⚠️ No platform fee in metadata, skipping payout');
+        console.log('No platform fee in metadata, skipping payout');
         return;
       }
 
       const platformFeePence = Math.round(parseFloat(platformFee) * 100);
-      
+
       if (platformFeePence <= 0) {
-        console.log('⚠️ Platform fee is zero, skipping payout');
+        console.log('Platform fee is zero, skipping payout');
         return;
       }
 
@@ -641,7 +876,7 @@ export class StripeController {
       const availableGBP = balance.available.find(b => b.currency === 'gbp')?.amount || 0;
 
       if (availableGBP < platformFeePence) {
-        console.log(`⚠️ Insufficient balance for fee payout. Available: ${availableGBP}, Needed: ${platformFeePence}`);
+        console.log(`Insufficient balance for fee payout. Available: ${availableGBP}, Needed: ${platformFeePence}`);
         return;
       }
 
@@ -656,10 +891,10 @@ export class StripeController {
         },
       });
 
-      console.log(`✅ Platform fee payout created: £${platformFee} → ${payout.id}`);
+      console.log(`Platform fee payout created: \u00a3${platformFee} -> ${payout.id}`);
     } catch (error: any) {
       // Don't throw - fee payout failure shouldn't break order processing
-      console.error('⚠️ Platform fee payout failed (non-critical):', error.message);
+      console.error('Platform fee payout failed (non-critical):', error.message);
     }
   }
 }

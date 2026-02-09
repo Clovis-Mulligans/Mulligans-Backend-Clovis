@@ -3,7 +3,12 @@
 
 import { Request, Response, NextFunction } from 'express';
 
-const ADMIN_PASSWORD = process.env.DISPUTE_ADMIN_PASSWORD || 'changeme123';
+const ADMIN_PASSWORD = process.env.DISPUTE_ADMIN_PASSWORD;
+
+if (!ADMIN_PASSWORD) {
+  console.error('FATAL: DISPUTE_ADMIN_PASSWORD environment variable is not set. Exiting.');
+  process.exit(1);
+}
 
 /**
  * Middleware to check admin password from Authorization header
@@ -23,7 +28,6 @@ export function adminAuth(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ error: 'Invalid admin password' });
   }
 
-  console.log('✅ Admin authenticated');
   next();
 }
 

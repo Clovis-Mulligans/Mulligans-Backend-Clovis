@@ -1,11 +1,10 @@
 // src/routes/feedbackRoutes.ts
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
 import { sendEmail } from '../utils/email';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 /**
  * Submit feedback
@@ -48,7 +47,7 @@ router.post('/submit', authenticateToken, async (req: any, res: Response) => {
         screenFeature,
         description,
         severity,
-        deviceInfo: deviceInfo || null,
+        // deviceInfo: deviceInfo || null, // Field not in schema
         status: 'new'
       },
       include: {

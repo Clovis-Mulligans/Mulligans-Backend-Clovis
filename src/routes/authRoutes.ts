@@ -1,6 +1,6 @@
 // src/routes/authRoutes.ts
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
 import {
   CognitoIdentityProviderClient,
@@ -17,8 +17,12 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from '../services/emailService';
 
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set. Exiting.');
+  process.exit(1);
+}
+
 const router = Router();
-const prisma = new PrismaClient();
 
 const cognitoClient = new CognitoIdentityProviderClient({
   region: process.env.AWS_REGION || 'eu-west-2',

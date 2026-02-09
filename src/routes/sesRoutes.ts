@@ -1,9 +1,8 @@
 // src/routes/sesRoutes.ts
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Helper to process SNS messages
 const processSnsMessage = async (req: Request, res: Response, type: 'bounce' | 'complaint') => {

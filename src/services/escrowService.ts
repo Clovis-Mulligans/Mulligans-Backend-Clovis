@@ -17,12 +17,11 @@
 // ✅ Status verification - re-check before money movement
 // ✅ Comprehensive logging for audit trail
 
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 import { sendEscrowReleased, sendReturnRefundProcessed } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 
-const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });

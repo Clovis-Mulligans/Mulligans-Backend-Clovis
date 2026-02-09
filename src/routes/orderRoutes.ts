@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { OrderController } from '../controllers/orderController';
 import { authenticateToken } from '../middleware/auth';
+import { adminAuth } from '../middleware/adminAuth';
 
 const router = Router();
 
@@ -30,7 +31,7 @@ router.put('/:id/ship', authenticateToken, OrderController.markAsShipped);
 router.put('/:id/deliver', authenticateToken, OrderController.markAsDelivered);
 router.put('/:id/cancel', authenticateToken, OrderController.cancelOrder);
 router.put('/:id/dispute', authenticateToken, OrderController.openDispute);
-router.put('/:id/complete', authenticateToken, OrderController.completeOrder);
+router.put('/:id/complete', adminAuth, OrderController.completeOrder);
 
 // ✅ Mark order as viewed by buyer (clears notification badge)
 router.put('/:id/viewed', authenticateToken, OrderController.markAsViewed);

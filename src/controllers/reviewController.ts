@@ -1,9 +1,8 @@
 // src/controllers/reviewController.ts
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { v4 as uuidv4 } from 'uuid';
 
-const prisma = new PrismaClient();
 
 export class ReviewController {
   /**
