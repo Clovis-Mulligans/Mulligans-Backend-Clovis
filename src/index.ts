@@ -83,7 +83,7 @@ app.use((req, res, next) => {
 // Rate limiting - general API (250 requests per 15 minutes per IP)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 250,
+  max: 1000,
   message: { error: 'Too many requests, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
