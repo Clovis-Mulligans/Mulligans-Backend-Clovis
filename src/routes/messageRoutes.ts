@@ -64,6 +64,29 @@ router.patch('/conversations/:id/read', authenticateToken, async (req: any, res)
   }
 });
 
+// Mark all conversations as read
+router.patch('/read-all', authenticateToken, async (req: any, res) => {
+  try {
+    const userId = req.user.sub || req.user.id;
+    
+    const result = await prisma.messages.updateMany({
+      where: {
+        receiver_id: userId,
+        is_read: false
+      },
+      data: {
+        is_read: true
+      }
+    });
+
+    console.log('[MSG] Marked all messages as read for user:', userId, '- count:', result.count);
+    res.json({ success: true, marked_count: result.count });
+  } catch (error) {
+    console.error('Failed to mark all messages as read:', error);
+    res.status(500).json({ error: 'Failed to mark all messages as read' });
+  }
+});
+
 // Create or get conversation
 router.post('/conversations', authenticateToken, async (req: any, res) => {
   try {
