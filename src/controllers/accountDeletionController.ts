@@ -189,13 +189,13 @@ export class AccountDeletionController {
         const authResult = await cognitoClient.send(authCommand);
 
         if (!authResult.AuthenticationResult) {
-          res.status(401).json({ error: 'Incorrect password' });
+          res.status(403).json({ error: 'Incorrect password' });
           return;
         }
       } catch (authError: any) {
         console.log(`[ACCOUNT-DELETION] Password verification failed for user ${userId}`);
         if (authError.name === 'NotAuthorizedException') {
-          res.status(401).json({ error: 'Incorrect password' });
+          res.status(403).json({ error: 'Incorrect password' });
           return;
         }
         // Re-throw unexpected Cognito errors
