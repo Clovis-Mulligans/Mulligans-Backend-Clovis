@@ -12,6 +12,16 @@ const s3Client = new S3Client({
 
 const BUCKET_NAME = 'mulligans-golf-images-mvp';
 
+// CloudFront CDN domain - falls back to direct S3 URL if not set
+const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN;
+
+function buildImageUrl(key: string): string {
+  if (CLOUDFRONT_DOMAIN) {
+    return `https://${CLOUDFRONT_DOMAIN}/${key}`;
+  }
+  return `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${key}`;
+}
+
 export interface UploadResult {
   url: string;
   key: string;
@@ -35,12 +45,12 @@ export class S3Service {
 
     await s3Client.send(command);
 
-    const url = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${key}`;
+    const url = buildImageUrl(key);
 
     return { url, key };
   }
 
-  // ✅ NEW: Upload support ticket images to separate folder
+  // Upload support ticket images to separate folder
   static async uploadSupportImage(
     file: Buffer,
     mimetype: string,
@@ -59,7 +69,7 @@ export class S3Service {
 
     await s3Client.send(command);
 
-    const url = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${key}`;
+    const url = buildImageUrl(key);
 
     return { url, key };
   }

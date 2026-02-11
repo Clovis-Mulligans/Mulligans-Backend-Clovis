@@ -82,7 +82,10 @@ async function uploadDisputeImage(
     })
   );
 
-  const imageUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${s3Key}`;
+  const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN;
+const imageUrl = CLOUDFRONT_DOMAIN
+  ? `https://${CLOUDFRONT_DOMAIN}/${s3Key}`
+  : `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${s3Key}`;
 
   return { imageUrl, s3Key };
 }
@@ -2098,7 +2101,10 @@ export class DisputeController {
         })
       );
 
-      const imageUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${s3Key}`;
+      const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN;
+const imageUrl = CLOUDFRONT_DOMAIN
+  ? `https://${CLOUDFRONT_DOMAIN}/${s3Key}`
+  : `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${s3Key}`;
 
       // Save to database
       const disputeImage = await prisma.dispute_images.create({
