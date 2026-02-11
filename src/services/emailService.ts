@@ -859,3 +859,96 @@ export async function sendInsuranceReportReceivedToSeller(
   
   console.log(`✅ Report received email sent to seller: ${sellerEmail}`);
 }
+
+// ============================================
+// ACCOUNT DELETION EMAILS
+// ============================================
+// Add these functions to src/services/emailService.ts
+
+export async function sendDeletionRequested(
+  userEmail: string,
+  data: {
+    userName: string;
+    deletionDate: string;
+    listingsSuspended: number;
+  }
+): Promise<void> {
+  const html = loadTemplate('deletion-requested', {
+    userName: data.userName,
+    deletionDate: data.deletionDate,
+    listingsSuspended: String(data.listingsSuspended),
+  });
+
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: userEmail,
+    subject: 'Account Deletion Requested - Mulligans',
+    html: html,
+  });
+
+  if (error) {
+    console.error('[ACCOUNT-DELETION] Failed to send deletion requested email:', error);
+    throw new Error(error.message);
+  }
+
+  console.log(`[ACCOUNT-DELETION] Deletion requested email sent to ${userEmail}`);
+}
+
+export async function sendDeletionCancelled(
+  userEmail: string,
+  data: {
+    userName: string;
+    listingsReactivated: number;
+  }
+): Promise<void> {
+  const html = loadTemplate('deletion-cancelled', {
+    userName: data.userName,
+    listingsReactivated: String(data.listingsReactivated),
+  });
+
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: userEmail,
+    subject: 'Account Deletion Cancelled - Mulligans',
+    html: html,
+  });
+
+  if (error) {
+    console.error('[ACCOUNT-DELETION] Failed to send deletion cancelled email:', error);
+    throw new Error(error.message);
+  }
+
+  console.log(`[ACCOUNT-DELETION] Deletion cancelled email sent to ${userEmail}`);
+}
+
+export async function sendDeletionAdminNotification(
+  data: {
+    userId: string;
+    userEmail: string;
+    userName: string;
+    deletionDate: string;
+    listingsSuspended: number;
+  }
+): Promise<void> {
+  const html = loadTemplate('deletion-admin-notification', {
+    userId: data.userId,
+    userEmail: data.userEmail,
+    userName: data.userName,
+    deletionDate: data.deletionDate,
+    listingsSuspended: String(data.listingsSuspended),
+  });
+
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: ADMIN_EMAIL,
+    subject: 'Account Deletion Request - Admin Notification',
+    html: html,
+  });
+
+  if (error) {
+    console.error('[ACCOUNT-DELETION] Failed to send admin notification:', error);
+    throw new Error(error.message);
+  }
+
+  console.log(`[ACCOUNT-DELETION] Admin notification sent for user ${data.userId}`);
+}

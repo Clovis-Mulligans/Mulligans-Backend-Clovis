@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Account Deletion Request - Admin Notification</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+          <!-- Blue Header with Logo -->
+          <tr>
+            <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
+              <img src="https://mulligans-golf-images-mvp.s3.eu-west-2.amazonaws.com/email-assets/EmailMainHeaderLogo" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px;">
+              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Account Deletion Request</h1>
+
+              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6; text-align: center;">A user has requested account deletion. Details below.</p>
+
+              <!-- User Details Table -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">User ID</p>
+                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827; font-family: monospace;">{{userId}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Email</p>
+                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827;">{{userEmail}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Display Name</p>
+                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827;">{{userName}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Scheduled Deletion</p>
+                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #991b1b;">{{deletionDate}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0;">
+                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Listings Suspended</p>
+                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827;">{{listingsSuspended}}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.6; text-align: center;">No action required unless you need to intervene before the scheduled deletion date.</p>
+            </td>
+          </tr>
+          <!-- Blue Footer -->
+          <tr>
+            <td style="padding: 30px 40px; background-color: #1C4670;">
+              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">This is an internal notification for Mulligans administrators.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -52,6 +52,7 @@ import testRoutes from './routes/testRoutes';
 import offerRoutes from './routes/offerRoutes';
 import listingOfferRoutes from './routes/listingOfferRoutes';
 import { runOfferJobs, sendExpiryWarnings } from './jobs/offerJobs';
+import { processAccountDeletions } from './jobs/accountDeletionJob';
 
 
 const app = express();
@@ -237,6 +238,23 @@ cron.schedule('*/15 * * * *', async () => {
   timezone: 'Europe/London'
 });
 
+// ============================================
+// ACCOUNT DELETION CRON JOB
+// Runs daily at 3:00 AM UK time (after escrow at 2:00 AM)
+// Processes accounts past their 30-day deletion deadline
+// ============================================
+cron.schedule('0 3 * * *', async () => {
+  console.log('[ACCOUNT-DELETION] Starting scheduled account deletion processing...');
+  try {
+    await processAccountDeletions();
+    console.log('[ACCOUNT-DELETION] Scheduled processing completed');
+  } catch (error) {
+    console.error('[ACCOUNT-DELETION] Scheduled processing failed:', error);
+  }
+}, {
+  timezone: 'Europe/London'
+});
+
 // Also run escrow jobs on server startup (after 30 seconds delay)
 // This catches any missed jobs if server was down
 setTimeout(async () => {
@@ -257,6 +275,17 @@ setTimeout(async () => {
     console.error('❌ Startup offer jobs failed:', error);
   }
 }, 30000);
+
+// Account deletion startup check (60 second delay)
+setTimeout(async () => {
+  console.log('[ACCOUNT-DELETION] Running account deletion check on startup...');
+  try {
+    await processAccountDeletions();
+    console.log('[ACCOUNT-DELETION] Startup processing completed');
+  } catch (error) {
+    console.error('[ACCOUNT-DELETION] Startup processing failed:', error);
+  }
+}, 60000);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log('═══════════════════════════════════════════');
