@@ -56,7 +56,7 @@ const signupLimiter = rateLimit({
  */
 router.post('/register', signupLimiter, async (req: Request, res: Response) => {
   try {
-    const { email, password, display_name, phone_number } = req.body;
+    const { email, password, display_name, phone_number, marketing_emails } = req.body;
 
     console.log('📝 Registering user:', email);
 
@@ -113,6 +113,7 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
           verification_code_expires: codeExpires,
           created_at: new Date(),
           updated_at: new Date(),
+          marketing_emails: marketing_emails || false,
         },
       });
     }
