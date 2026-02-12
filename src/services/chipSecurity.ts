@@ -156,7 +156,7 @@ export function validateResponse(rawResponse: string): ResponseValidationResult 
 
 export const MAX_USER_MESSAGE_LENGTH = 1000;
 export const MAX_CONVERSATION_HISTORY = 20; // messages sent to Claude
-export const MAX_RESPONSE_TOKENS = 500;
+export const MAX_RESPONSE_TOKENS = 250;
 export const DAILY_MESSAGE_LIMIT = 30;
 export const DAILY_TOKEN_BUDGET = 50_000; // total tokens per user per day
 export const MAX_CONVERSATIONS_PER_USER = 50;
