@@ -110,6 +110,8 @@ model listings {
   users               users                @relation(fields: [seller_id], references: [id], onDelete: Cascade)
   offers              offers[]
   orders              orders[]
+  // Chip AI Caddy relations
+  chip_conversations  chip_conversations[]
 
   @@index([brand])
   @@index([category])
@@ -154,6 +156,7 @@ model orders {
   status                        String            @default("pending")
   shipping_address              Json?
   tracking_number               String?
+  source              String?              @db.VarChar(30)
   created_at                    DateTime          @default(now())
   paid_at                       DateTime?
   shipped_at                    DateTime?
@@ -290,6 +293,9 @@ model users {
   support_tickets                              support_tickets[]
   reports_received                             user_reports[]    @relation("ReportedUserReports")
   reports_made                                 user_reports[]    @relation("ReporterReports")
+  // Chip AI Caddy relations
+  fitting_profile                          fitting_profiles?
+  chip_conversations                       chip_conversations[]
 }
 
 model notifications {
@@ -319,6 +325,7 @@ model Feedback {
   screenFeature String   @map("screen_feature") @db.VarChar(100)
   description   String
   severity      String   @db.VarChar(20)
+  deviceInfo    String?  @map("device_info")
   status        String   @default("new") @db.VarChar(20)
   createdAt     DateTime @default(now()) @map("created_at")
   user          users?   @relation(fields: [userId], references: [id])
@@ -546,4 +553,103 @@ model offers {
   @@index([status, expires_at], map: "idx_offers_status_expires_at")                         // [Issue #36]
   @@index([status, acceptance_expires_at], map: "idx_offers_status_acceptance_expires")       // [Issue #36]
   @@index([listing_id, buyer_id], map: "idx_offers_listing_buyer")                           // [Issue #36]
+}
+
+// ============================================
+// CHIP AI CADDY — Fitting & Chat Models
+// Added: 2026-02-12
+// ============================================
+
+model fitting_profiles {
+  id                String               @id @default(uuid())
+  user_id           String               @unique
+  handicap          String?              @db.VarChar(30)
+  dexterity         String?              @db.VarChar(10)
+  height_cm         Int?
+  looking_for       String[]
+  play_frequency    String?              @db.VarChar(30)
+  goals             String[]
+  budget_range      String?              @db.VarChar(30)
+  condition_pref    String?              @db.VarChar(30)
+  brand_preferences String[]
+  glove_size        String?              @db.VarChar(10)
+  created_at        DateTime             @default(now())
+  updated_at        DateTime             @updatedAt
+
+  user              users                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  bag_clubs         fitting_bag_clubs[]
+  swing_data        fitting_swing_data[]
+
+  @@index([user_id])
+  @@map("fitting_profiles")
+}
+
+model fitting_bag_clubs {
+  id          String           @id @default(uuid())
+  profile_id  String
+  club_type   String           @db.VarChar(30)
+  brand       String?          @db.VarChar(50)
+  model       String?          @db.VarChar(100)
+  shaft_flex  String?          @db.VarChar(20)
+  loft        Decimal?         @db.Decimal(4, 1)
+  notes       String?
+  created_at  DateTime         @default(now())
+
+  profile     fitting_profiles @relation(fields: [profile_id], references: [id], onDelete: Cascade)
+
+  @@index([profile_id])
+  @@map("fitting_bag_clubs")
+}
+
+model fitting_swing_data {
+  id               String           @id @default(uuid())
+  profile_id       String
+  club_type        String?          @db.VarChar(30)
+  club_speed_mph   Decimal?         @db.Decimal(5, 1)
+  ball_speed_mph   Decimal?         @db.Decimal(5, 1)
+  launch_angle_deg Decimal?         @db.Decimal(4, 1)
+  spin_rate_rpm    Int?
+  carry_yards      Int?
+  smash_factor     Decimal?         @db.Decimal(3, 2)
+  source           String?          @db.VarChar(30)
+  image_url        String?
+  created_at       DateTime         @default(now())
+
+  profile          fitting_profiles @relation(fields: [profile_id], references: [id], onDelete: Cascade)
+
+  @@index([profile_id])
+  @@map("fitting_swing_data")
+}
+
+model chip_conversations {
+  id          String         @id @default(uuid())
+  user_id     String
+  listing_id  String?
+  title       String?        @db.VarChar(100)
+  created_at  DateTime       @default(now())
+  updated_at  DateTime       @updatedAt
+
+  user        users          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  listing     listings?      @relation(fields: [listing_id], references: [id], onDelete: SetNull)
+  messages    chip_messages[]
+
+  @@index([user_id])
+  @@index([listing_id])
+  @@map("chip_conversations")
+}
+
+model chip_messages {
+  id              String             @id @default(uuid())
+  conversation_id String
+  role            String             @db.VarChar(10)
+  content         String
+  tokens_used     Int?
+  metadata        Json?              // Stores prompt_version and other debugging info
+  created_at      DateTime           @default(now())
+
+  conversation    chip_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([conversation_id])
+  @@index([created_at])
+  @@map("chip_messages")
 }

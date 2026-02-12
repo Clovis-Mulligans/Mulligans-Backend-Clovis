@@ -51,6 +51,8 @@ import testRoutes from './routes/testRoutes';
 // OFFER SYSTEM IMPORTS
 import offerRoutes from './routes/offerRoutes';
 import listingOfferRoutes from './routes/listingOfferRoutes';
+import chipRoutes from './routes/chipRoutes';
+import fittingRoutes from './routes/fittingRoutes';
 import { runOfferJobs, sendExpiryWarnings } from './jobs/offerJobs';
 import { processAccountDeletions } from './jobs/accountDeletionJob';
 
@@ -159,6 +161,9 @@ app.use('/api/returns', returnRoutes);
 app.use('/api/offers', offerRoutes);
 // [Issue #34] Changed from '/api/listings' to '/api/listing-offers' to avoid route conflicts
 app.use('/api/listing-offers', listingOfferRoutes);
+// CHIP AI CADDY ROUTES
+app.use('/api/chip', chipRoutes);
+app.use('/api/fitting', fittingRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
