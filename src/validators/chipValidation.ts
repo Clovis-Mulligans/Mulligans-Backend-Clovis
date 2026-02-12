@@ -149,7 +149,7 @@ export const deleteSwingDataSchema = z.object({
 
 export const createConversationSchema = z.object({
   body: z.object({
-    listing_id: z.string().uuid().optional(),
+    listing_id: z.string().max(100).optional(),
   }),
 });
 
