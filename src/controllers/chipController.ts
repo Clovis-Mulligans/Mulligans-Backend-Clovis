@@ -118,6 +118,16 @@ export class ChipController {
           return;
         }
         listingTitle = listing.title;
+
+        // Check for existing conversation with this listing
+        const existing = await prisma.chip_conversations.findFirst({
+          where: { user_id: userId, listing_id },
+          orderBy: { updated_at: 'desc' },
+        });
+        if (existing) {
+          res.status(200).json({ conversation: existing });
+          return;
+        }
       }
 
       const conversation = await prisma.chip_conversations.create({
