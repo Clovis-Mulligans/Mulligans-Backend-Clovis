@@ -240,7 +240,8 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
     savedItems = activeFavs
       .map((f) => {
         const l = f.listings;
-        return `${l.title} — £${l.price} (${l.brand || ''} ${l.model || ''})`.trim();
+        const buyerPrice = (Number(l.price) * 1.075 + 0.99).toFixed(2);
+        return `${l.title} — £${buyerPrice} (${l.brand || ''} ${l.model || ''})`.trim();
       })
       .join('\n');
   }
@@ -253,7 +254,7 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
       .join(', ');
     currentListing = [
       `Title: ${listing.title}`,
-      `Price: £${listing.price}`,
+      `Price: £${(Number(listing.price) * 1.075 + 0.99).toFixed(2)}`,
       `Category: ${listing.category}`,
       listing.brand ? `Brand: ${listing.brand}` : '',
       listing.model ? `Model: ${listing.model}` : '',
