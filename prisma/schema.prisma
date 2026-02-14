@@ -250,6 +250,7 @@ model users {
   preferred_carriers                           String?
   email_notifications                          Boolean           @default(true)
   marketing_emails                             Boolean           @default(false)
+  sms_marketing_consent                        Boolean           @default(false)
   order_notifications                          Boolean           @default(true)
   handicap                                     String?
   clothing_size                                String[]

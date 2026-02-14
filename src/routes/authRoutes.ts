@@ -114,6 +114,7 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
           created_at: new Date(),
           updated_at: new Date(),
           marketing_emails: marketing_emails || false,
+            sms_marketing_consent: req.body.sms_marketing_consent || false,
         },
       });
     }
