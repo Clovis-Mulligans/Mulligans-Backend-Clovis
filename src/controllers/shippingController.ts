@@ -27,37 +27,46 @@ export const PARCEL_SIZES = {
     name: 'Small',
     description: 'Balls, gloves, grips',
     price: 3.49,
-    length: '25',  // cm (as string for Shippo)
+    length: '30',
     width: '20',
-    height: '5',
-    weight: '0.5', // kg
+    height: '10',
+    weight: '1',
   },
   medium: {
     name: 'Medium',
-    description: 'Shoes, single club, clothing',
+    description: 'Shoes, clothing, accessories',
     price: 5.99,
     length: '45',
-    width: '30',
-    height: '15',
-    weight: '2',
+    width: '35',
+    height: '20',
+    weight: '5',
   },
   large: {
     name: 'Large',
-    description: 'Driver, woods, iron set',
+    description: 'Single club, putter',
     price: 9.99,
-    length: '120',
+    length: '130',
     width: '15',
     height: '15',
     weight: '3',
   },
   extra_large: {
     name: 'Extra Large',
-    description: 'Full bag, travel bag',
+    description: 'Iron set, stand bag (empty)',
     price: 14.99,
-    length: '115',  // Reduced for girth calculation
-    width: '30',    // Reduced for girth calculation
-    height: '30',   // Length + 2*(W+H) = 115 + 120 = 235cm < 245cm max
-    weight: '8',    // Reduced for better carrier compatibility
+    length: '130',
+    width: '40',
+    height: '40',
+    weight: '15',
+  },
+  oversized: {
+    name: 'Oversized',
+    description: 'Full bag with clubs, travel bag',
+    price: 24.99,
+    length: '140',
+    width: '50',
+    height: '50',
+    weight: '25',
   },
 };
 

@@ -394,11 +394,12 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
     // Get parcel size from original listing
     const parcelSize = order.listings?.parcel_size || 'medium';
     const parcelConfig = {
-      small: { length: '25', width: '20', height: '5', weight: '0.5' },
-      medium: { length: '45', width: '30', height: '15', weight: '2' },
-      large: { length: '120', width: '15', height: '15', weight: '3' },
-      extra_large: { length: '115', width: '30', height: '30', weight: '8' },
-    }[parcelSize] || { length: '45', width: '30', height: '15', weight: '2' };
+      small: { length: '30', width: '20', height: '10', weight: '1' },
+      medium: { length: '45', width: '35', height: '20', weight: '5' },
+      large: { length: '130', width: '15', height: '15', weight: '3' },
+      extra_large: { length: '130', width: '40', height: '40', weight: '15' },
+      oversized: { length: '140', width: '50', height: '50', weight: '25' },
+    }[parcelSize] || { length: '45', width: '35', height: '20', weight: '5' };
 
     console.log('📦 Getting return shipping rates');
     console.log('📍 From (buyer):', buyerAddress);
