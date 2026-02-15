@@ -70,6 +70,7 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
             id: true,
             amount: true,
             shipping_cost: true,
+            listing_id: true,
             listing_title: true,
             listing_image: true,
             stripe_payment_intent_id: true,
@@ -133,6 +134,7 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
         listing_title: dispute.orders.listing_title,
         listing_image: dispute.orders.listing_image,
         created_at: dispute.orders.created_at.toISOString(),
+        listing: null as any,
       },
       buyer: {
         id: dispute.users_disputes_buyer.id,
@@ -159,6 +161,31 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
           created_at: img.created_at.toISOString(),
         })),
     };
+
+    // Fetch full listing details for dispute comparison
+    if (dispute.orders.listing_id) {
+      const listing = await prisma.listings.findUnique({
+        where: { id: dispute.orders.listing_id },
+        select: {
+          id: true,
+          description: true,
+          price: true,
+          condition_overall: true,
+          images: {
+            select: { image_url: true },
+            orderBy: { display_order: 'asc' },
+          },
+        },
+      });
+      if (listing) {
+        formatted.order.listing = {
+          description: listing.description,
+          price: parseFloat(listing.price.toString()),
+          condition: listing.condition_overall,
+          images: listing.images.map((img: any) => img.image_url),
+        };
+      }
+    }
 
     res.json({ dispute: formatted });
   } catch (error: any) {
