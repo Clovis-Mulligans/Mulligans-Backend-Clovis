@@ -1451,15 +1451,50 @@ tr:hover td {
 .return-priority.delivered { background: var(--status-success); }
 .return-priority.completed { background: var(--text-muted); }
 
-/* ==================== RESPONSIVE ==================== */
+/* ==================== HAMBURGER BUTTON ==================== */
+.hamburger-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.hamburger-btn:hover {
+  background: var(--bg-tertiary);
+}
+
+/* ==================== SIDEBAR BACKDROP ==================== */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99;
+}
+
+.sidebar-backdrop.active {
+  display: block;
+}
+
+/* ==================== RESPONSIVE: TABLET ==================== */
 @media (max-width: 1024px) {
   :root {
     --sidebar-width: 0px;
   }
 
   .sidebar {
+    width: 260px;
     transform: translateX(-100%);
-    transition: transform 0.3s;
+    transition: transform 0.3s ease;
+    overflow: hidden;
   }
 
   .sidebar.open {
@@ -1470,8 +1505,21 @@ tr:hover td {
     margin-left: 0;
   }
 
+  .hamburger-btn {
+    display: block;
+  }
+
+  .main-header {
+    padding: 0 16px;
+  }
+
+  .main-content {
+    padding: 16px;
+  }
+
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
   }
 
   .chart-grid {
@@ -1485,8 +1533,14 @@ tr:hover td {
   .resolution-options {
     grid-template-columns: 1fr;
   }
+
+  .modal {
+    max-width: 95vw !important;
+    margin: 10px;
+  }
 }
 
+/* ==================== RESPONSIVE: PHONE ==================== */
 @media (max-width: 640px) {
   .stats-grid {
     grid-template-columns: 1fr;
@@ -1495,6 +1549,7 @@ tr:hover td {
   .toolbar {
     flex-direction: column;
     align-items: stretch;
+    gap: 8px;
   }
 
   .search-box {
@@ -1507,6 +1562,7 @@ tr:hover td {
 
   .list-item {
     flex-wrap: wrap;
+    padding: 12px;
   }
 
   .list-item-info {
@@ -1517,5 +1573,46 @@ tr:hover td {
     border-top: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
+  }
+
+  .page-title {
+    font-size: 16px;
+  }
+
+  .main-header {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .main-content {
+    padding: 12px;
+  }
+
+  .header-actions {
+    gap: 6px;
+  }
+
+  .header-actions .btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .welcome-banner {
+    padding: 16px;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .tabs {
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .filter-chips {
+    overflow-x: auto;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
   }
 }

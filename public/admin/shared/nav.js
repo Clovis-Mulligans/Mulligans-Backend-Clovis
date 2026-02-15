@@ -159,7 +159,9 @@ async function loadNavBadges() {
 // Mobile sidebar toggle
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
   sidebar?.classList.toggle('open');
+  backdrop?.classList.toggle('active');
 }
 
 // Initialize navigation
@@ -169,7 +171,26 @@ function initNav() {
   if (sidebarContainer) {
     sidebarContainer.innerHTML = generateSidebar();
   }
-  
+
+  // Add hamburger button to header (mobile only)
+  const header = document.querySelector('.main-header');
+  if (header && !document.querySelector('.hamburger-btn')) {
+    const hamburger = document.createElement('button');
+    hamburger.className = 'hamburger-btn';
+    hamburger.innerHTML = '☰';
+    hamburger.onclick = toggleSidebar;
+    header.insertBefore(hamburger, header.firstChild);
+  }
+
+  // Add backdrop overlay for mobile sidebar
+  if (!document.getElementById('sidebarBackdrop')) {
+    const backdrop = document.createElement('div');
+    backdrop.id = 'sidebarBackdrop';
+    backdrop.className = 'sidebar-backdrop';
+    backdrop.onclick = toggleSidebar;
+    document.body.appendChild(backdrop);
+  }
+
   // Load badge counts
   if (typeof apiRequest === 'function' && adminToken) {
     loadNavBadges();
