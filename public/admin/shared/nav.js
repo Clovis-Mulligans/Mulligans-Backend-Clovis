@@ -171,7 +171,7 @@ function initNav() {
   }
   
   // Load badge counts
-  if (typeof apiRequest === 'function' && adminPassword) {
+  if (typeof apiRequest === 'function' && adminToken) {
     loadNavBadges();
   }
 }
