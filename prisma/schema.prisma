@@ -192,6 +192,7 @@ model orders {
   insurance_claim_status        String?
   insurance_premium             Decimal?          @db.Decimal(10, 2)
   insured_value                 Decimal?          @db.Decimal(10, 2)
+  label_auto_generated          Boolean?
   offer_id                      String?           @db.VarChar(255)
   original_list_price           Decimal?          @db.Decimal(10, 2)
   discount_amount               Decimal?          @default(0) @db.Decimal(10, 2)

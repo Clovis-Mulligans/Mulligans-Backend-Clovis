@@ -46,6 +46,7 @@ import { sendOrderConfirmation, sendSaleNotification } from '../services/emailSe
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
+import { autoPurchaseLabel } from '../services/autoShippingService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -866,6 +867,18 @@ export class CartCheckoutController {
         }
       }
 
+      // AUTO-SHIP: Purchase shipping labels for each order
+      const autoLabelResults: Record<string, boolean> = {};
+      for (const order of createdOrders) {
+        try {
+          const result = await autoPurchaseLabel(order.id);
+          autoLabelResults[order.id] = result.success;
+        } catch (autoShipErr) {
+          console.error(`[CART] Auto-label failed for order ${order.id} (non-fatal):`, autoShipErr);
+          autoLabelResults[order.id] = false;
+        }
+      }
+
       // Process seller notifications (outside transaction)
       for (const sellerData of sellerBreakdown) {
         const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
@@ -922,13 +935,16 @@ export class CartCheckoutController {
             console.error('[CART] Push to seller failed:', pushErr);
           }
         } else {
+          const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
+          const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
+          const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
           await prisma.notifications.create({
             data: {
               id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               user_id: seller_id,
               type: 'sale',
-              title: 'Item Sold!',
-              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
+             title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
+              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. ${cartAutoMsg}`,
               image_url: sellerFirstImage,
               related_id: createdOrders[0]?.id,
             },
@@ -938,8 +954,8 @@ export class CartCheckoutController {
           try {
             await sendPushNotification(
               seller_id,
-              'Item Sold!',
-              `You sold ${listing_ids.length} item(s) for £${subtotal}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+              allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
+              `You sold ${listing_ids.length} item(s) for £${subtotal}. ${cartAutoMsg}`,
               { type: 'sale', order_id: createdOrders[0]?.id }
             );
           } catch (pushErr) {

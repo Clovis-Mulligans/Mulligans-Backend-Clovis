@@ -30,6 +30,7 @@ import { prisma } from '../lib/prisma';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
+import { autoPurchaseLabel } from '../services/autoShippingService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -705,6 +706,14 @@ export class NativePaymentController {
       }
     }
 
+    // AUTO-SHIP: Purchase shipping label automatically
+    let autoLabelResult: { success: boolean; labelUrl?: string; trackingNumber?: string } = { success: false };
+    try {
+      autoLabelResult = await autoPurchaseLabel(createdOrder.id);
+    } catch (autoShipErr) {
+      console.error('[PAY] Auto-label purchase failed (non-fatal):', autoShipErr);
+    }
+
     // Create notifications
     const sizeText = selectedSize ? ` (${selectedSize})` : '';
     const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
@@ -739,8 +748,8 @@ export class NativePaymentController {
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         user_id: sellerId,
         type: 'sale',
-        title: 'Item Sold!',
-        message: `"${listing.title}"${qtyText} sold for £${metadata.item_total}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+        title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
+        message: `"${listing.title}"${qtyText} sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready — print it and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
         image_url: listingImage,
         related_id: createdOrder.id,
       },
@@ -750,8 +759,8 @@ export class NativePaymentController {
     try {
       await sendPushNotification(
         sellerId,
-        'You Made a Sale!',
-        `"${listing.title}" sold for £${metadata.item_total}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+        autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You Made a Sale!',
+        `"${listing.title}" sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready. Print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
         { type: 'sale', order_id: createdOrder.id }
       );
     } catch (pushErr) {
@@ -931,6 +940,18 @@ export class NativePaymentController {
       }
     }
 
+    // AUTO-SHIP: Purchase shipping labels for each order
+    const autoLabelResults: Record<string, boolean> = {};
+    for (const order of orders) {
+      try {
+        const result = await autoPurchaseLabel(order.id);
+        autoLabelResults[order.id] = result.success;
+      } catch (autoShipErr) {
+        console.error(`[PAY] Auto-label failed for order ${order.id} (non-fatal):`, autoShipErr);
+        autoLabelResults[order.id] = false;
+      }
+    }
+
     // Create notifications
     const firstImage = orders[0]?.listing?.images?.[0]?.image_url || null;
     const totalItems = orders.reduce((sum, o) => sum + o.quantity, 0);
@@ -974,13 +995,16 @@ export class NativePaymentController {
       const sellerQty = sellerOrderList.reduce((sum, o) => sum + o.quantity, 0);
       const sellerImage = sellerOrderList[0]?.listing?.images?.[0]?.image_url || null;
 
+
+const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
+      const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
       await prisma.notifications.create({
         data: {
           id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           user_id: sellerId,
           type: 'sale',
-          title: 'Items Sold!',
-          message: `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Items Sold!',
+          message: `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
           image_url: sellerImage,
           related_id: sellerOrderList[0]?.id,
         },
@@ -990,8 +1014,8 @@ export class NativePaymentController {
       try {
         await sendPushNotification(
           sellerId,
-          'You Made a Sale!',
-          `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          allLabelsReady ? 'Items Sold — Labels Ready!' : 'You Made a Sale!',
+          `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
           { type: 'sale', order_id: sellerOrderList[0]?.id }
         );
       } catch (pushErr) {

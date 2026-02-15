@@ -42,6 +42,7 @@ import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
+import { autoPurchaseLabel } from '../services/autoShippingService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -781,6 +782,14 @@ export class StripeController {
         }
       }
 
+      // AUTO-SHIP: Purchase shipping label automatically
+      let autoLabelResult: { success: boolean; labelUrl?: string; trackingNumber?: string } = { success: false };
+      try {
+        autoLabelResult = await autoPurchaseLabel(order.id);
+      } catch (autoShipErr) {
+        console.error('[STRIPE] Auto-label purchase failed (non-fatal):', autoShipErr);
+      }
+
       // Check if seller needs bank verification
       const sellerUser = await prisma.users.findUnique({
         where: { id: seller_id },
@@ -807,6 +816,12 @@ export class StripeController {
 
       // Notify seller - WITH IMAGE (different message if needs verification)
       const totalSaleValue = itemPrice.toFixed(2);
+      const autoShipMessage = autoLabelResult.success
+        ? `Your shipping label is ready — print it and ship!`
+        : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
+      const autoShipPush = autoLabelResult.success
+        ? `Your shipping label is ready. Print and ship!`
+        : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
       if (needsVerification) {
         await prisma.notifications.create({
           data: {
@@ -825,8 +840,8 @@ export class StripeController {
             id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             user_id: seller_id,
             type: 'sale',
-            title: 'Item Sold!',
-            message: `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`,
+            title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
+            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipMessage}`,
             image_url: listingImage,
             related_id: order.id,
           },
@@ -837,8 +852,8 @@ export class StripeController {
       try {
         await sendPushNotification(
           seller_id,
-          'You made a sale!',
-          `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Ship within ${SHIPPING_DEADLINE_DAYS} days.`,
+          autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You made a sale!',
+         `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipPush}`,
           { type: 'sale', order_id: order.id }
         );
       } catch (pushErr) {
