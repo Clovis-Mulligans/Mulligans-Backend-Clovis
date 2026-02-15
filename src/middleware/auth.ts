@@ -44,6 +44,22 @@ export const authenticateToken = async (
       sub: payload.userId || payload.id,
     } as any;
 
+    // Check if user is banned
+    const { prisma } = require('../lib/prisma');
+    const user = await prisma.users.findUnique({
+      where: { id: req.user!.id },
+      select: { is_banned: true },
+    });
+
+    if (user?.is_banned) {
+      res.status(403).json({
+        error: 'Account suspended',
+        message: 'Your account has been suspended. Please contact support.',
+        code: 'ACCOUNT_BANNED',
+      });
+      return;
+    }
+
     next();
   } catch (error) {
     console.error('❌ Token verification error:', error);
