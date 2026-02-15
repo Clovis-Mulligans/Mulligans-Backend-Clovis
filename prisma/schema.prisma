@@ -264,6 +264,9 @@ model users {
   seller_cancellation_count                    Int               @default(0)
   push_token                                   String?
   push_token_platform                          String?           @db.VarChar(10)
+  is_banned                                    Boolean           @default(false)
+  ban_reason                                   String?
+  banned_at                                    DateTime?
   password_reset_code                          String?
   password_reset_code_expires                  DateTime?
   verification_code                            String?
@@ -653,4 +656,18 @@ model chip_messages {
   @@index([conversation_id])
   @@index([created_at])
   @@map("chip_messages")
+}
+
+model admin_audit_log {
+  id          String   @id @default(uuid())
+  action      String
+  target_type String
+  target_id   String?
+  details     Json?
+  admin_ip    String?
+  created_at  DateTime @default(now())
+
+  @@index([action])
+  @@index([target_type, target_id])
+  @@index([created_at])
 }
