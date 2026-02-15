@@ -319,7 +319,7 @@
       document.getElementById('modalContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
       try {
-        const response = await apiRequest(`/api/disputes/admin/${id}`);
+        const response = await apiRequest(`${API_BASE}/disputes/${id}`);
 
         if (!response.ok) throw new Error('Failed to load');
 

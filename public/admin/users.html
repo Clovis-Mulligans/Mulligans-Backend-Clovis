@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mulligans Admin - User Management</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shared/styles.css">
+  <style>
+    /* User Management specific styles */
+    .user-list-item {
+      display: flex;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-color);
+      cursor: pointer;
+      transition: all 0.2s;
+      gap: 16px;
+    }
+
+    .user-list-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .user-list-item:last-child {
+      border-bottom: none;
+    }
+
+    .user-avatar-lg {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--brand-green);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .user-avatar-lg.banned {
+      background: var(--status-error);
+    }
+
+    .user-list-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .user-list-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .user-list-email {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .user-list-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .user-meta-item {
+      text-align: center;
+    }
+
+    .user-meta-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .user-meta-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .user-list-status {
+      flex-shrink: 0;
+    }
+
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(29, 198, 144, 0.15);
+      color: var(--brand-green);
+    }
+
+    .banned-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--status-error);
+    }
+
+    /* Modal detail sections */
+    .user-profile-header {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 20px;
+      background: var(--bg-primary);
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+
+    .user-profile-avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: var(--brand-green);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 28px;
+      flex-shrink: 0;
+    }
+
+    .user-profile-avatar.banned {
+      background: var(--status-error);
+    }
+
+    .user-profile-info h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .user-profile-info p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .user-stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .user-stat-mini {
+      background: var(--bg-primary);
+      border-radius: 10px;
+      padding: 14px;
+      text-align: center;
+    }
+
+    .user-stat-mini-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .user-stat-mini-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
+    }
+
+    .orders-mini-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .order-mini-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .order-mini-item .order-id {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .order-mini-item .order-amount {
+      color: var(--brand-green);
+      font-weight: 600;
+    }
+
+    .order-mini-item .order-status {
+      font-size: 12px;
+    }
+
+    .reports-mini-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .report-mini-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 16px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .pagination button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .pagination button:hover:not(:disabled) {
+      border-color: var(--brand-green);
+      color: var(--text-primary);
+    }
+
+    .pagination button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .pagination .page-info {
+      font-size: 13px;
+      color: var(--text-muted);
+      padding: 0 12px;
+    }
+
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .filter-chip {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .filter-chip:hover {
+      border-color: var(--brand-green);
+    }
+
+    .filter-chip.active {
+      background: var(--brand-green-glow);
+      border-color: var(--brand-green);
+      color: var(--brand-green);
+    }
+
+    /* Ban confirmation form */
+    .ban-form {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 16px;
+    }
+
+    .ban-form h4 {
+      color: var(--status-error);
+      margin-bottom: 12px;
+      font-size: 14px;
+    }
+
+    .ban-form textarea {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 14px;
+      min-height: 80px;
+      resize: vertical;
+      font-family: inherit;
+      margin-bottom: 12px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+    }
+
+    .ban-form textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    @media (max-width: 1024px) {
+      .user-list-meta {
+        display: none;
+      }
+
+      .user-stats-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- ==================== LOGIN SCREEN ==================== -->
+  <div id="loginScreen" class="login-container">
+    <div class="login-card">
+      <div class="login-logo">
+        <h1>🏌️ MULLIGANS</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <div id="loginError" class="error-message"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="password">Admin Password</label>
+          <input type="password" id="password" placeholder="Enter admin password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" id="loginBtn" style="width: 100%;">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MAIN APP ==================== -->
+  <div id="appContainer" class="app-container">
+    <!-- Sidebar -->
+    <div id="sidebarContainer"></div>
+
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <header class="main-header">
+        <h1 class="page-title">👥 User Management</h1>
+        <div class="header-actions">
+          <button class="btn btn-ghost" onclick="loadUsers()">🔄 Refresh</button>
+          <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon green">👥</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statTotalUsers">-</div>
+              <div class="stat-label">Total Users</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon blue">🛒</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statActiveSellers">-</div>
+              <div class="stat-label">Active Sellers</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon purple">✅</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statVerifiedSellers">-</div>
+              <div class="stat-label">Verified Sellers</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon red">🚫</div>
+            <div class="stat-content">
+              <div class="stat-value" id="statBannedUsers">-</div>
+              <div class="stat-label">Banned Users</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar" style="border-radius: 12px 12px 0 0; border-bottom: 1px solid var(--border-color);">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="searchInput" placeholder="Search by name or email..." oninput="handleSearch()">
+          </div>
+          <div class="filter-bar">
+            <button class="filter-chip active" data-filter="all" onclick="setFilter('all', this)">All</button>
+            <button class="filter-chip" data-filter="verified" onclick="setFilter('verified', this)">Verified</button>
+            <button class="filter-chip" data-filter="banned" onclick="setFilter('banned', this)">Banned</button>
+          </div>
+        </div>
+
+        <!-- User List -->
+        <div class="list-container" id="userList">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="pagination" style="display: none;">
+          <button id="prevPage" onclick="changePage(-1)">Previous</button>
+          <span class="page-info" id="pageInfo">Page 1 of 1</span>
+          <button id="nextPage" onclick="changePage(1)">Next</button>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ==================== USER DETAIL MODAL ==================== -->
+  <div class="modal-overlay" id="userModal">
+    <div class="modal" style="max-width: 900px;">
+      <div class="modal-header">
+        <h2 id="modalTitle">👤 User Details</h2>
+        <button class="modal-close" onclick="closeModal()">X</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <div class="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="shared/auth.js"></script>
+  <script src="shared/helpers.js"></script>
+  <script src="shared/nav.js"></script>
+  <script>
+    // ==================== STATE ====================
+    let allUsers = [];
+    let filteredUsers = [];
+    let currentPage = 1;
+    let totalPages = 1;
+    const pageSize = 25;
+    let currentFilter = 'all';
+    let searchQuery = '';
+    let currentUserId = null;
+
+    // ==================== INITIALIZATION ====================
+    function initPage() {
+      initNav();
+      loadUsers();
+    }
+
+    // ==================== LOAD USERS ====================
+    async function loadUsers() {
+      const container = document.getElementById('userList');
+      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const params = new URLSearchParams();
+        if (searchQuery) params.set('search', searchQuery);
+        if (currentFilter !== 'all') params.set('filter', currentFilter);
+        params.set('page', currentPage.toString());
+        params.set('limit', pageSize.toString());
+
+        const response = await apiRequest(`${API_BASE}/users?${params.toString()}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch users');
+        }
+
+        const data = await response.json();
+        allUsers = data.users || [];
+        totalPages = data.totalPages || 1;
+        currentPage = data.page || 1;
+
+        // Update stats
+        if (data.stats) {
+          document.getElementById('statTotalUsers').textContent = formatNumber(data.stats.totalUsers || 0);
+          document.getElementById('statActiveSellers').textContent = formatNumber(data.stats.activeSellers || 0);
+          document.getElementById('statVerifiedSellers').textContent = formatNumber(data.stats.verifiedSellers || 0);
+          document.getElementById('statBannedUsers').textContent = formatNumber(data.stats.bannedUsers || 0);
+        }
+
+        renderUserList(allUsers);
+        updatePagination();
+      } catch (error) {
+        console.error('Failed to load users:', error);
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">⚠️</div>
+            <h3>Failed to load users</h3>
+            <p>${escapeHtml(error.message)}</p>
+          </div>
+        `;
+      }
+    }
+
+    // ==================== RENDER USER LIST ====================
+    function renderUserList(users) {
+      const container = document.getElementById('userList');
+
+      if (users.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">👥</div>
+            <h3>No users found</h3>
+            <p>Try adjusting your search or filters.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = users.map(user => {
+        const initial = (user.display_name || user.email || '?')[0].toUpperCase();
+        const isBanned = user.is_banned;
+        const isVerified = user.is_verified_seller;
+
+        return `
+          <div class="user-list-item" onclick="openUserDetail('${user.id}')">
+            <div class="user-avatar-lg ${isBanned ? 'banned' : ''}">${initial}</div>
+            <div class="user-list-main">
+              <div class="user-list-name">
+                ${escapeHtml(user.display_name || 'No Name')}
+                ${isVerified ? '<span class="verified-badge">✅ Verified</span>' : ''}
+                ${isBanned ? '<span class="banned-badge">🚫 Banned</span>' : ''}
+              </div>
+              <div class="user-list-email">${escapeHtml(user.email || '')}</div>
+            </div>
+            <div class="user-list-meta">
+              <div class="user-meta-item">
+                <div class="user-meta-value">${user.total_sales || 0}</div>
+                <div class="user-meta-label">Sales</div>
+              </div>
+              <div class="user-meta-item">
+                <div class="user-meta-value">${user.total_purchases || 0}</div>
+                <div class="user-meta-label">Purchases</div>
+              </div>
+              <div class="user-meta-item">
+                <div class="user-meta-value">${getAge(user.created_at)}</div>
+                <div class="user-meta-label">Joined</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==================== SEARCH & FILTER ====================
+    const handleSearch = debounce(() => {
+      searchQuery = document.getElementById('searchInput').value.trim();
+      currentPage = 1;
+      loadUsers();
+    }, 300);
+
+    function setFilter(filter, element) {
+      currentFilter = filter;
+      currentPage = 1;
+
+      // Update active chip
+      document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.remove('active'));
+      element.classList.add('active');
+
+      loadUsers();
+    }
+
+    // ==================== PAGINATION ====================
+    function updatePagination() {
+      const paginationEl = document.getElementById('pagination');
+      const pageInfoEl = document.getElementById('pageInfo');
+      const prevBtn = document.getElementById('prevPage');
+      const nextBtn = document.getElementById('nextPage');
+
+      if (totalPages <= 1) {
+        paginationEl.style.display = 'none';
+        return;
+      }
+
+      paginationEl.style.display = 'flex';
+      pageInfoEl.textContent = `Page ${currentPage} of ${totalPages}`;
+      prevBtn.disabled = currentPage <= 1;
+      nextBtn.disabled = currentPage >= totalPages;
+    }
+
+    function changePage(delta) {
+      currentPage += delta;
+      if (currentPage < 1) currentPage = 1;
+      if (currentPage > totalPages) currentPage = totalPages;
+      loadUsers();
+    }
+
+    // ==================== USER DETAIL MODAL ====================
+    async function openUserDetail(userId) {
+      currentUserId = userId;
+      const modal = document.getElementById('userModal');
+      const body = document.getElementById('modalBody');
+
+      modal.classList.add('active');
+      body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await apiRequest(`${API_BASE}/users/${userId}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch user details');
+        }
+
+        const data = await response.json();
+        renderUserDetail(data);
+      } catch (error) {
+        console.error('Failed to load user detail:', error);
+        body.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">⚠️</div>
+            <h3>Failed to load user</h3>
+            <p>${escapeHtml(error.message)}</p>
+          </div>
+        `;
+      }
+    }
+
+    function renderUserDetail(data) {
+      const user = data.user;
+      const orders = data.recentOrders || [];
+      const reports = data.reportsAgainst || [];
+      const listings = data.listings || [];
+
+      const initial = (user.display_name || user.email || '?')[0].toUpperCase();
+      const isBanned = user.is_banned;
+      const isVerified = user.is_verified_seller;
+
+      const body = document.getElementById('modalBody');
+      body.innerHTML = `
+        <!-- Profile Header -->
+        <div class="user-profile-header">
+          <div class="user-profile-avatar ${isBanned ? 'banned' : ''}">${initial}</div>
+          <div class="user-profile-info">
+            <h3>
+              ${escapeHtml(user.display_name || 'No Name')}
+              ${isVerified ? '<span class="verified-badge">✅ Verified Seller</span>' : ''}
+              ${isBanned ? '<span class="banned-badge">🚫 Banned</span>' : ''}
+            </h3>
+            <p>${escapeHtml(user.email || '')}</p>
+            <p>Joined ${formatDate(user.created_at)} ${user.location ? ' &bull; ' + escapeHtml(user.location) : ''}</p>
+          </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="user-stats-row">
+          <div class="user-stat-mini">
+            <div class="user-stat-mini-value">${user.total_sales || 0}</div>
+            <div class="user-stat-mini-label">Total Sales</div>
+          </div>
+          <div class="user-stat-mini">
+            <div class="user-stat-mini-value">${user.total_purchases || 0}</div>
+            <div class="user-stat-mini-label">Purchases</div>
+          </div>
+          <div class="user-stat-mini">
+            <div class="user-stat-mini-value">${user.rating ? parseFloat(user.rating).toFixed(1) : '-'}</div>
+            <div class="user-stat-mini-label">Rating</div>
+          </div>
+          <div class="user-stat-mini">
+            <div class="user-stat-mini-value">${reports.length}</div>
+            <div class="user-stat-mini-label">Reports</div>
+          </div>
+        </div>
+
+        <!-- Detail Grid -->
+        <div class="detail-grid">
+          <!-- Profile Info -->
+          <div class="detail-section">
+            <h3>📋 Profile Details</h3>
+            <div class="detail-row">
+              <span class="detail-label">User ID</span>
+              <span class="detail-value" style="cursor:pointer; font-size:11px;" onclick="copyToClipboard('${user.id}')">${user.id.substring(0, 12)}... 📋</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Email</span>
+              <span class="detail-value">${escapeHtml(user.email || '-')}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Display Name</span>
+              <span class="detail-value">${escapeHtml(user.display_name || '-')}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Location</span>
+              <span class="detail-value">${escapeHtml(user.location || '-')}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Stripe Connect</span>
+              <span class="detail-value">${user.stripe_connect_status || 'Not connected'}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Shipping Strikes</span>
+              <span class="detail-value">${user.shipping_strikes || 0}</span>
+            </div>
+            ${isBanned ? `
+            <div class="detail-row">
+              <span class="detail-label">Ban Reason</span>
+              <span class="detail-value" style="color: var(--status-error);">${escapeHtml(user.ban_reason || 'No reason given')}</span>
+            </div>
+            ` : ''}
+          </div>
+
+          <!-- Listings Summary -->
+          <div class="detail-section">
+            <h3>📦 Listings (${listings.length})</h3>
+            ${listings.length === 0
+              ? '<p style="color: var(--text-muted); font-size: 13px;">No listings found.</p>'
+              : listings.slice(0, 5).map(l => `
+                <div class="order-mini-item">
+                  <span class="order-id">${escapeHtml(l.title?.substring(0, 30) || '-')}${l.title?.length > 30 ? '...' : ''}</span>
+                  <span class="order-amount">${formatCurrency(l.price)}</span>
+                  <span class="order-status"><span class="status-badge ${l.status}">${l.status}</span></span>
+                </div>
+              `).join('')
+            }
+            ${listings.length > 5 ? `<p style="color: var(--text-muted); font-size: 12px; margin-top: 8px;">+ ${listings.length - 5} more listings</p>` : ''}
+          </div>
+
+          <!-- Recent Orders -->
+          <div class="detail-section">
+            <h3>🛒 Recent Orders</h3>
+            <div class="orders-mini-list">
+              ${orders.length === 0
+                ? '<p style="color: var(--text-muted); font-size: 13px;">No orders found.</p>'
+                : orders.map(o => `
+                  <div class="order-mini-item">
+                    <span class="order-id">${escapeHtml(o.listing_title?.substring(0, 25) || o.id.substring(0, 12))}...</span>
+                    <span class="order-amount">${formatCurrency(o.amount)}</span>
+                    <span class="order-status"><span class="status-badge ${o.status}">${o.status}</span></span>
+                  </div>
+                `).join('')
+              }
+            </div>
+          </div>
+
+          <!-- Reports Against This User -->
+          <div class="detail-section">
+            <h3>🚩 Reports Against User</h3>
+            <div class="reports-mini-list">
+              ${reports.length === 0
+                ? '<p style="color: var(--text-muted); font-size: 13px;">No reports found.</p>'
+                : reports.map(r => `
+                  <div class="report-mini-item">
+                    <span style="color: var(--text-primary);">${escapeHtml(r.reason || 'Unknown')}</span>
+                    <span><span class="status-badge ${r.status}">${r.status}</span></span>
+                    <span style="color: var(--text-muted); font-size: 12px;">${getAge(r.created_at)}</span>
+                  </div>
+                `).join('')
+              }
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+          ${isBanned ? `
+            <button class="btn btn-success" onclick="unbanUser('${user.id}')">
+              ✅ Unban User
+            </button>
+          ` : `
+            <button class="btn btn-danger" onclick="showBanForm('${user.id}')">
+              🚫 Ban User
+            </button>
+          `}
+          ${!isVerified ? `
+            <button class="btn btn-primary" onclick="verifyUser('${user.id}')">
+              ✅ Verify Seller
+            </button>
+          ` : `
+            <button class="btn btn-secondary" onclick="unverifyUser('${user.id}')">
+              Remove Verification
+            </button>
+          `}
+        </div>
+
+        <!-- Ban Form (hidden by default) -->
+        <div id="banForm" style="display: none;">
+          <div class="ban-form">
+            <h4>🚫 Confirm User Ban</h4>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+              This will ban the user, deactivate all their listings, and send a notification. This action can be reversed.
+            </p>
+            <textarea id="banReason" placeholder="Reason for ban (required)..."></textarea>
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+              <button class="btn btn-secondary" onclick="hideBanForm()">Cancel</button>
+              <button class="btn btn-danger" id="confirmBanBtn" onclick="confirmBan('${user.id}')">
+                Confirm Ban
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function closeModal() {
+      document.getElementById('userModal').classList.remove('active');
+      currentUserId = null;
+    }
+
+    // ==================== USER ACTIONS ====================
+    function showBanForm(userId) {
+      document.getElementById('banForm').style.display = 'block';
+      document.getElementById('banReason').focus();
+    }
+
+    function hideBanForm() {
+      document.getElementById('banForm').style.display = 'none';
+      document.getElementById('banReason').value = '';
+    }
+
+    async function confirmBan(userId) {
+      const reason = document.getElementById('banReason').value.trim();
+      if (!reason) {
+        showToast('Please provide a reason for the ban.', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('confirmBanBtn');
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+
+      try {
+        const response = await apiRequest(`${API_BASE}/users/${userId}/ban`, {
+          method: 'POST',
+          body: { reason },
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Failed to ban user');
+        }
+
+        showToast('User has been banned successfully.');
+        closeModal();
+        loadUsers();
+      } catch (error) {
+        console.error('Ban user error:', error);
+        showToast(error.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Confirm Ban';
+      }
+    }
+
+    async function unbanUser(userId) {
+      if (!confirm('Are you sure you want to unban this user?')) return;
+
+      try {
+        const response = await apiRequest(`${API_BASE}/users/${userId}/unban`, {
+          method: 'POST',
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Failed to unban user');
+        }
+
+        showToast('User has been unbanned.');
+        closeModal();
+        loadUsers();
+      } catch (error) {
+        console.error('Unban user error:', error);
+        showToast(error.message, 'error');
+      }
+    }
+
+    async function verifyUser(userId) {
+      if (!confirm('Verify this user as a seller?')) return;
+
+      try {
+        const response = await apiRequest(`${API_BASE}/users/${userId}/verify`, {
+          method: 'POST',
+        });
+
+        if (response.ok) {
+          showToast('Seller verified successfully.');
+          openUserDetail(userId);
+          loadUsers();
+        } else {
+          const data = await response.json();
+          showToast(data.error || 'Failed to verify', 'error');
+        }
+      } catch (error) {
+        showToast(error.message, 'error');
+      }
+    }
+
+    async function unverifyUser(userId) {
+      if (!confirm('Remove seller verification?')) return;
+
+      try {
+        const response = await apiRequest(`${API_BASE}/users/${userId}/unverify`, {
+          method: 'POST',
+        });
+
+        if (response.ok) {
+          showToast('Seller verification removed.');
+          openUserDetail(userId);
+          loadUsers();
+        } else {
+          const data = await response.json();
+          showToast(data.error || 'Failed to unverify', 'error');
+        }
+      } catch (error) {
+        showToast(error.message, 'error');
+      }
+    }
+  </script>
+</body>
+</html>

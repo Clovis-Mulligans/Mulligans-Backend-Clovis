@@ -41,6 +41,10 @@ function generateSidebar() {
             <span class="nav-item-icon">📊</span>
             Dashboard
           </a>
+          <a href="analytics.html" class="nav-item ${currentPage === 'analytics' ? 'active' : ''}">
+            <span class="nav-item-icon">📈</span>
+            Analytics
+          </a>
         </div>
         
         <div class="nav-section">
@@ -68,22 +72,22 @@ function generateSidebar() {
         </div>
         
         <div class="nav-section">
-          <div class="nav-section-title">Coming Soon</div>
-          <div class="nav-item" style="opacity: 0.5; cursor: not-allowed;">
+          <div class="nav-section-title">Management</div>
+          <a href="users.html" class="nav-item ${currentPage === 'users' ? 'active' : ''}">
+            <span class="nav-item-icon">👥</span>
+            Users
+          </a>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Planned</div>
+          <div class="nav-item" style="opacity: 0.35; cursor: not-allowed;">
             <span class="nav-item-icon">🎫</span>
             Support Tickets
           </div>
-          <div class="nav-item" style="opacity: 0.5; cursor: not-allowed;">
+          <div class="nav-item" style="opacity: 0.35; cursor: not-allowed;">
             <span class="nav-item-icon">💬</span>
             Feedback
-          </div>
-          <div class="nav-item" style="opacity: 0.5; cursor: not-allowed;">
-            <span class="nav-item-icon">👥</span>
-            User Management
-          </div>
-          <div class="nav-item" style="opacity: 0.5; cursor: not-allowed;">
-            <span class="nav-item-icon">📈</span>
-            Analytics
           </div>
         </div>
       </nav>

@@ -309,7 +309,7 @@ export class AdminStatsController {
         }
       });
 
-      res.json({
+     res.json({
         orders: {
           labels: ordersLabels,
           data: ordersData
@@ -334,6 +334,296 @@ export class AdminStatsController {
     } catch (error) {
       console.error('Get chart data error:', error);
       res.status(500).json({ error: 'Failed to fetch chart data' });
+    }
+  }
+
+  /**
+   * Get detailed analytics data for the analytics page
+   * GET /admin/stats/detailed?period=30d
+   */
+  static async getDetailedStats(req: Request, res: Response): Promise<void> {
+    try {
+      const { period = '30d' } = req.query as { period?: string };
+
+      const now = new Date();
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+      // Calculate period start date
+      let periodStart: Date;
+      switch (period) {
+        case '7d':
+          periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+          break;
+        case '90d':
+          periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 89);
+          break;
+        case 'all':
+          periodStart = new Date(2020, 0, 1); // far enough back
+          break;
+        case '30d':
+        default:
+          periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+          break;
+      }
+
+      const validOrderStatuses = ['completed', 'delivered', 'shipped', 'paid'];
+
+      // ===== REVENUE METRICS =====
+      const [gmvResult, orderCountResult, shippingResult] = await Promise.all([
+        prisma.orders.aggregate({
+          _sum: { amount: true },
+          where: {
+            status: { in: validOrderStatuses },
+            created_at: { gte: periodStart, lt: tomorrow },
+          },
+        }),
+        prisma.orders.count({
+          where: {
+            status: { in: validOrderStatuses },
+            created_at: { gte: periodStart, lt: tomorrow },
+          },
+        }),
+        prisma.orders.aggregate({
+          _sum: { shipping_cost: true, label_cost: true },
+          where: {
+            status: { in: validOrderStatuses },
+            created_at: { gte: periodStart, lt: tomorrow },
+          },
+        }),
+      ]);
+
+      const totalGMV = Number(gmvResult._sum.amount || 0);
+      const orderCount = orderCountResult;
+      const avgOrderValue = orderCount > 0 ? totalGMV / orderCount : 0;
+
+      // Fee calculation: 7.5% of GMV + £0.99 per order
+      const estimatedFees = (totalGMV * 0.075) + (orderCount * 0.99);
+
+      // Shipping margin estimate: charged shipping - label cost
+      const totalShippingCharged = Number(shippingResult._sum.shipping_cost || 0);
+      const totalLabelCost = Number(shippingResult._sum.label_cost || 0);
+      const estimatedShippingMargin = totalShippingCharged - totalLabelCost;
+
+      // ===== USER METRICS =====
+      const [totalUsers, newUsers, activeUsers] = await Promise.all([
+        prisma.users.count(),
+        prisma.users.count({
+          where: { created_at: { gte: periodStart, lt: tomorrow } },
+        }),
+        prisma.users.count({
+          where: { total_purchases: { gt: 0 } },
+        }),
+      ]);
+
+      // ===== LISTING METRICS =====
+      const [activeListings, newListings, soldListings] = await Promise.all([
+        prisma.listings.count({
+          where: { status: 'active' },
+        }),
+        prisma.listings.count({
+          where: { created_at: { gte: periodStart, lt: tomorrow } },
+        }),
+        prisma.listings.count({
+          where: {
+            status: 'sold',
+            updated_at: { gte: periodStart, lt: tomorrow },
+          },
+        }),
+      ]);
+
+      // Average days to sell (for items sold in this period)
+      const soldOrders = await prisma.$queryRaw<Array<{ avg_days: number | null }>>`
+        SELECT AVG(
+          EXTRACT(EPOCH FROM (o.created_at - l.created_at)) / 86400
+        ) as avg_days
+        FROM orders o
+        JOIN listings l ON o.listing_id = l.id
+        WHERE o.status IN ('completed', 'delivered')
+        AND o.created_at >= ${periodStart}
+        AND o.created_at < ${tomorrow}
+        AND l.created_at IS NOT NULL
+      `;
+      const avgDaysToSell = soldOrders[0]?.avg_days ? Number(soldOrders[0].avg_days) : null;
+
+      // ===== TIME SERIES DATA =====
+      const dayCount = period === 'all'
+        ? Math.ceil((tomorrow.getTime() - periodStart.getTime()) / 86400000)
+        : period === '7d' ? 7 : period === '90d' ? 90 : 30;
+
+      // Efficient batch query for time series
+      const ordersByDay = await prisma.$queryRaw<Array<{ day: Date; count: bigint; gmv: any }>>`
+        SELECT
+          DATE(created_at) as day,
+          COUNT(*)::bigint as count,
+          SUM(CASE WHEN status IN ('completed', 'delivered', 'shipped', 'paid') THEN amount ELSE 0 END) as gmv
+        FROM orders
+        WHERE created_at >= ${periodStart} AND created_at < ${tomorrow}
+        GROUP BY DATE(created_at)
+        ORDER BY day
+      `;
+
+      const ordersMap = new Map<string, { count: number; gmv: number }>();
+      for (const row of ordersByDay) {
+        const key = new Date(row.day).toISOString().split('T')[0];
+        ordersMap.set(key, {
+          count: Number(row.count),
+          gmv: Number(row.gmv || 0),
+        });
+      }
+
+      const labels: string[] = [];
+      const ordersData: number[] = [];
+      const gmvData: number[] = [];
+
+      // For 'all' period with many days, aggregate by week or month
+      const useMonthly = dayCount > 180;
+      const useWeekly = dayCount > 60 && !useMonthly;
+
+      if (useMonthly) {
+        // Group by month
+        const monthMap = new Map<string, { orders: number; gmv: number }>();
+        for (let i = dayCount - 1; i >= 0; i--) {
+          const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+          const key = day.toISOString().split('T')[0];
+          const monthKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}`;
+          const entry = ordersMap.get(key);
+          if (!monthMap.has(monthKey)) {
+            monthMap.set(monthKey, { orders: 0, gmv: 0 });
+          }
+          const m = monthMap.get(monthKey)!;
+          m.orders += entry?.count || 0;
+          m.gmv += entry?.gmv || 0;
+        }
+        for (const [monthKey, vals] of monthMap) {
+          const [year, month] = monthKey.split('-');
+          const d = new Date(parseInt(year), parseInt(month) - 1, 1);
+          labels.push(d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }));
+          ordersData.push(vals.orders);
+          gmvData.push(vals.gmv);
+        }
+      } else if (useWeekly) {
+        // Group by week
+        const weekMap = new Map<number, { label: string; orders: number; gmv: number }>();
+        for (let i = dayCount - 1; i >= 0; i--) {
+          const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+          const key = day.toISOString().split('T')[0];
+          const weekNum = Math.floor(i / 7);
+          const weekKey = dayCount - 1 - weekNum * 7;
+          if (!weekMap.has(weekNum)) {
+            weekMap.set(weekNum, {
+              label: day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+              orders: 0,
+              gmv: 0,
+            });
+          }
+          const w = weekMap.get(weekNum)!;
+          const entry = ordersMap.get(key);
+          w.orders += entry?.count || 0;
+          w.gmv += entry?.gmv || 0;
+        }
+        // Sort by week number descending (most recent first), then reverse for chart
+        const weeks = Array.from(weekMap.entries()).sort((a, b) => b[0] - a[0]).reverse();
+        for (const [, vals] of weeks) {
+          labels.push(vals.label);
+          ordersData.push(vals.orders);
+          gmvData.push(vals.gmv);
+        }
+      } else {
+        // Daily
+        for (let i = dayCount - 1; i >= 0; i--) {
+          const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+          const key = day.toISOString().split('T')[0];
+          const entry = ordersMap.get(key);
+          labels.push(day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
+          ordersData.push(entry?.count || 0);
+          gmvData.push(entry?.gmv || 0);
+        }
+      }
+
+      // ===== CATEGORY BREAKDOWN =====
+      const categoryBreakdown = await prisma.orders.groupBy({
+        by: ['listing_id'],
+        _sum: { amount: true },
+        where: {
+          status: { in: validOrderStatuses },
+          listing_id: { not: null },
+          created_at: { gte: periodStart, lt: tomorrow },
+        },
+      });
+
+      const listingIds = categoryBreakdown
+        .map(o => o.listing_id)
+        .filter((id): id is string => id !== null);
+
+      const listingsForCategories = listingIds.length > 0
+        ? await prisma.listings.findMany({
+            where: { id: { in: listingIds } },
+            select: { id: true, category: true },
+          })
+        : [];
+
+      const categoryMapLookup = new Map(listingsForCategories.map(l => [l.id, l.category]));
+      const categoryTotals: Record<string, number> = {};
+
+      categoryBreakdown.forEach(o => {
+        if (o.listing_id) {
+          const category = categoryMapLookup.get(o.listing_id) || 'Other';
+          categoryTotals[category] = (categoryTotals[category] || 0) + Number(o._sum.amount || 0);
+        }
+      });
+
+      // ===== ORDER STATUS BREAKDOWN =====
+      const orderStatusBreakdown = await prisma.orders.groupBy({
+        by: ['status'],
+        _count: true,
+        where: {
+          created_at: { gte: periodStart, lt: tomorrow },
+        },
+      });
+
+      const orderStatuses: Record<string, number> = {};
+      orderStatusBreakdown.forEach(o => {
+        orderStatuses[o.status] = o._count;
+      });
+
+      // ===== RESPONSE =====
+      res.json({
+        period,
+        revenue: {
+          totalGMV,
+          estimatedFees: Math.round(estimatedFees * 100) / 100,
+          estimatedShippingMargin: Math.round(estimatedShippingMargin * 100) / 100,
+          avgOrderValue: Math.round(avgOrderValue * 100) / 100,
+          orderCount,
+        },
+        users: {
+          total: totalUsers,
+          newThisPeriod: newUsers,
+          activeWithPurchases: activeUsers,
+        },
+        listings: {
+          active: activeListings,
+          newThisPeriod: newListings,
+          soldThisPeriod: soldListings,
+          avgDaysToSell: avgDaysToSell !== null ? Math.round(avgDaysToSell * 10) / 10 : null,
+        },
+        timeSeries: {
+          labels,
+          ordersData,
+          gmvData,
+        },
+        categories: {
+          labels: Object.keys(categoryTotals),
+          data: Object.values(categoryTotals),
+        },
+        orderStatuses: {
+          labels: Object.keys(orderStatuses),
+          data: Object.values(orderStatuses),
+        },
+      });
+    } catch (error) {
+      console.error('Get detailed stats error:', error);
+      res.status(500).json({ error: 'Failed to fetch detailed stats' });
     }
   }
 }

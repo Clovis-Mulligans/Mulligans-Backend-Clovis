@@ -752,7 +752,6 @@
 
     // ==================== VIEW CLAIM DETAIL ====================
     async function viewClaim(claimId) {
-      console.log('👁️ viewClaim called with:', claimId);
       if (!claimId) {
         console.error('❌ No claim ID provided');
         return;
@@ -778,7 +777,6 @@
       modal.style.setProperty('pointer-events', 'auto', 'important');
       // Also add active class in case styles.css uses it
       modal.classList.add('active');
-      console.log('🔓 Modal now visible (visibility + opacity fixed)');
       
       content.innerHTML = `
         <div style="text-align: center; padding: 40px;">
@@ -788,7 +786,6 @@
       `;
 
       try {
-        console.log('📡 Fetching claim:', `${API_BASE}/claims/${claimId}`);
         const response = await apiRequest(`${API_BASE}/claims/${claimId}`);
         
         if (!response.ok) {
@@ -798,7 +795,6 @@
         }
         
         const data = await response.json();
-        console.log('✅ Claim data received:', data);
         const claim = data.claim;
 
         document.getElementById('modalTitle').textContent = `Claim: ${claim.listing_title || 'Unknown Item'}`;
@@ -942,7 +938,6 @@
 
     // ==================== FILE CLAIM ====================
     function openFileModal(claimId) {
-      console.log('📋 openFileModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('claimIdInput').value = '';
       document.getElementById('fileNotesInput').value = '';
@@ -967,7 +962,7 @@
       try {
         const response = await apiRequest(`${API_BASE}/claims/${selectedClaimId}/file`, {
           method: 'POST',
-          body: JSON.stringify({ claim_id: claimId, notes })
+          body: { claim_id: claimId, notes }
         });
 
         if (!response.ok) {
@@ -985,7 +980,6 @@
 
     // ==================== APPROVE CLAIM ====================
     function openApproveModal(claimId) {
-      console.log('✅ openApproveModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('refundAmountInput').value = '';
       document.getElementById('approveNotesInput').value = '';
@@ -1014,10 +1008,10 @@
       try {
         const response = await apiRequest(`${API_BASE}/claims/${selectedClaimId}/approve`, {
           method: 'POST',
-          body: JSON.stringify({ 
-            refund_amount: refundAmount ? parseFloat(refundAmount) : null, 
-            notes 
-          })
+          body: {
+            refund_amount: refundAmount ? parseFloat(refundAmount) : null,
+            notes
+          }
         });
 
         if (!response.ok) {
@@ -1036,7 +1030,6 @@
 
     // ==================== DENY CLAIM ====================
     function openDenyModal(claimId) {
-      console.log('❌ openDenyModal called with:', claimId);
       selectedClaimId = claimId;
       document.getElementById('denyReasonInput').value = '';
       const modal = document.getElementById('denyModal');
@@ -1068,7 +1061,7 @@
       try {
         const response = await apiRequest(`${API_BASE}/claims/${selectedClaimId}/deny`, {
           method: 'POST',
-          body: JSON.stringify({ reason })
+          body: { reason }
         });
 
         if (!response.ok) {

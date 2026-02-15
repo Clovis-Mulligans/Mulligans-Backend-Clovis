@@ -2,8 +2,7 @@
 // Admin panel routes for dispute management
 
 import express from 'express';
-import path from 'path';
-import { adminAuth, verifyAdminPassword } from '../middleware/adminAuth';
+import { adminAuth, verifyAdminPassword, adminLogout } from '../middleware/adminAuth';
 import { DisputeController } from '../controllers/disputeController';
 import { AdminReportsController } from '../controllers/adminReportsController';
 import { prisma } from '../lib/prisma';
@@ -16,6 +15,7 @@ import {
   sendInsuranceClaimDeniedToSeller
 } from '../services/emailService';
 import { AdminStatsController } from '../controllers/adminStatsController';
+import { logAdminAction, AUDIT_ACTIONS } from '../lib/auditLogger';
 
 import rateLimit from 'express-rate-limit';
 
@@ -24,6 +24,15 @@ const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: 'Too many admin login attempts, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Admin action rate limiter - 30 actions per 15 minutes (prevents accidental mass operations)
+const adminActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: 'Too many admin actions, please slow down',
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -37,13 +46,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // PUBLIC ROUTES (no auth required)
 // ============================================
 
-// Serve admin panel HTML
-router.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../../public/admin.html'));
-});
-
-// Verify admin password
+// Verify admin password (rate limited)
 router.post('/verify', adminLimiter, verifyAdminPassword);
+
+// Logout (destroy session)
+router.post('/logout', adminLogout);
 
 // ============================================
 // PROTECTED ROUTES (admin auth required)
@@ -160,14 +167,35 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
   }
 });
 
-// Resolve dispute
-router.put('/disputes/:id/resolve', adminAuth, DisputeController.adminResolveDispute);
+// Resolve dispute (with audit logging)
+router.put('/disputes/:id/resolve', adminAuth, adminActionLimiter, async (req, res) => {
+  // Store original json method to capture response
+  const originalJson = res.json.bind(res);
+  res.json = function(data: any) {
+    // Log after successful resolution
+    if (data && !data.error) {
+      logAdminAction(
+        AUDIT_ACTIONS.RESOLVE_DISPUTE,
+        'dispute',
+        req.params.id,
+        {
+          resolution_type: req.body.resolution_type,
+          resolution_amount: req.body.resolution_amount,
+          notes: req.body.notes?.substring(0, 200),
+        },
+        req
+      );
+    }
+    return originalJson(data);
+  };
+  return DisputeController.adminResolveDispute(req, res);
+});
 
 // Report management routes (MOVE THESE BEFORE EXPORT)
 router.get('/reports', adminAuth, AdminReportsController.getReports);
 router.get('/reports/:id', adminAuth, AdminReportsController.getReport);
 router.patch('/reports/:id', adminAuth, AdminReportsController.updateReport);
-router.post('/reports/:id/ban-user', adminAuth, AdminReportsController.banUser);
+router.post('/reports/:id/ban-user', adminAuth, adminActionLimiter, AdminReportsController.banUser);
 
 // ============================================
 // RETURNS MANAGEMENT ROUTES (NEW)
@@ -432,7 +460,15 @@ router.patch('/returns/:id', adminAuth, async (req, res) => {
     });
 
     console.log(`✅ Admin updated return ${req.params.id} to status: ${status}`);
-    
+
+    await logAdminAction(
+      AUDIT_ACTIONS.UPDATE_RETURN,
+      'return',
+      req.params.id,
+      { new_status: status },
+      req
+    );
+
     res.json({ success: true, return: updated });
   } catch (error: any) {
     console.error('❌ Update return error:', error);
@@ -441,7 +477,7 @@ router.patch('/returns/:id', adminAuth, async (req, res) => {
 });
 
 // Process refund for return (admin action)
-router.post('/returns/:id/refund', adminAuth, async (req, res) => {
+router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, res) => {
   try {
     const { amount } = req.body;
     
@@ -524,7 +560,15 @@ router.post('/returns/:id/refund', adminAuth, async (req, res) => {
     }
 
     console.log(`✅ Admin processed refund for return ${req.params.id}: £${refundAmount.toFixed(2)}`);
-    
+
+    await logAdminAction(
+      AUDIT_ACTIONS.PROCESS_REFUND,
+      'return',
+      req.params.id,
+      { amount: refundAmount, stripe_refund_id: refund.id, order_id: returnRequest.order_id },
+      req
+    );
+
     res.json({ success: true, refund_id: refund.id, amount: refundAmount });
   } catch (error: any) {
     console.error('❌ Refund return error:', error);
@@ -737,7 +781,15 @@ router.post('/claims/:id/file', adminAuth, async (req, res) => {
     });
 
     console.log(`📋 Admin filed insurance claim for order ${req.params.id}`);
-    
+
+    await logAdminAction(
+      AUDIT_ACTIONS.FILE_CLAIM,
+      'order',
+      req.params.id,
+      { claim_id: claim_id || null, notes: notes?.substring(0, 200) },
+      req
+    );
+
     res.json({ success: true, message: 'Claim marked as filed' });
   } catch (error: any) {
     console.error('❌ File claim error:', error);
@@ -746,7 +798,7 @@ router.post('/claims/:id/file', adminAuth, async (req, res) => {
 });
 
 // Approve claim and refund buyer
-router.post('/claims/:id/approve', adminAuth, async (req, res) => {
+router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, res) => {
   try {
     const { refund_amount, notes } = req.body;
     const now = new Date();
@@ -880,7 +932,15 @@ router.post('/claims/:id/approve', adminAuth, async (req, res) => {
     }
 
     console.log(`✅ Admin approved insurance claim for order ${req.params.id}, refunded £${amount.toFixed(2)}`);
-    
+
+    await logAdminAction(
+      AUDIT_ACTIONS.APPROVE_CLAIM,
+      'order',
+      req.params.id,
+      { amount, stripe_refund_id: refund.id, notes: notes?.substring(0, 200) },
+      req
+    );
+
     res.json({ success: true, refund_id: refund.id, amount });
   } catch (error: any) {
     console.error('❌ Approve claim error:', error);
@@ -889,7 +949,7 @@ router.post('/claims/:id/approve', adminAuth, async (req, res) => {
 });
 
 // Deny claim
-router.post('/claims/:id/deny', adminAuth, async (req, res) => {
+router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res) => {
   try {
     const { reason } = req.body;
     const now = new Date();
@@ -986,7 +1046,15 @@ router.post('/claims/:id/deny', adminAuth, async (req, res) => {
     }
 
     console.log(`❌ Admin denied insurance claim for order ${req.params.id}: ${reason}`);
-    
+
+    await logAdminAction(
+      AUDIT_ACTIONS.DENY_CLAIM,
+      'order',
+      req.params.id,
+      { reason: reason?.substring(0, 200) },
+      req
+    );
+
     res.json({ success: true, message: 'Claim denied' });
   } catch (error: any) {
     console.error('❌ Deny claim error:', error);
@@ -994,6 +1062,420 @@ router.post('/claims/:id/deny', adminAuth, async (req, res) => {
   }
 });
 
+
+// ============================================
+// USER MANAGEMENT ROUTES (Batch 3)
+// ============================================
+
+// Get all users with search, filter, and pagination
+router.get('/users', adminAuth, async (req, res) => {
+  try {
+    const {
+      search = '',
+      filter = 'all',
+      page = '1',
+      limit = '25',
+    } = req.query as Record<string, string>;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+
+    if (search) {
+      where.OR = [
+        { display_name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (filter === 'verified') {
+      where.is_verified_seller = true;
+    } else if (filter === 'banned') {
+      where.is_banned = true;
+    }
+
+    const [users, totalCount] = await Promise.all([
+      prisma.users.findMany({
+        where,
+        select: {
+          id: true,
+          display_name: true,
+          email: true,
+          avatar_url: true,
+          is_verified_seller: true,
+          is_banned: true,
+          ban_reason: true,
+          total_sales: true,
+          total_purchases: true,
+          rating: true,
+          created_at: true,
+        },
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limitNum,
+      }),
+      prisma.users.count({ where }),
+    ]);
+
+    const [totalUsers, activeSellers, verifiedSellers, bannedUsers] = await Promise.all([
+      prisma.users.count(),
+      prisma.users.count({ where: { total_sales: { gt: 0 } } }),
+      prisma.users.count({ where: { is_verified_seller: true } }),
+      prisma.users.count({ where: { is_banned: true } }),
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    res.json({
+      users: users.map((u: any) => ({
+        ...u,
+        rating: u.rating ? parseFloat(u.rating.toString()) : null,
+      })),
+      page: pageNum,
+      totalPages,
+      totalCount,
+      stats: {
+        totalUsers,
+        activeSellers,
+        verifiedSellers,
+        bannedUsers,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ Get users error:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Get single user details with orders, reports, and listings
+router.get('/users/:id', adminAuth, async (req, res) => {
+  try {
+    const user = await prisma.users.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true,
+        display_name: true,
+        email: true,
+        avatar_url: true,
+        location: true,
+        bio: true,
+        is_verified_seller: true,
+        is_banned: true,
+        ban_reason: true,
+        rating: true,
+        total_sales: true,
+        total_purchases: true,
+        shipping_strikes: true,
+        buyer_cancellation_count: true,
+        seller_cancellation_count: true,
+        stripe_connect_id: true,
+        stripe_connect_status: true,
+        created_at: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const recentOrders = await prisma.orders.findMany({
+      where: {
+        OR: [
+          { buyer_id: req.params.id },
+          { seller_id: req.params.id },
+        ],
+      },
+      select: {
+        id: true,
+        listing_title: true,
+        amount: true,
+        status: true,
+        created_at: true,
+      },
+      orderBy: { created_at: 'desc' },
+      take: 10,
+    });
+
+    const reportsAgainst = await prisma.user_reports.findMany({
+      where: { reported_user_id: req.params.id },
+      select: {
+        id: true,
+        reason: true,
+        details: true,
+        status: true,
+        created_at: true,
+        reporter: {
+          select: { display_name: true },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+      take: 10,
+    });
+
+    const listings = await prisma.listings.findMany({
+      where: { seller_id: req.params.id },
+      select: {
+        id: true,
+        title: true,
+        price: true,
+        status: true,
+        created_at: true,
+      },
+      orderBy: { created_at: 'desc' },
+      take: 20,
+    });
+
+    res.json({
+      user: {
+        ...user,
+        rating: user.rating ? parseFloat(user.rating.toString()) : null,
+      },
+      recentOrders: recentOrders.map((o: any) => ({
+        ...o,
+        amount: parseFloat(o.amount.toString()),
+      })),
+      reportsAgainst,
+      listings: listings.map((l: any) => ({
+        ...l,
+        price: parseFloat(l.price.toString()),
+      })),
+    });
+  } catch (error: any) {
+    console.error('❌ Get user detail error:', error);
+    res.status(500).json({ error: 'Failed to fetch user details' });
+  }
+});
+
+// Ban user
+router.post('/users/:id/ban', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ error: 'Ban reason is required' });
+    }
+
+    const user = await prisma.users.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, display_name: true, is_banned: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.is_banned) {
+      return res.status(400).json({ error: 'User is already banned' });
+    }
+
+    const now = new Date();
+
+    await prisma.users.update({
+      where: { id: req.params.id },
+      data: {
+        is_banned: true,
+        ban_reason: reason,
+        banned_at: now,
+        updated_at: now,
+      },
+    });
+
+    await prisma.listings.updateMany({
+      where: { seller_id: req.params.id, status: 'active' },
+      data: { status: 'inactive', updated_at: now },
+    });
+
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: req.params.id,
+        type: 'account',
+        title: 'Account Suspended',
+        message: `Your account has been suspended for violating our terms of service. Reason: ${reason}`,
+      },
+    });
+
+    console.log(`🚫 Admin banned user ${req.params.id}: ${reason}`);
+
+    await logAdminAction(
+      AUDIT_ACTIONS.BAN_USER,
+      'user',
+      req.params.id,
+      { reason, display_name: user.display_name },
+      req
+    );
+
+    res.json({ success: true, message: 'User banned and listings deactivated' });
+  } catch (error: any) {
+    console.error('❌ Ban user error:', error);
+    res.status(500).json({ error: error.message || 'Failed to ban user' });
+  }
+});
+
+// Unban user
+router.post('/users/:id/unban', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    const user = await prisma.users.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, display_name: true, is_banned: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.is_banned) {
+      return res.status(400).json({ error: 'User is not banned' });
+    }
+
+    await prisma.users.update({
+      where: { id: req.params.id },
+      data: {
+        is_banned: false,
+        ban_reason: null,
+        banned_at: null,
+        updated_at: new Date(),
+      },
+    });
+
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: req.params.id,
+        type: 'account',
+        title: 'Account Reinstated',
+        message: 'Your account has been reinstated. You can now use Mulligans again.',
+      },
+    });
+
+    console.log(`✅ Admin unbanned user ${req.params.id}`);
+
+    await logAdminAction(
+      AUDIT_ACTIONS.UNBAN_USER,
+      'user',
+      req.params.id,
+      { display_name: user.display_name },
+      req
+    );
+
+    res.json({ success: true, message: 'User unbanned' });
+  } catch (error: any) {
+    console.error('❌ Unban user error:', error);
+    res.status(500).json({ error: error.message || 'Failed to unban user' });
+  }
+});
+
+// Verify seller
+router.post('/users/:id/verify', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    await prisma.users.update({
+      where: { id: req.params.id },
+      data: {
+        is_verified_seller: true,
+        verified_seller_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
+
+    console.log(`✅ Admin verified seller ${req.params.id}`);
+
+    await logAdminAction(AUDIT_ACTIONS.VERIFY_SELLER, 'user', req.params.id, null, req);
+
+    res.json({ success: true, message: 'Seller verified' });
+  } catch (error: any) {
+    console.error('❌ Verify seller error:', error);
+    res.status(500).json({ error: 'Failed to verify seller' });
+  }
+});
+
+// Remove seller verification
+router.post('/users/:id/unverify', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    await prisma.users.update({
+      where: { id: req.params.id },
+      data: {
+        is_verified_seller: false,
+        verified_seller_at: null,
+        updated_at: new Date(),
+      },
+    });
+
+    console.log(`📋 Admin removed verification for ${req.params.id}`);
+
+    await logAdminAction(AUDIT_ACTIONS.UNVERIFY_SELLER, 'user', req.params.id, null, req);
+
+    res.json({ success: true, message: 'Seller verification removed' });
+  } catch (error: any) {
+    console.error('❌ Unverify seller error:', error);
+    res.status(500).json({ error: 'Failed to remove verification' });
+  }
+});
+
+// ============================================
+// LISTING MODERATION (Batch 5)
+// ============================================
+
+// Deactivate or reactivate a listing
+router.patch('/listings/:id/moderate', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    const { action, reason } = req.body;
+
+    if (!action || !['deactivate', 'reactivate'].includes(action)) {
+      return res.status(400).json({ error: 'Action must be "deactivate" or "reactivate"' });
+    }
+
+    if (!reason) {
+      return res.status(400).json({ error: 'Reason is required' });
+    }
+
+    const listing = await prisma.listings.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, title: true, status: true, seller_id: true },
+    });
+
+    if (!listing) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+
+    const newStatus = action === 'deactivate' ? 'inactive' : 'active';
+
+    await prisma.listings.update({
+      where: { id: req.params.id },
+      data: { status: newStatus, updated_at: new Date() },
+    });
+
+    // Notify the seller
+    await prisma.notifications.create({
+      data: {
+        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user_id: listing.seller_id,
+        type: 'listing',
+        title: action === 'deactivate' ? 'Listing Removed' : 'Listing Reinstated',
+        message: action === 'deactivate'
+          ? `Your listing "${listing.title}" has been removed. Reason: ${reason}`
+          : `Your listing "${listing.title}" has been reinstated.`,
+        related_id: listing.id,
+      },
+    });
+
+    console.log(`📋 Admin ${action}d listing ${req.params.id}: ${reason}`);
+
+    await logAdminAction(
+      AUDIT_ACTIONS.MODERATE_LISTING,
+      'listing',
+      req.params.id,
+      { action, reason, title: listing.title, previous_status: listing.status },
+      req
+    );
+
+    res.json({ success: true, message: `Listing ${action}d` });
+  } catch (error: any) {
+    console.error('❌ Moderate listing error:', error);
+    res.status(500).json({ error: error.message || 'Failed to moderate listing' });
+  }
+});
 
 // DASHBOARD STATS ROUTES
 // ============================================
@@ -1003,5 +1485,38 @@ router.get('/stats', adminAuth, AdminStatsController.getStats);
 
 // Get chart data (orders/revenue/signups over time)
 router.get('/stats/charts', adminAuth, AdminStatsController.getChartData);
+
+// Get detailed analytics stats (Batch 4)
+router.get('/stats/detailed', adminAuth, AdminStatsController.getDetailedStats);
+
+// ============================================
+// AUDIT LOG ROUTES (Batch 5)
+// ============================================
+
+// Get recent admin actions
+router.get('/audit-log', adminAuth, async (req, res) => {
+  try {
+    const { limit = '50', offset = '0', action, target_type } = req.query as Record<string, string>;
+
+    const where: any = {};
+    if (action) where.action = action;
+    if (target_type) where.target_type = target_type;
+
+    const [logs, total] = await Promise.all([
+      prisma.admin_audit_log.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        take: Math.min(100, parseInt(limit, 10) || 50),
+        skip: parseInt(offset, 10) || 0,
+      }),
+      prisma.admin_audit_log.count({ where }),
+    ]);
+
+    res.json({ logs, total });
+  } catch (error: any) {
+    console.error('❌ Get audit log error:', error);
+    res.status(500).json({ error: 'Failed to fetch audit log' });
+  }
+});
 
 export default router;

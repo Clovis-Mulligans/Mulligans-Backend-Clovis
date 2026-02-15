@@ -1,18 +1,44 @@
 // ==================== MULLIGANS ADMIN - AUTH ====================
-// Shared authentication functions
+// Token-based authentication with session management
 
 const API_BASE = '/admin';
-let adminPassword = '';
+let adminToken = '';
+let inactivityTimer = null;
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minutes (matches server)
+
+// ==================== SESSION MANAGEMENT ====================
 
 // Check if already logged in
 function checkAuth() {
-  const savedPassword = sessionStorage.getItem('adminPassword');
-  if (savedPassword) {
-    adminPassword = savedPassword;
+  const savedToken = sessionStorage.getItem('adminToken');
+  if (savedToken) {
+    adminToken = savedToken;
+    resetInactivityTimer();
     return true;
   }
   return false;
 }
+
+// Reset inactivity timer on user activity
+function resetInactivityTimer() {
+  if (inactivityTimer) clearTimeout(inactivityTimer);
+  inactivityTimer = setTimeout(() => {
+    console.log('Session timed out due to inactivity');
+    logout('Your session has expired due to inactivity.');
+  }, INACTIVITY_TIMEOUT);
+}
+
+// Track user activity for inactivity timeout
+function setupActivityTracking() {
+  const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+  events.forEach(event => {
+    document.addEventListener(event, () => {
+      if (adminToken) resetInactivityTimer();
+    }, { passive: true });
+  });
+}
+
+// ==================== UI ====================
 
 // Show login screen
 function showLogin() {
@@ -26,7 +52,8 @@ function showApp() {
   document.getElementById('appContainer').classList.add('active');
 }
 
-// Handle login form submission
+// ==================== LOGIN ====================
+
 async function handleLogin(e) {
   e.preventDefault();
   const password = document.getElementById('password').value;
@@ -46,12 +73,16 @@ async function handleLogin(e) {
 
     const data = await response.json();
 
-    if (response.ok) {
-      adminPassword = password;
-      sessionStorage.setItem('adminPassword', password);
+    if (response.ok && data.token) {
+      // Store token, NOT password
+      adminToken = data.token;
+      sessionStorage.setItem('adminToken', data.token);
+      // Clear password from memory
+      document.getElementById('password').value = '';
+
       showApp();
-      
-      // Call page-specific init if it exists
+      resetInactivityTimer();
+
       if (typeof initPage === 'function') {
         initPage();
       }
@@ -68,18 +99,50 @@ async function handleLogin(e) {
   }
 }
 
-// Logout
-function logout() {
-  adminPassword = '';
+// ==================== LOGOUT ====================
+
+async function logout(message) {
+  // Destroy server-side session
+  if (adminToken) {
+    try {
+      await fetch(`${API_BASE}/logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${adminToken}` },
+      });
+    } catch (e) {
+      // Ignore errors during logout
+    }
+  }
+
+  adminToken = '';
+  sessionStorage.removeItem('adminToken');
+  // Also clean up any legacy storage
   sessionStorage.removeItem('adminPassword');
+
+  if (inactivityTimer) {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+
   showLogin();
   document.getElementById('password').value = '';
+
+  // Show message if provided (e.g., session expired)
+  if (message) {
+    const errorDiv = document.getElementById('loginError');
+    if (errorDiv) {
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+    }
+  }
 }
 
-// Make authenticated API request
+// ==================== API REQUESTS ====================
+
 async function apiRequest(endpoint, options = {}) {
   const headers = {
-    'Authorization': `Admin ${adminPassword}`,
+    'Authorization': `Bearer ${adminToken}`,
+    'X-Requested-With': 'XMLHttpRequest',
     ...options.headers,
   };
 
@@ -91,20 +154,24 @@ async function apiRequest(endpoint, options = {}) {
   const response = await fetch(endpoint, { ...options, headers });
 
   if (response.status === 401) {
-    logout();
+    logout('Your session has expired. Please log in again.');
     throw new Error('Unauthorized');
   }
 
   return response;
 }
 
-// Initialize auth on page load
+// ==================== INITIALIZATION ====================
+
 document.addEventListener('DOMContentLoaded', () => {
   // Setup login form handler
   const loginForm = document.getElementById('loginForm');
   if (loginForm) {
     loginForm.addEventListener('submit', handleLogin);
   }
+
+  // Setup activity tracking for inactivity timeout
+  setupActivityTracking();
 
   // Check existing session
   if (checkAuth()) {
