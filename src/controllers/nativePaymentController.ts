@@ -479,6 +479,18 @@ export class NativePaymentController {
       // Retrieve the payment intent
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
+      // Fallback: if frontend didn't send address, try to get it from Stripe
+      const resolvedAddress = shippingAddress || (paymentIntent.shipping?.address ? {
+        name: paymentIntent.shipping.name || '',
+        line1: paymentIntent.shipping.address.line1 || '',
+        line2: paymentIntent.shipping.address.line2 || '',
+        city: paymentIntent.shipping.address.city || '',
+        postalCode: paymentIntent.shipping.address.postal_code || '',
+        country: paymentIntent.shipping.address.country || 'GB',
+      } : null);
+
+      console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE');
+
       if (paymentIntent.status !== 'succeeded') {
         return res.status(400).json({
           error: 'Payment not successful',
@@ -515,13 +527,13 @@ export class NativePaymentController {
       if (metadata.type === 'native_single_item') {
         orders = await NativePaymentController.fulfillSingleItem(
           paymentIntent,
-          shippingAddress,
+          resolvedAddress,
           autoCancelAt
         );
       } else if (metadata.type === 'native_cart') {
         orders = await NativePaymentController.fulfillCart(
           paymentIntent,
-          shippingAddress,
+          resolvedAddress,
           autoCancelAt
         );
       } else {
