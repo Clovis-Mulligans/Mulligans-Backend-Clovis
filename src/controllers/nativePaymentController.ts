@@ -991,7 +991,7 @@ export class NativePaymentController {
 
     for (const sellerId of Object.keys(sellerOrders)) {
       const sellerOrderList = sellerOrders[sellerId];
-      const sellerTotal = sellerOrderList.reduce((sum, o) => sum + o.amount, 0);
+      const sellerTotal = sellerOrderList.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
       const sellerQty = sellerOrderList.reduce((sum, o) => sum + o.quantity, 0);
       const sellerImage = sellerOrderList[0]?.listing?.images?.[0]?.image_url || null;
 
