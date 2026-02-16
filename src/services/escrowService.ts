@@ -500,19 +500,29 @@ export async function autoReleaseEscrow(): Promise<void> {
         // Items: sum of all order amounts
         const itemsTotal = orders.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
         
-        // Shipping: only count ONCE (use MAX as they should all be the same)
-        const shippingAmount = Math.max(...orders.map(o => parseFloat((o.shipping_cost || 0).toString())));
+        // Check if any order in the group was auto-shipped
+        const isAutoShipped = orders.some(o => (o as any).label_auto_generated === true);
         
-        // Label cost: sum (typically only one order has it)
-        const labelCostTotal = orders.reduce((sum, o) => sum + parseFloat((o.label_cost || 0).toString()), 0);
+        let actualPayout: number;
+        let shippingAmount = 0;
+        let labelCostTotal = 0;
         
-        // Calculate actual payout
-        const actualPayout = itemsTotal + shippingAmount - labelCostTotal;
+        if (isAutoShipped) {
+          // AUTO-SHIPPED: Seller gets items only (platform keeps shipping margin)
+          actualPayout = itemsTotal;
+        } else {
+          // MANUAL SHIP: Old formula — items + shipping - label cost
+          shippingAmount = Math.max(...orders.map(o => parseFloat((o.shipping_cost || 0).toString())));
+          labelCostTotal = orders.reduce((sum, o) => sum + parseFloat((o.label_cost || 0).toString()), 0);
+          actualPayout = itemsTotal + shippingAmount - labelCostTotal;
+        }
 
-        console.log(`[ESCROW] Payout calculation for group "${trackingKey}":`);
+        console.log(`[ESCROW] Payout calculation for group "${trackingKey}" (${isAutoShipped ? 'AUTO-SHIPPED' : 'MANUAL'}):`);
         console.log(`  - Items total (${orders.length} orders): £${itemsTotal.toFixed(2)}`);
-        console.log(`  - Shipping (once): £${shippingAmount.toFixed(2)}`);
-        console.log(`  - Label cost deducted: £${labelCostTotal.toFixed(2)}`);
+        if (!isAutoShipped) {
+          console.log(`  - Shipping (once): £${shippingAmount.toFixed(2)}`);
+          console.log(`  - Label cost deducted: £${labelCostTotal.toFixed(2)}`);
+        }
         console.log(`  - Actual transfer amount: £${actualPayout.toFixed(2)}`);
 
         // Safety check: Don't transfer negative or zero amounts

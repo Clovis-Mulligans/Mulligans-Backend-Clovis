@@ -58,7 +58,10 @@ export class ListingController {
         },
         include: {
           images: {
-            orderBy: { display_order: 'asc' },
+            orderBy: [
+              { display_order: 'asc' },
+              { id: 'asc' },
+            ],
             take: 1,
           },
           users: {
@@ -274,7 +277,10 @@ export class ListingController {
         where: { id: listing.id },
         include: {
           images: {
-            orderBy: { display_order: 'asc' }
+            orderBy: [
+              { display_order: 'asc' },
+              { id: 'asc' },
+            ],
           }
         },
       });
@@ -386,7 +392,7 @@ export class ListingController {
             ${id},
             ${uploadResult.url},
             ${uploadResult.key},
-            COALESCE((SELECT MAX(display_order) FROM images WHERE listing_id = ${id}), -1) + 1,
+            ${i},
             NOW()
           )
         `;
@@ -764,7 +770,10 @@ if (keyword) {
           where,
           include: {
             images: {
-              orderBy: { display_order: 'asc' },
+              orderBy: [
+                { display_order: 'asc' },
+                { id: 'asc' },
+              ],
               take: 1,
             },
             users: {
@@ -816,7 +825,10 @@ if (keyword) {
         where: { id },
         include: {
           images: {
-            orderBy: { display_order: 'asc' },
+            orderBy: [
+              { display_order: 'asc' },
+              { id: 'asc' },
+            ],
           },
         },
       });
@@ -870,7 +882,10 @@ if (keyword) {
         },
         include: {
           images: {
-            orderBy: { display_order: 'asc' },
+            orderBy: [
+              { display_order: 'asc' },
+              { id: 'asc' },
+            ],
             take: 1,
           },
         },
@@ -1023,7 +1038,10 @@ if (keyword) {
         where: { id },
         include: {
           images: {
-            orderBy: { display_order: 'asc' }
+            orderBy: [
+              { display_order: 'asc' },
+              { id: 'asc' },
+            ],
           },
           listing_attributes: true,
         },
