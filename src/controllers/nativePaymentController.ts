@@ -480,16 +480,32 @@ export class NativePaymentController {
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       // Fallback: if frontend didn't send address, try to get it from Stripe
-      const resolvedAddress = shippingAddress || (paymentIntent.shipping?.address ? {
+      const rawAddress = shippingAddress || (paymentIntent.shipping?.address ? {
         name: paymentIntent.shipping.name || '',
         line1: paymentIntent.shipping.address.line1 || '',
         line2: paymentIntent.shipping.address.line2 || '',
         city: paymentIntent.shipping.address.city || '',
-        postalCode: paymentIntent.shipping.address.postal_code || '',
+        state: paymentIntent.shipping.address.state || '',
+        postal_code: paymentIntent.shipping.address.postal_code || '',
         country: paymentIntent.shipping.address.country || 'GB',
       } : null);
 
+      // Normalize address field names to snake_case (consistent with card checkout path)
+      // Apple Pay frontend may send postalCode (camelCase) — convert to postal_code
+      const resolvedAddress = rawAddress ? {
+        name: rawAddress.name || '',
+        line1: rawAddress.line1 || rawAddress.street1 || '',
+        line2: rawAddress.line2 || rawAddress.street2 || '',
+        city: rawAddress.city || '',
+        state: rawAddress.state || rawAddress.county || '',
+        postal_code: rawAddress.postal_code || rawAddress.postalCode || rawAddress.postcode || '',
+        country: rawAddress.country || 'GB',
+      } : null;
+
       console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE');
+      if (resolvedAddress) {
+        console.log('[PAY] Address postal_code:', resolvedAddress.postal_code || 'MISSING');
+      }
 
       if (paymentIntent.status !== 'succeeded') {
         return res.status(400).json({

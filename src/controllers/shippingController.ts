@@ -241,7 +241,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
         street2: shippingAddress.line2 || shippingAddress.street2 || '',
         city: shippingAddress.city || 'London',
         state: shippingAddress.county || shippingAddress.state || '',
-        zip: shippingAddress.postcode || shippingAddress.postal_code || '',
+        zip: shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '',
         country: shippingAddress.country || 'GB',
       },
       parcels: [{

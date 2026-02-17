@@ -172,7 +172,7 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
     const estimatedCity = getEstimatedCity(sellerPostcode);
 
     // 5. Create Shippo shipment to get rates
-    console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${sellerPostcode} → ${shippingAddress.postcode || shippingAddress.postal_code || '?'}`);
+    console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${sellerPostcode} → ${shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '?'}`);
 
     const shipment = await shippo.shipments.create({
       addressFrom: {
@@ -188,7 +188,7 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
         street2: shippingAddress.line2 || shippingAddress.street2 || '',
         city: shippingAddress.city || 'London',
         state: shippingAddress.county || shippingAddress.state || '',
-        zip: shippingAddress.postcode || shippingAddress.postal_code || '',
+        zip: shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '',
         country: shippingAddress.country || 'GB',
       },
       parcels: [{
