@@ -288,7 +288,7 @@ export class StripeController {
       const shippingTotalPence = Math.round(shippingTotal * 100);
 
       // Calculate seller payout (what they'll receive after escrow)
-      const sellerPayout = itemPrice + shippingTotal;
+      const sellerPayout = itemPrice + baseShipping;
 
       console.log('Price breakdown:', {
         unitPrice: unitPrice.toFixed(2),
@@ -457,24 +457,88 @@ export class StripeController {
         break;
 
       case 'payment_intent.succeeded':
-        // [EC-C2] Structured logging for native payment events
         const pi = event.data.object as Stripe.PaymentIntent;
         const piType = pi.metadata?.type;
 
-        // TODO: Phase 3 -- Implement webhook-based fulfilment for native payments.
-        // Currently native payments rely on the client calling POST /confirm.
-        // If the client crashes after payment but before calling /confirm,
-        // the buyer is charged but no order is created.
-        // Workaround: admin monitors logs for these warnings and manually
-        // checks for orphaned PaymentIntents in the Stripe dashboard.
         if (piType === 'native_single_item' || piType === 'native_cart') {
-          console.warn(
-            `[WEBHOOK] Native payment succeeded but requires client /confirm call. ` +
-            `PaymentIntent: ${pi.id}, type: ${piType}, amount: ${pi.amount}, ` +
-            `buyer: ${pi.metadata?.buyer_id || 'unknown'}`
-          );
+          console.log(`[WEBHOOK] Native payment succeeded: ${pi.id}, type: ${piType}, amount: ${pi.amount}`);
+
+          // Safety net: check after 30s if the client confirmed the order.
+          // If the app crashed after payment but before calling /confirm,
+          // the buyer is charged with no order — auto-refund prevents this.
+          setTimeout(async () => {
+            try {
+              const existingOrder = await prisma.orders.findFirst({
+                where: { stripe_payment_intent_id: pi.id },
+              });
+
+              if (!existingOrder) {
+                console.error(`[WEBHOOK] ORPHANED PAYMENT: No order for PI ${pi.id} after 30s — issuing refund`);
+
+                try {
+                  await stripe.refunds.create({
+                    payment_intent: pi.id,
+                    reason: 'requested_by_customer',
+                    metadata: {
+                      reason: 'orphaned_native_payment',
+                      type: piType || 'unknown',
+                      buyer_id: pi.metadata?.buyer_id || 'unknown',
+                    },
+                  });
+                  console.log(`[WEBHOOK] Auto-refund issued for orphaned PI ${pi.id}`);
+                } catch (refundErr: any) {
+                  console.error(`[WEBHOOK] CRITICAL: Failed to refund orphaned PI ${pi.id}:`, refundErr.message);
+                }
+              } else {
+                console.log(`[WEBHOOK] Native payment ${pi.id} confirmed — order ${existingOrder.id} exists`);
+              }
+            } catch (err) {
+              console.error(`[WEBHOOK] Error checking orphaned payment ${pi.id}:`, err);
+            }
+          }, 30000);
         } else {
           console.log('Payment succeeded - funds held in escrow');
+        }
+        break;
+
+      case 'charge.dispute.created':
+        const dispute = event.data.object as Stripe.Dispute;
+        console.error(`[WEBHOOK] DISPUTE CREATED: ${dispute.id}, amount: ${dispute.amount}, reason: ${dispute.reason}`);
+
+        try {
+          // Find the order linked to this payment
+          const disputedOrder = await prisma.orders.findFirst({
+            where: { stripe_payment_intent_id: dispute.payment_intent as string },
+          });
+
+          if (disputedOrder) {
+            // Freeze escrow — prevent auto-release while dispute is active
+            await prisma.orders.updateMany({
+              where: { stripe_payment_intent_id: dispute.payment_intent as string },
+              data: {
+                status: 'disputed',
+                updated_at: new Date(),
+              },
+            });
+
+            // Notify admin
+            await prisma.notifications.create({
+              data: {
+                id: `notif_${crypto.randomUUID()}`,
+                user_id: 'admin',
+                type: 'dispute',
+                title: 'STRIPE DISPUTE — Action Required',
+                message: `Dispute ${dispute.id} on order ${disputedOrder.id}. Amount: £${(dispute.amount / 100).toFixed(2)}. Reason: ${dispute.reason}. Escrow frozen.`,
+                related_id: disputedOrder.id,
+              },
+            });
+
+            console.log(`[WEBHOOK] Order ${disputedOrder.id} frozen due to dispute`);
+          } else {
+            console.warn(`[WEBHOOK] No order found for disputed PI: ${dispute.payment_intent}`);
+          }
+        } catch (disputeErr) {
+          console.error('[WEBHOOK] Error handling dispute:', disputeErr);
         }
         break;
 

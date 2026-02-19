@@ -582,7 +582,10 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
 
     // Calculate new refund amount (original minus shipping)
     const originalRefund = parseFloat(returnRequest.refund_amount?.toString() || '0');
-    const newRefundAmount = originalRefund - labelCost;
+    const newRefundAmount = Math.max(0, originalRefund - labelCost);
+    if (newRefundAmount === 0) {
+      console.warn(`[RETURN] Label cost (£${labelCost.toFixed(2)}) exceeds refund (£${originalRefund.toFixed(2)}) — refund zeroed out`);
+    }
 
     // Update return request
     await prisma.return_requests.update({

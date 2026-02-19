@@ -1048,8 +1048,27 @@ export class CartCheckoutController {
 
       console.log('[CART] Cart order fulfilled successfully');
       console.log(`[CART] Orders created: ${createdOrders.length}, Total items: ${totalItems}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('[CART] Error fulfilling cart order:', error);
+
+      // Auto-refund on cart fulfillment failure (matching D-C4 pattern from fulfillOrder)
+      if (session.payment_intent) {
+        try {
+          const refund = await stripe.refunds.create({
+            payment_intent: session.payment_intent as string,
+            reason: 'requested_by_customer',
+            metadata: {
+              reason: 'cart_fulfillment_failed',
+              session_id: session.id,
+              error: error.message?.substring(0, 200) || 'Unknown error',
+            },
+          });
+          console.log(`[CART] Auto-refund issued: ${refund.id} for session ${session.id}`);
+        } catch (refundError: any) {
+          console.error(`[CRITICAL] Cart auto-refund ALSO FAILED for session ${session.id}:`, refundError);
+        }
+      }
+
       throw error;
     }
   }

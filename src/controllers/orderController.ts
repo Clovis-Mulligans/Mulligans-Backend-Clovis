@@ -13,6 +13,7 @@ import Stripe from 'stripe';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller } from '../services/emailService';
+import { ESCROW_RELEASE_DAYS } from '../config/constants';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -22,7 +23,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // CONSTANTS
 // ============================================
 const SHIPPING_DEADLINE_DAYS = 5;
-const ESCROW_RELEASE_DAYS = 3;
 
 // Fee calculation - matches your pricing structure
 const calculateSellerPayout = (totalAmount: number): number => {
@@ -363,6 +363,8 @@ export class OrderController {
               subcategory: true,
               brand: true,
               price: true,
+              parcel_size: true,
+              shipping_cost: true,
               images: {
                 select: { image_url: true },
                 orderBy: { display_order: 'asc' },
@@ -705,10 +707,7 @@ if (order.disputes) {
       const order = await prisma.orders.findFirst({
         where: {
           id: orderId,
-          OR: [
-            { buyer_id: userId },
-            { seller_id: userId },
-          ],
+          buyer_id: userId,  // Only buyer can mark as delivered
           status: 'in_transit',
         },
         include: {
@@ -1245,58 +1244,60 @@ if (isBuyerCancelling) {
 
       const now = new Date();
 
-      // Update order to cancelled — include refund failure flag in cancel_reason if refund failed
-      await prisma.orders.update({
-        where: { id: orderId },
-        data: {
-          status: 'cancelled',
-          cancelled_at: now,
-          cancel_reason: refundSucceeded
-            ? fullCancelReason
-            : `${fullCancelReason} [REFUND FAILED - MANUAL REFUND REQUIRED]`,
-          refunded_at: refundSucceeded ? now : undefined,
-          stripe_refund_id: refundId || undefined,
-          updated_at: now,
-        },
-      });
-
-      // Relist the item
-      if (order.listing_id) {
-        await prisma.listings.update({
-          where: { id: order.listing_id },
+      // Wrap all DB mutations in a transaction to prevent inconsistent state
+      // (e.g., refund issued but order still shows 'to_ship', or listing not relisted)
+      await prisma.$transaction(async (tx) => {
+        // Update order to cancelled
+        await tx.orders.update({
+          where: { id: orderId },
           data: {
-            status: 'active',
+            status: 'cancelled',
+            cancelled_at: now,
+            cancel_reason: refundSucceeded
+              ? fullCancelReason
+              : `${fullCancelReason} [REFUND FAILED - MANUAL REFUND REQUIRED]`,
+            refunded_at: refundSucceeded ? now : undefined,
+            stripe_refund_id: refundId || undefined,
             updated_at: now,
           },
         });
-        console.log('📋 Item relisted:', order.listing_id);
-      }
 
-      // Increment user's cancellation count
-      if (isBuyer) {
-        await prisma.users.update({
-          where: { id: userId },
-          data: {
-            buyer_cancellation_count: { increment: 1 },
-            updated_at: now,
-          },
-        });
-      } else {
-        await prisma.users.update({
-          where: { id: userId },
-          data: {
-            seller_cancellation_count: { increment: 1 },
-            updated_at: now,
-          },
-        });
-      }
+        // Relist the item
+        if (order.listing_id) {
+          await tx.listings.update({
+            where: { id: order.listing_id },
+            data: {
+              status: 'active',
+              updated_at: now,
+            },
+          });
+          console.log('📋 Item relisted:', order.listing_id);
+        }
 
-      // Create automatic 1-star review if 2nd+ cancellation
-      if (cancellationCount >= 1) {
-        console.log('⚠️ Creating automatic 1-star review for repeated cancellation');
-        
-        try {
-          await prisma.reviews.create({
+        // Increment user's cancellation count
+        if (isBuyer) {
+          await tx.users.update({
+            where: { id: userId },
+            data: {
+              buyer_cancellation_count: { increment: 1 },
+              updated_at: now,
+            },
+          });
+        } else {
+          await tx.users.update({
+            where: { id: userId },
+            data: {
+              seller_cancellation_count: { increment: 1 },
+              updated_at: now,
+            },
+          });
+        }
+
+        // Create automatic 1-star review if 2nd+ cancellation
+        if (cancellationCount >= 1) {
+          console.log('⚠️ Creating automatic 1-star review for repeated cancellation');
+
+          await tx.reviews.create({
             data: {
               id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               order_id: orderId,
@@ -1311,14 +1312,14 @@ if (isBuyerCancelling) {
           });
 
           // Recalculate user's average rating
-          const allReviews = await prisma.reviews.findMany({
+          const allReviews = await tx.reviews.findMany({
             where: { reviewed_user_id: userId },
             select: { rating: true },
           });
 
           if (allReviews.length > 0) {
             const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
-            await prisma.users.update({
+            await tx.users.update({
               where: { id: userId },
               data: {
                 rating: Math.round(avgRating * 100) / 100,
@@ -1326,11 +1327,8 @@ if (isBuyerCancelling) {
               },
             });
           }
-        } catch (reviewError: any) {
-          console.error('⚠️ Failed to create cancellation review:', reviewError.message);
-          // Don't fail the cancellation if review creation fails
         }
-      }
+      });
 
       // Notify the other party
       const cancelledBy = isBuyer ? 'The buyer' : 'The seller';

@@ -288,7 +288,7 @@ export class NativePaymentController {
           item_total: itemTotal.toFixed(2),
           shipping_cost: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
-          seller_payout: (itemTotal + shippingTotal).toFixed(2),
+          seller_payout: (itemTotal + baseShipping).toFixed(2),
           grand_total: grandTotal.toFixed(2),
           offer_id: validatedOfferId || '',
           discount_amount: discountAmount.toFixed(2),
@@ -377,8 +377,9 @@ export class NativePaymentController {
 
       // Calculate totals
       // OFFER SYSTEM: Use offer_price from cart_items when available
+      // H1 FIX: Shipping = max shipping cost per seller (not additive per item)
       let itemsTotal = 0;
-      let baseShippingTotal = 0;
+      const sellerMaxShipping: Record<string, number> = {};
       const itemsMetadata: string[] = [];
       const offerMetadata: Record<string, string> = {};
 
@@ -392,7 +393,11 @@ export class NativePaymentController {
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
 
         itemsTotal += unitPrice * quantity;
-        baseShippingTotal += Math.ceil(quantity / 5) * shippingCost;
+
+        // H1: Track highest shipping cost per seller
+        const sellerId = listing.seller_id;
+        sellerMaxShipping[sellerId] = Math.max(sellerMaxShipping[sellerId] || 0, shippingCost);
+
         itemsMetadata.push(`${listing.id}:${quantity}`);
 
         // OFFER SYSTEM: Collect offer metadata for fulfillment
@@ -401,6 +406,9 @@ export class NativePaymentController {
           offerMetadata[`offer_${listing.id}`] = `${cartItem.offer_id}|${unitPrice.toFixed(2)}|${originalPrice.toFixed(2)}`;
         }
       }
+
+      // H1: Sum the max shipping cost across all sellers
+      const baseShippingTotal = Object.values(sellerMaxShipping).reduce((sum, cost) => sum + cost, 0);
 
       const insurancePremium = itemsTotal * SHIPPING_INSURANCE_RATE;
       const shippingTotal = baseShippingTotal > 0
@@ -850,7 +858,9 @@ export class NativePaymentController {
           include: { images: { take: 1 } },
         });
 
-        if (!listing) continue;
+        if (!listing) {
+          throw new Error(`Listing ${itemData.listing_id} not found during cart fulfillment — rolling back transaction`);
+        }
 
         // OFFER SYSTEM: Use offer price if available
         const offerInfo = offerDataMap[itemData.listing_id];

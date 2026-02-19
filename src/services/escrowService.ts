@@ -21,6 +21,9 @@ import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 import { sendEscrowReleased, sendReturnRefundProcessed } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
+import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import crypto from 'crypto';
+
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -31,7 +34,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ============================================
 const SHIPPING_DEADLINE_DAYS = 5;        // Seller must ship within 5 days
 const RETURN_SHIPPING_DEADLINE_DAYS = 5; // Buyer must ship return within 5 days
-const ESCROW_RELEASE_DAYS = 3;           // 3 days after delivery to release funds
 const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 days
 
 // Dispute statuses that BLOCK escrow release
@@ -497,8 +499,11 @@ export async function autoReleaseEscrow(): Promise<void> {
         // ============================================
         // CALCULATE CORRECT PAYOUT FOR GROUP
         // ============================================
-        // Items: sum of all order amounts
-        const itemsTotal = orders.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
+        // Items: sum of seller payouts (excludes platform fee), fall back to amount for legacy orders
+        const itemsTotal = orders.reduce((sum, o) => {
+          const payout = o.seller_payout ?? o.amount;
+          return sum + parseFloat(payout.toString());
+        }, 0);
         
         // Check if any order in the group was auto-shipped
         const isAutoShipped = orders.some(o => (o as any).label_auto_generated === true);
@@ -559,19 +564,26 @@ export async function autoReleaseEscrow(): Promise<void> {
         // ============================================
         // CREATE STRIPE TRANSFER
         // ============================================
-        if (!seller.stripe_connect_id) {
-          console.log(`[ESCROW] ⚠️ Seller has no Stripe Connect, marking orders as completed without transfer`);
-          
-          for (const order of orders) {
-            await prisma.orders.update({
-              where: { id: order.id },
+       if (!seller.stripe_connect_id) {
+          console.warn(`[ESCROW] Seller ${seller.id} has no Stripe Connect — leaving orders in delivered status for retry`);
+
+          // Notify seller to set up Stripe Connect
+          try {
+            await prisma.notifications.create({
               data: {
-                status: 'completed',
-                completed_at: now,
-                updated_at: now,
+                id: `notif_${crypto.randomUUID()}`,
+                user_id: seller.id,
+                type: 'payout',
+                title: 'Action Required: Set Up Payment',
+                message: 'You have sold items but cannot receive payment until you complete your Stripe setup. Go to Settings > Payment Setup to get started.',
+                related_id: orders[0]?.id,
               },
             });
+          } catch (notifErr) {
+            console.error('[ESCROW] Failed to notify seller about missing Connect account:', notifErr);
           }
+
+          // Do NOT mark as completed — leave in delivered so cron retries next run
           continue;
         }
 

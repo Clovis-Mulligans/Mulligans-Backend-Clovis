@@ -132,10 +132,10 @@ app.use((req, res, next) => {
 
 app.use(express.urlencoded({ extended: true }));
 
-// Add BEFORE other routes (and only in development!)
-if (process.env.NODE_ENV !== 'production') {
+// Test routes disabled in production — re-enable locally by setting NODE_ENV=development
+if (process.env.NODE_ENV === 'development') {
   app.use('/api/test', testRoutes);
-  console.log('⚠️ Test routes enabled at /api/test');
+  console.log('⚠️ Test routes enabled (development mode)');
 }
 
 // Routes - auth has stricter rate limiting

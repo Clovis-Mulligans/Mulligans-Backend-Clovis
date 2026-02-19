@@ -23,6 +23,7 @@ import {
   sendDisputeResolved,
 } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
+import { ESCROW_RELEASE_DAYS } from '../config/constants';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -43,7 +44,6 @@ const S3_BUCKET = process.env.AWS_S3_BUCKET || 'mulligans-golf-images-mvp';
 // CONSTANTS
 // ============================================
 const SELLER_RESPONSE_DEADLINE_HOURS = 72;
-const ESCROW_RELEASE_DAYS = 3; // ✅ Buyer has 3 days from delivery to raise an issue
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'info@mulligans.uk.com';
 
 // ✅ Buyer Protection Fee: 7.5% + £0.99

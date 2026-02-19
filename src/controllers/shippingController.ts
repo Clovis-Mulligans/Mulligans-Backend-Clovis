@@ -8,6 +8,12 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
+import Stripe from 'stripe';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2025-11-17.clover',
+});
+import { ESCROW_RELEASE_DAYS } from '../config/constants';
 
 
 // ✅ FIXED: Initialize Shippo with correct API key format
@@ -16,8 +22,85 @@ const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
 });
 
-// ✅ Escrow release period (days after delivery)
-const ESCROW_RELEASE_DAYS = 5;
+// Determine city based on postcode prefix for rate estimation
+    function getEstimatedCity(postcode: string): string {
+      if (!postcode) return 'London';
+      const prefix = postcode.toUpperCase().replace(/[0-9]/g, '').trim();
+      const cityMap: { [key: string]: string } = {
+        'RH': 'Reigate', 'GU': 'Guildford', 'KT': 'Kingston',
+        'CR': 'Croydon', 'SM': 'Sutton', 'TW': 'Twickenham',
+        'BR': 'Bromley', 'DA': 'Dartford', 'ME': 'Maidstone',
+        'TN': 'Tunbridge Wells', 'CT': 'Canterbury', 'BN': 'Brighton',
+        'PO': 'Portsmouth', 'SO': 'Southampton', 'BH': 'Bournemouth',
+        'SP': 'Salisbury', 'BA': 'Bath', 'BS': 'Bristol',
+        'GL': 'Gloucester', 'OX': 'Oxford', 'HP': 'Hemel Hempstead',
+        'SL': 'Slough', 'RG': 'Reading', 'MK': 'Milton Keynes',
+        'NN': 'Northampton', 'CV': 'Coventry', 'B': 'Birmingham',
+        'WS': 'Walsall', 'WV': 'Wolverhampton', 'DY': 'Dudley',
+        'ST': 'Stoke-on-Trent', 'DE': 'Derby', 'NG': 'Nottingham',
+        'LE': 'Leicester', 'PE': 'Peterborough', 'CB': 'Cambridge',
+        'IP': 'Ipswich', 'NR': 'Norwich', 'CO': 'Colchester',
+        'CM': 'Chelmsford', 'SS': 'Southend', 'RM': 'Romford',
+        'IG': 'Ilford', 'EN': 'Enfield', 'AL': 'St Albans',
+        'WD': 'Watford', 'HA': 'Harrow', 'UB': 'Uxbridge',
+        'LU': 'Luton', 'SG': 'Stevenage', 'HU': 'Hull',
+        'YO': 'York', 'LS': 'Leeds', 'BD': 'Bradford',
+        'HX': 'Halifax', 'HD': 'Huddersfield', 'WF': 'Wakefield',
+        'S': 'Sheffield', 'DN': 'Doncaster', 'LN': 'Lincoln',
+        'M': 'Manchester', 'OL': 'Oldham', 'BL': 'Bolton',
+        'WN': 'Wigan', 'WA': 'Warrington', 'L': 'Liverpool',
+        'CH': 'Chester', 'CW': 'Crewe', 'SK': 'Stockport',
+        'PR': 'Preston', 'BB': 'Blackburn', 'FY': 'Blackpool',
+        'LA': 'Lancaster', 'CA': 'Carlisle', 'NE': 'Newcastle',
+        'SR': 'Sunderland', 'DH': 'Durham', 'TS': 'Middlesbrough',
+        'DL': 'Darlington', 'EH': 'Edinburgh', 'G': 'Glasgow',
+        'PA': 'Paisley', 'KA': 'Kilmarnock', 'ML': 'Motherwell',
+        'FK': 'Falkirk', 'KY': 'Kirkcaldy', 'DD': 'Dundee',
+        'AB': 'Aberdeen', 'PH': 'Perth', 'IV': 'Inverness',
+        'CF': 'Cardiff', 'NP': 'Newport', 'SA': 'Swansea',
+        'LL': 'Llandudno', 'SY': 'Shrewsbury', 'HR': 'Hereford',
+        'WR': 'Worcester', 'DT': 'Dorchester', 'EX': 'Exeter',
+        'PL': 'Plymouth', 'TQ': 'Torquay', 'TR': 'Truro',
+        'TA': 'Taunton',
+      }
+      // Check for London postcodes
+      if (['E', 'EC', 'N', 'NW', 'SE', 'SW', 'W', 'WC'].includes(prefix)) {
+        return 'London';
+      }
+      return cityMap[prefix] || 'London';
+    };
+
+/**
+ * Get seller's real address from Stripe Connect, with postcode fallback
+ */
+async function getSellerAddress(sellerId: string): Promise<{ street: string; city: string; postcode: string }> {
+  const seller = await prisma.users.findUnique({
+    where: { id: sellerId },
+    select: { stripe_connect_id: true, postcode_area: true },
+  });
+
+  if (seller?.stripe_connect_id) {
+    try {
+      const account = await stripe.accounts.retrieve(seller.stripe_connect_id);
+      const addr = (account as any).individual?.address || (account as any).company?.address;
+      if (addr?.line1) {
+        return {
+          street: addr.line1,
+          city: addr.city || getEstimatedCity(seller.postcode_area || ''),
+          postcode: addr.postal_code || seller.postcode_area || 'SW1A 1AA',
+        };
+      }
+    } catch (err) {
+      console.warn('[SHIPPING] Could not retrieve seller Stripe address, using fallback');
+    }
+  }
+
+  return {
+    street: '1 High Street',
+    city: getEstimatedCity(seller?.postcode_area || ''),
+    postcode: seller?.postcode_area || 'SW1A 1AA',
+  };
+}
 
 // ============================================
 // SHIPPING PRICE CONSTANTS
@@ -173,53 +256,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
     console.log('🛡️ Insurance value:', order.insured_value?.toString() || order.amount.toString());
 
-    // Determine city based on postcode prefix for rate estimation
-    const getEstimatedCity = (postcode: string): string => {
-      if (!postcode) return 'London';
-      const prefix = postcode.toUpperCase().replace(/[0-9]/g, '').trim();
-      const cityMap: { [key: string]: string } = {
-        'RH': 'Reigate', 'GU': 'Guildford', 'KT': 'Kingston',
-        'CR': 'Croydon', 'SM': 'Sutton', 'TW': 'Twickenham',
-        'BR': 'Bromley', 'DA': 'Dartford', 'ME': 'Maidstone',
-        'TN': 'Tunbridge Wells', 'CT': 'Canterbury', 'BN': 'Brighton',
-        'PO': 'Portsmouth', 'SO': 'Southampton', 'BH': 'Bournemouth',
-        'SP': 'Salisbury', 'BA': 'Bath', 'BS': 'Bristol',
-        'GL': 'Gloucester', 'OX': 'Oxford', 'HP': 'Hemel Hempstead',
-        'SL': 'Slough', 'RG': 'Reading', 'MK': 'Milton Keynes',
-        'NN': 'Northampton', 'CV': 'Coventry', 'B': 'Birmingham',
-        'WS': 'Walsall', 'WV': 'Wolverhampton', 'DY': 'Dudley',
-        'ST': 'Stoke-on-Trent', 'DE': 'Derby', 'NG': 'Nottingham',
-        'LE': 'Leicester', 'PE': 'Peterborough', 'CB': 'Cambridge',
-        'IP': 'Ipswich', 'NR': 'Norwich', 'CO': 'Colchester',
-        'CM': 'Chelmsford', 'SS': 'Southend', 'RM': 'Romford',
-        'IG': 'Ilford', 'EN': 'Enfield', 'AL': 'St Albans',
-        'WD': 'Watford', 'HA': 'Harrow', 'UB': 'Uxbridge',
-        'LU': 'Luton', 'SG': 'Stevenage', 'HU': 'Hull',
-        'YO': 'York', 'LS': 'Leeds', 'BD': 'Bradford',
-        'HX': 'Halifax', 'HD': 'Huddersfield', 'WF': 'Wakefield',
-        'S': 'Sheffield', 'DN': 'Doncaster', 'LN': 'Lincoln',
-        'M': 'Manchester', 'OL': 'Oldham', 'BL': 'Bolton',
-        'WN': 'Wigan', 'WA': 'Warrington', 'L': 'Liverpool',
-        'CH': 'Chester', 'CW': 'Crewe', 'SK': 'Stockport',
-        'PR': 'Preston', 'BB': 'Blackburn', 'FY': 'Blackpool',
-        'LA': 'Lancaster', 'CA': 'Carlisle', 'NE': 'Newcastle',
-        'SR': 'Sunderland', 'DH': 'Durham', 'TS': 'Middlesbrough',
-        'DL': 'Darlington', 'EH': 'Edinburgh', 'G': 'Glasgow',
-        'PA': 'Paisley', 'KA': 'Kilmarnock', 'ML': 'Motherwell',
-        'FK': 'Falkirk', 'KY': 'Kirkcaldy', 'DD': 'Dundee',
-        'AB': 'Aberdeen', 'PH': 'Perth', 'IV': 'Inverness',
-        'CF': 'Cardiff', 'NP': 'Newport', 'SA': 'Swansea',
-        'LL': 'Llandudno', 'SY': 'Shrewsbury', 'HR': 'Hereford',
-        'WR': 'Worcester', 'DT': 'Dorchester', 'EX': 'Exeter',
-        'PL': 'Plymouth', 'TQ': 'Torquay', 'TR': 'Truro',
-        'TA': 'Taunton',
-      };
-      // Check for London postcodes
-      if (['E', 'EC', 'N', 'NW', 'SE', 'SW', 'W', 'WC'].includes(prefix)) {
-        return 'London';
-      }
-      return cityMap[prefix] || 'London';
-    };
+    
 
     const estimatedCity = getEstimatedCity(sellerPostcode);
     console.log('📍 Estimated city for seller:', estimatedCity);
@@ -230,7 +267,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     const shipment = await shippo.shipments.create({
       addressFrom: {
         name: seller?.display_name || 'Seller',
-        street1: '1 High Street', // Placeholder for rate calculation
+        street1: (await getSellerAddress(order.seller_id)).street,
         city: estimatedCity,
         zip: sellerPostcode,
         country: 'GB',
