@@ -195,6 +195,24 @@ export async function sendEscrowReleased(sellerEmail: string, data: Record<strin
   console.log(`✅ Escrow released notification sent to ${sellerEmail}`);
 }
 
+export async function sendOrderCancellation(recipientEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('order-cancellation', data);
+
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: recipientEmail,
+    subject: `Order Cancelled - #${data.orderNumber}`,
+    html: html,
+  });
+
+  if (error) {
+    console.error('❌ Failed to send cancellation email:', error);
+    throw new Error(error.message);
+  }
+
+  console.log(`✅ Cancellation email sent to ${recipientEmail}`);
+}
+
 // ============================================
 // RETURN EMAILS
 // ============================================

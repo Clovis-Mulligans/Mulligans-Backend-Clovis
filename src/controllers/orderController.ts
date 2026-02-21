@@ -10,9 +10,8 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
-import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased } from '../services/emailService';
+import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
-import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller } from '../services/emailService';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -1358,6 +1357,49 @@ if (isBuyerCancelling) {
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
+      }
+      // Send cancellation emails to both parties
+      try {
+        const buyerRecord = await prisma.users.findUnique({
+          where: { id: order.buyer_id },
+          select: { email: true, display_name: true },
+        });
+        const sellerRecord = await prisma.users.findUnique({
+          where: { id: order.seller_id },
+          select: { email: true, display_name: true },
+        });
+
+        const refundMsg = refundSucceeded
+          ? 'A full refund has been issued to your original payment method. Please allow 5-10 business days for it to appear.'
+          : '';
+
+        if (buyerRecord?.email) {
+          await sendOrderCancellation(buyerRecord.email, {
+            recipientName: buyerRecord.display_name || 'there',
+            orderNumber: orderId,
+            itemTitle: listingTitle,
+            cancelReason: fullCancelReason,
+            cancellationMessage: isBuyer
+              ? 'Your order has been cancelled as requested.'
+              : `The seller has cancelled your order for "${listingTitle}".`,
+            refundMessage: isBuyer ? refundMsg : `${refundMsg} The item has been relisted and is available for other buyers.`,
+          });
+        }
+
+        if (sellerRecord?.email) {
+          await sendOrderCancellation(sellerRecord.email, {
+            recipientName: sellerRecord.display_name || 'there',
+            orderNumber: orderId,
+            itemTitle: listingTitle,
+            cancelReason: fullCancelReason,
+            cancellationMessage: isBuyer
+              ? `The buyer has cancelled their order for "${listingTitle}". Your item has been relisted.`
+              : 'Your cancellation has been processed.',
+            refundMessage: isBuyer ? '' : 'A refund has been issued to the buyer.',
+          });
+        }
+      } catch (emailErr) {
+        console.error('[ORDER] Cancellation email failed (non-fatal):', emailErr);
       }
 
       console.log('✅ Order cancelled:', orderId);

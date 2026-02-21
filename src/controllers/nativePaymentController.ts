@@ -31,6 +31,7 @@ import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -803,6 +804,48 @@ export class NativePaymentController {
       console.error('[PAY] Push to seller failed:', pushErr);
     }
 
+    // Send emails (non-fatal)
+    try {
+      const buyerRecord = await prisma.users.findUnique({
+        where: { id: buyerId },
+        select: { email: true, display_name: true },
+      });
+      const sellerRecord = await prisma.users.findUnique({
+        where: { id: sellerId },
+        select: { email: true, display_name: true },
+      });
+
+      if (buyerRecord?.email) {
+        const addr = shippingAddress
+          ? `${shippingAddress.name || ''}<br>${shippingAddress.line1 || ''}<br>${shippingAddress.city || ''}<br>${shippingAddress.postal_code || ''}`
+          : 'See app for details';
+
+        await sendOrderConfirmation(buyerRecord.email, {
+          buyerName: buyerRecord.display_name || 'there',
+          orderId: createdOrder.id,
+          itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listing.title}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${metadata.item_total}</td></tr>`,
+          totalAmount: `£${metadata.grand_total}`,
+          shippingAddress: addr,
+        });
+      }
+
+      if (sellerRecord?.email) {
+        const addr = shippingAddress
+          ? `${shippingAddress.name || ''}<br>${shippingAddress.line1 || ''}<br>${shippingAddress.city || ''}<br>${shippingAddress.postal_code || ''}`
+          : 'See app for details';
+
+        await sendSaleNotification(sellerRecord.email, {
+          itemTitle: listing.title,
+          salePrice: metadata.item_total,
+          orderNumber: createdOrder.id,
+          buyerName: buyerRecord?.display_name || 'A buyer',
+          shippingAddress: addr,
+        });
+      }
+    } catch (emailErr) {
+      console.error('[PAY] Email send failed (non-fatal):', emailErr);
+    }
+
     console.log('[PAY] Single item order fulfilled:', createdOrder.id);
     if (offerId) {
       console.log(`[PAY] Offer-based purchase: original £${originalListPrice.toFixed(2)} -> paid £${effectiveUnitPrice.toFixed(2)} (saved £${discountAmount.toFixed(2)})`);
@@ -1059,6 +1102,60 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
       } catch (pushErr) {
         console.error('[PAY] Push to seller failed:', pushErr);
       }
+    }
+
+    // Send order confirmation email to buyer
+    try {
+      const buyerRecord = await prisma.users.findUnique({
+        where: { id: buyerId },
+        select: { email: true, display_name: true },
+      });
+
+      if (buyerRecord?.email) {
+        const itemsListHtml = orders.map(o =>
+          `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${o.listing_title}${o.quantity > 1 ? ` (x${o.quantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${parseFloat(o.amount.toString()).toFixed(2)}</td></tr>`
+        ).join('');
+
+        const totalAmount = orders.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
+        const shippingAddr = paymentIntent.shipping?.address
+          ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
+          : 'See app for details';
+
+        await sendOrderConfirmation(buyerRecord.email, {
+          buyerName: buyerRecord.display_name || 'there',
+          orderId: orders[0]?.id || 'N/A',
+          itemsList: itemsListHtml,
+          totalAmount: `£${(totalAmount + parseFloat(paymentIntent.metadata?.shipping_total || '0') + parseFloat(paymentIntent.metadata?.platform_fee || '0')).toFixed(2)}`,
+          shippingAddress: shippingAddr,
+        });
+      }
+
+      // Send sale emails to each seller
+      for (const sellerId of Object.keys(sellerOrders)) {
+        const sellerOrderList = sellerOrders[sellerId];
+        const sellerRecord = await prisma.users.findUnique({
+          where: { id: sellerId },
+          select: { email: true, display_name: true },
+        });
+
+        if (sellerRecord?.email) {
+          const sellerTotal = sellerOrderList.reduce((sum: number, o: any) => sum + parseFloat(o.amount.toString()), 0);
+
+          await sendSaleNotification(sellerRecord.email, {
+            itemTitle: sellerOrderList.length === 1
+              ? sellerOrderList[0].listing_title
+              : `${sellerOrderList.length} items`,
+            salePrice: sellerTotal.toFixed(2),
+            orderNumber: sellerOrderList[0]?.id || 'N/A',
+            buyerName: buyerRecord?.display_name || 'A buyer',
+            shippingAddress: paymentIntent.shipping?.address
+              ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
+              : 'See app for details',
+          });
+        }
+      }
+    } catch (emailErr) {
+      console.error('[PAY] Cart email send failed (non-fatal):', emailErr);
     }
 
     console.log('[PAY] Cart orders fulfilled:', orders.length);

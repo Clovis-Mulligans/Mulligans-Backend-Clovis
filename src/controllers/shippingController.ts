@@ -14,7 +14,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
-
+import { sendDeliveryConfirmation } from '../services/emailService';
 
 // ✅ FIXED: Initialize Shippo with correct API key format
 // The SDK expects "ShippoToken <your_api_key>" format
@@ -903,6 +903,29 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
               related_id: order.id,
             },
           });
+
+          // Send delivery confirmation email
+          try {
+            const buyerEmailRecord = await prisma.users.findUnique({
+              where: { id: order.buyer_id },
+              select: { email: true, display_name: true },
+            });
+
+            if (buyerEmailRecord?.email) {
+              await sendDeliveryConfirmation(buyerEmailRecord.email, {
+                itemTitle: listingTitle,
+                orderNumber: order.id,
+                deliveryDate: new Date().toLocaleDateString('en-GB', {
+                  weekday: 'long',
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                }),
+              });
+            }
+          } catch (emailErr) {
+            console.error('[SHIPPO] Delivery email failed (non-fatal):', emailErr);
+          }
 
           // PUSH: Notify buyer of delivery
           try {

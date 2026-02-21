@@ -43,6 +43,7 @@ import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -923,6 +924,48 @@ export class StripeController {
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);
+      }
+
+      // Send order confirmation email to buyer
+      try {
+        const buyerRecord = await prisma.users.findUnique({
+          where: { id: buyer_id },
+          select: { email: true, display_name: true },
+        });
+        const sellerRecord = await prisma.users.findUnique({
+          where: { id: seller_id },
+          select: { email: true, display_name: true },
+        });
+
+        if (buyerRecord?.email) {
+          const shippingAddr = shippingAddress
+            ? `${shippingAddress.name || ''}<br>${shippingAddress.line1 || ''}${shippingAddress.line2 ? '<br>' + shippingAddress.line2 : ''}<br>${shippingAddress.city || ''}<br>${shippingAddress.postal_code || ''}`
+            : 'See app for details';
+
+          await sendOrderConfirmation(buyerRecord.email, {
+            buyerName: buyerRecord.display_name || 'there',
+            orderId: order.id,
+            itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listingTitle}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${itemPrice.toFixed(2)}</td></tr>`,
+            totalAmount: `£${parseFloat(metadata.total_price).toFixed(2)}`,
+            shippingAddress: shippingAddr,
+          });
+        }
+
+        if (sellerRecord?.email) {
+          const shippingAddr = shippingAddress
+            ? `${shippingAddress.name || ''}<br>${shippingAddress.line1 || ''}<br>${shippingAddress.city || ''}<br>${shippingAddress.postal_code || ''}`
+            : 'See app for details';
+
+          await sendSaleNotification(sellerRecord.email, {
+            itemTitle: listingTitle,
+            salePrice: itemPrice.toFixed(2),
+            orderNumber: order.id,
+            buyerName: buyerRecord?.display_name || 'A buyer',
+            shippingAddress: shippingAddr,
+          });
+        }
+      } catch (emailErr) {
+        console.error('[STRIPE] Email send failed (non-fatal):', emailErr);
       }
 
       console.log('Order fulfilled successfully (escrow mode with quantity support)');
