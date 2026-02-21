@@ -81,10 +81,15 @@ GUIDELINES:
 - If you don't know something, say so — don't make it up
 
 WHEN RECOMMENDING LISTINGS:
+- You can ONLY recommend listings from the "AVAILABLE LISTINGS ON MULLIGANS" section below
+- NEVER mention a club that isn't in that list. If no listings match, say "we haven't got the perfect match right now, but keep checking back — new gear drops daily"
+- When you recommend a listing, include its tag in this exact format: [LISTING:id] where id is the ID shown in [ID:xxx]
+- Example: "The TaylorMade Stealth 2 is a cracking driver for your swing speed — forgiving and well priced. [LISTING:abc123]"
+- You can reference up to 3 listings per message
 - Prioritise listings that match their profile (budget, skill level, preferences)
 - Mention the price and condition
-- Explain why it's a good fit for them
-- If nothing matches, be honest and suggest what to look for
+- Explain why it's a good fit for THEM specifically
+- Always frame recommendations positively — you're a salesperson, not a critic
 
 TONE EXAMPLES:
 Good: "Right, a 15 handicap fighting a slice? Good news — the right driver can make a massive difference."
@@ -269,9 +274,26 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
       .join('\n');
   }
 
-  // We don't fetch matching listings in the context builder — that's done separately
-  // for the recommendations endpoint
-  const matchingListings = '';
+  // Fetch matching active listings so Chip can recommend real items
+  let matchingListings = '';
+  try {
+    const available = await fetchMatchingListingsForContext(userId, listingId);
+    if (available.length > 0) {
+      matchingListings = available
+        .map((l) => {
+          const parts = [`[ID:${l.id}] ${l.title} — ${l.buyerPrice}`];
+          if (l.brand) parts.push(`Brand: ${l.brand}`);
+          if (l.model) parts.push(`Model: ${l.model}`);
+          if (l.condition) parts.push(`Condition: ${l.condition}/5`);
+          if (l.specs) parts.push(`Specs: ${l.specs}`);
+          return parts.join(' | ');
+        })
+        .join('\n');
+    }
+  } catch (err) {
+    console.error('[CHIP] Failed to fetch matching listings for context:', err);
+    // Non-fatal — Chip just won't have listings to recommend
+  }
 
   return {
     fittingProfile,
@@ -282,6 +304,70 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
     currentListing,
     matchingListings,
   };
+}
+
+/**
+ * Fetch active listings that match the user's profile for Chip's context.
+ * Returns up to 10 listings with IDs so Chip can reference them.
+ */
+async function fetchMatchingListingsForContext(
+  userId: string,
+  listingId?: string | null
+): Promise<{ id: string; title: string; buyerPrice: string; brand: string | null; model: string | null; condition: number | null; specs: string }[]> {
+  const profile = await prisma.fitting_profiles.findUnique({
+    where: { user_id: userId },
+  });
+
+  const where: any = {
+    status: 'active',
+    seller_id: { not: userId },
+  };
+
+  // Don't include the listing already being discussed
+  if (listingId) {
+    where.id = { not: listingId };
+  }
+
+  // Filter by budget if profile exists
+  if (profile?.budget_range) {
+    const budgetMax: Record<string, number> = {
+      under_50: 50, '50_100': 100, '100_200': 200,
+      '200_400': 400, '400_700': 700,
+    };
+    const max = budgetMax[profile.budget_range];
+    if (max) where.price = { lte: max };
+  }
+
+  // Filter by brand preferences
+  if (profile?.brand_preferences?.length && !profile.brand_preferences.includes('No preference')) {
+    where.brand = { in: profile.brand_preferences, mode: 'insensitive' };
+  }
+
+  const listings = await prisma.listings.findMany({
+    where,
+    orderBy: { created_at: 'desc' },
+    take: 10,
+    include: {
+      images: { take: 1, orderBy: { display_order: 'asc' } },
+      listing_attributes: true,
+    },
+  });
+
+  return listings.map((l) => {
+    const buyerPrice = (Number(l.price) * 1.075 + 0.99).toFixed(2);
+    const specs = l.listing_attributes
+      ?.map((a: { key: string; value: string }) => `${a.key}: ${a.value}`)
+      .join(', ') || '';
+    return {
+      id: l.id,
+      title: l.title,
+      buyerPrice: `£${buyerPrice}`,
+      brand: l.brand,
+      model: l.model,
+      condition: l.condition_overall,
+      specs,
+    };
+  });
 }
 
 /**
@@ -450,14 +536,80 @@ function isInjectionBlocked(userId: string): boolean {
 }
 
 // ============================================
+// LISTING TAG PARSING
+// ============================================
+
+const LISTING_TAG_REGEX = /\[LISTING:([a-zA-Z0-9_-]+)\]/g;
+
+/**
+ * Parse [LISTING:id] tags from Chip's response.
+ * Returns the clean text (tags stripped) and extracted listing IDs.
+ */
+function parseListingTags(text: string): { cleanText: string; listingIds: string[] } {
+  const ids: string[] = [];
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(LISTING_TAG_REGEX.source, 'g');
+
+  while ((match = regex.exec(text)) !== null) {
+    if (!ids.includes(match[1])) {
+      ids.push(match[1]);
+    }
+  }
+
+  // Strip tags from displayed text
+  const cleanText = text.replace(LISTING_TAG_REGEX, '').replace(/\s{2,}/g, ' ').trim();
+
+  return { cleanText, listingIds: ids.slice(0, 3) }; // Max 3
+}
+
+/**
+ * Fetch display-ready listing cards for the given IDs.
+ * Only returns active listings (avoids showing sold/deleted items).
+ */
+async function fetchListingCards(listingIds: string[]): Promise<RecommendedListing[]> {
+  if (listingIds.length === 0) return [];
+
+  const listings = await prisma.listings.findMany({
+    where: {
+      id: { in: listingIds },
+      status: 'active',
+    },
+    include: {
+      images: { take: 1, orderBy: { display_order: 'asc' } },
+    },
+  });
+
+  return listings.map((l) => ({
+    id: l.id,
+    title: l.title,
+    price: `£${(Number(l.price) * 1.075 + 0.99).toFixed(2)}`,
+    brand: l.brand,
+    model: l.model,
+    image_url: l.images?.[0]?.image_url || null,
+    condition: l.condition_overall,
+  }));
+}
+
+// ============================================
 // CHAT SERVICE
 // ============================================
+
+export interface RecommendedListing {
+  id: string;
+  title: string;
+  price: string;       // buyer price formatted
+  brand: string | null;
+  model: string | null;
+  image_url: string | null;
+  condition: number | null;
+}
 
 export interface ChatResponse {
   message: string;
   tokensUsed: number;
   conversationId: string;
   messageId: string;
+  recommendedListings: RecommendedListing[];
 }
 
 /**
@@ -491,6 +643,7 @@ export async function sendMessage(
       tokensUsed: 0,
       conversationId,
       messageId: '',
+      recommendedListings: [],
     };
   }
 
@@ -502,6 +655,7 @@ export async function sendMessage(
       tokensUsed: 0,
       conversationId,
       messageId: '',
+      recommendedListings: [],
     };
   }
 
@@ -522,6 +676,7 @@ export async function sendMessage(
       tokensUsed: 0,
       conversationId,
       messageId: '',
+      recommendedListings: [],
     };
   }
 
@@ -583,6 +738,7 @@ export async function sendMessage(
         tokensUsed: 0,
         conversationId,
         messageId: '',
+        recommendedListings: [],
       };
     }
     return {
@@ -590,6 +746,7 @@ export async function sendMessage(
       tokensUsed: 0,
       conversationId,
       messageId: '',
+      recommendedListings: [],
     };
   }
 
@@ -605,7 +762,18 @@ export async function sendMessage(
   const tokensUsed =
     (claudeResponse.usage?.input_tokens || 0) + (claudeResponse.usage?.output_tokens || 0);
 
+  // 8b. Parse listing tags and fetch card data
+  const { cleanText, listingIds } = parseListingTags(validation.clean);
+  let recommendedListings: RecommendedListing[] = [];
+  try {
+    recommendedListings = await fetchListingCards(listingIds);
+  } catch (err) {
+    console.error('[CHIP] Failed to fetch listing cards:', err);
+    // Non-fatal — message still works without cards
+  }
+
   // 9. Save messages to DB with prompt version metadata
+  // Store the CLEAN text (tags stripped) so history reads naturally
   const [userMsg, assistantMsg] = await Promise.all([
     prisma.chip_messages.create({
       data: {
@@ -620,9 +788,12 @@ export async function sendMessage(
       data: {
         conversation_id: conversationId,
         role: 'assistant',
-        content: validation.clean,
+        content: cleanText,
         tokens_used: tokensUsed,
-        metadata: { prompt_version: CHIP_PROMPT_VERSION },
+        metadata: {
+          prompt_version: CHIP_PROMPT_VERSION,
+          listing_ids: listingIds, // Track which listings were recommended
+        },
       },
     }),
   ]);
@@ -634,13 +805,14 @@ export async function sendMessage(
   });
 
   // Log usage metadata (no message content)
-  console.log(`[CHIP] User ${userId} | Conv ${conversationId} | Tokens: ${tokensUsed} | Prompt: v${CHIP_PROMPT_VERSION}`);
+  console.log(`[CHIP] User ${userId} | Conv ${conversationId} | Tokens: ${tokensUsed} | Listings: ${listingIds.length} | Prompt: v${CHIP_PROMPT_VERSION}`);
 
   return {
-    message: validation.clean,
+    message: cleanText,
     tokensUsed,
     conversationId,
     messageId: assistantMsg.id,
+    recommendedListings,
   };
 }
 

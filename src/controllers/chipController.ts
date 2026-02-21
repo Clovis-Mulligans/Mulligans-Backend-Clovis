@@ -11,6 +11,7 @@ import {
   sendMessage,
   checkRateLimit,
   getRecommendations,
+  RecommendedListing,
 } from '../services/chipService';
 import {
   MAX_USER_MESSAGE_LENGTH,
@@ -289,6 +290,7 @@ export class ChipController {
           created_at: new Date().toISOString(),
         },
         tokens_used: response.tokensUsed,
+        recommended_listings: response.recommendedListings,
       });
     } catch (error: any) {
       console.error('❌ Error sending message:', error);
