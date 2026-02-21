@@ -895,6 +895,24 @@ export class NativePaymentController {
     const soldListingIds: string[] = [];
 
     await prisma.$transaction(async (tx) => {
+
+      // H1 cosmetic fix: only highest-shipping listing per seller carries the cost
+      const shippingLookup = await tx.listings.findMany({
+        where: { id: { in: itemsData.map((i: any) => i.listing_id) } },
+        select: { id: true, seller_id: true, shipping_cost: true },
+      });
+      const sellerShippingWinner: Record<string, string> = {};
+      for (const l of shippingLookup) {
+        const cost = parseFloat((l as any).shipping_cost?.toString() || '0');
+        const currentId = sellerShippingWinner[l.seller_id];
+        const currentCost = currentId
+          ? parseFloat((shippingLookup.find(x => x.id === currentId) as any)?.shipping_cost?.toString() || '0')
+          : -1;
+        if (cost > currentCost) {
+          sellerShippingWinner[l.seller_id] = l.id;
+        }
+      }
+
       for (const itemData of itemsData) {
         const listing = await tx.listings.findUnique({
           where: { id: itemData.listing_id },
@@ -917,7 +935,9 @@ export class NativePaymentController {
 
         const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
         const itemTotal = effectiveUnitPrice * itemData.quantity;
-        const orderShipping = Math.ceil(itemData.quantity / 5) * shippingCost;
+        // H1 cosmetic fix: only the max-shipping listing per seller carries shipping
+        const isShippingWinner = sellerShippingWinner[listing.seller_id] === itemData.listing_id;
+        const orderShipping = isShippingWinner ? Math.ceil(itemData.quantity / 5) * shippingCost : 0;
         const sellerPayout = itemTotal + orderShipping;
         const listingImage = listing.images?.[0]?.image_url || null;
 

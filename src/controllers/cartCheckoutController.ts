@@ -674,6 +674,28 @@ export class CartCheckoutController {
       // Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
 
+        // H1 cosmetic fix: only highest-shipping listing per seller carries the cost
+      const allListingIds = sellerBreakdown.flatMap(s => (s.cart_items || []).map((ci: any) => ci.listing_id));
+      const shippingLookup = await tx.listings.findMany({
+        where: { id: { in: allListingIds } },
+        select: { id: true, shipping_cost: true },
+      });
+      const shippingCostMap: Record<string, number> = {};
+      for (const l of shippingLookup) {
+        shippingCostMap[l.id] = parseFloat((l as any).shipping_cost?.toString() || '0');
+      }
+      const sellerShippingWinner: Record<string, string> = {};
+      for (const sd of sellerBreakdown) {
+        let maxCost = -1;
+        for (const ci of (sd.cart_items || [])) {
+          const cost = shippingCostMap[ci.listing_id] || 0;
+          if (cost > maxCost) {
+            maxCost = cost;
+            sellerShippingWinner[sd.seller_id] = ci.listing_id;
+          }
+        }
+      }
+
         // INSURANCE: Calculate total items value for proportional insurance split
       const totalItemsValue = sellerBreakdown.reduce((sum, s) => sum + s.subtotal, 0);
 
@@ -717,7 +739,9 @@ export class CartCheckoutController {
             const listingImage = listing.images[0]?.image_url || null;
 
             const currentStock = getStockForSize(listing, selectedSize);
-            const orderShipping = Math.ceil(orderQuantity / 5) * itemShippingCost;
+            // H1 cosmetic fix: only the max-shipping listing per seller carries shipping
+            const isShippingWinner = sellerShippingWinner[seller_id] === listingId;
+            const orderShipping = isShippingWinner ? Math.ceil(orderQuantity / 5) * itemShippingCost : 0;
 
             // Validate stock
             if (currentStock < orderQuantity) {
