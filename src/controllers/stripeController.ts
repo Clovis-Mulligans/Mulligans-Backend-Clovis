@@ -711,7 +711,8 @@ export class StripeController {
               listing_id,
               buyer_id,
               seller_id,
-              amount: parseFloat(metadata.total_price),
+              amount: parseFloat(metadata.item_price),
+              shipping_cost: parseFloat(metadata.shipping_total || '0'),
               quantity: orderQuantity,
               selected_size: selectedSize,  // SIZE VARIANT
               seller_payout: sellerPayout,

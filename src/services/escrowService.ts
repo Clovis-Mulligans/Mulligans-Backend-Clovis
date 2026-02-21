@@ -500,10 +500,7 @@ export async function autoReleaseEscrow(): Promise<void> {
         // CALCULATE CORRECT PAYOUT FOR GROUP
         // ============================================
         // Items: sum of seller payouts (excludes platform fee), fall back to amount for legacy orders
-        const itemsTotal = orders.reduce((sum, o) => {
-          const payout = o.seller_payout ?? o.amount;
-          return sum + parseFloat(payout.toString());
-        }, 0);
+        const itemsTotal = orders.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
         
         // Check if any order in the group was auto-shipped
         const isAutoShipped = orders.some(o => (o as any).label_auto_generated === true);
