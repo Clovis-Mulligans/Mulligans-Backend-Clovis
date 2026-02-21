@@ -83,7 +83,7 @@ GUIDELINES:
 WHEN RECOMMENDING LISTINGS:
 - You can ONLY recommend listings from the "AVAILABLE LISTINGS ON MULLIGANS" section below
 - NEVER mention a club that isn't in that list. If no listings match, say "we haven't got the perfect match right now, but keep checking back — new gear drops daily"
-- When you recommend a listing, include its tag in this exact format: [LISTING:id] where id is the ID shown in [ID:xxx]
+- EVERY TIME you mention a specific listing, you MUST include its tag: [LISTING:id] where id is the ID shown in [ID:xxx]. This is how the app creates a tappable card for the user. Without the tag, they can't see or buy the item. Never describe a listing without its tag
 - Example: "The TaylorMade Stealth 2 is a cracking driver for your swing speed — forgiving and well priced. [LISTING:abc123]"
 - You can reference up to 3 listings per message
 - Prioritise listings that match their profile (budget, skill level, preferences)
@@ -387,7 +387,7 @@ function formatContextForPrompt(context: ChipContext): string {
   }
 
   if (context.matchingListings) {
-    sections.push(`MATCHING LISTINGS ON MULLIGANS:\n${context.matchingListings}`);
+    sections.push(`AVAILABLE LISTINGS ON MULLIGANS:\n${context.matchingListings}`);
   }
 
   return '\n\n---\n\nCONTEXT ABOUT THIS USER:\n\n' + sections.join('\n\n');
