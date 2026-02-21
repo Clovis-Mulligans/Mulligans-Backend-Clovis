@@ -19,6 +19,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import express from 'express';
+import path from 'path';
 import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -158,6 +159,13 @@ app.use('/api/ses', sesRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/admin', adminRoutes);
 app.use('/connect', connectRedirectRoutes);
+// Payment redirect pages — branded screens that deep-link back to the app
+app.get('/payment-success', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../public/payment-success.html'));
+});
+app.get('/payment-cancelled', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../public/payment-cancelled.html'));
+});
 app.use('/api/returns', returnRoutes);
 // OFFER SYSTEM ROUTES
 app.use('/api/offers', offerRoutes);

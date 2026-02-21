@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Payment Successful – Mulligans</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1C4670 0%, #278AB0 50%, #1DC690 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      color: #FFFFFF;
+    }
+
+    .card {
+      background: #FFFFFF;
+      border-radius: 20px;
+      padding: 40px 28px;
+      max-width: 380px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .icon-circle {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #1DC690, #278AB0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+
+    .icon-circle svg {
+      width: 40px;
+      height: 40px;
+      fill: none;
+      stroke: #FFFFFF;
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      font-size: 15px;
+      color: #6B7280;
+      line-height: 1.5;
+      margin-bottom: 28px;
+    }
+
+    .open-app-btn {
+      display: block;
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, #1DC690, #278AB0);
+      color: #FFFFFF;
+      font-size: 17px;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: opacity 0.2s;
+    }
+
+    .open-app-btn:active {
+      opacity: 0.85;
+    }
+
+    .auto-text {
+      font-size: 13px;
+      color: #9CA3AF;
+      margin-top: 16px;
+    }
+
+    .logo-text {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.6);
+      margin-top: 24px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="card">
+      <div class="icon-circle">
+        <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </div>
+      <h1 class="title">Payment Successful!</h1>
+      <p class="subtitle">Your order has been confirmed. The seller will ship your item within 5 days.</p>
+      <a href="mulligans://payment-success" class="open-app-btn" id="openAppBtn">Return to Mulligans</a>
+      <p class="auto-text" id="autoText">Redirecting you back to the app…</p>
+    </div>
+    <p class="logo-text">Mulligans Golf</p>
+  </div>
+
+  <script>
+    // Auto-attempt deep link after a brief pause so the page renders first
+    setTimeout(function () {
+      window.location.href = 'mulligans://payment-success';
+    }, 600);
+
+    // If still on this page after 2s, the deep link didn't fire — update message
+    setTimeout(function () {
+      var el = document.getElementById('autoText');
+      if (el) el.textContent = 'Tap the button above to return to the app.';
+    }, 2500);
+  </script>
+</body>
+</html>

@@ -378,8 +378,8 @@ export class StripeController {
           escrow: 'true',
           offer_id: validatedOfferId || '',  // OFFER SYSTEM
         },
-        success_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.FRONTEND_URL || 'mulligans://'}payment-cancelled`,
+       success_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-cancelled`,
       });
 
       console.log('Checkout session created:', session.id);
