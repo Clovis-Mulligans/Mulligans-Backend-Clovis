@@ -343,6 +343,19 @@ async function fetchMatchingListingsForContext(
     where.brand = { in: profile.brand_preferences, mode: 'insensitive' };
   }
 
+  // Prioritise clubs over accessories/balls
+  if (profile?.looking_for?.length) {
+    const categoryMap: Record<string, string> = {
+      driver: 'Clubs', fairway_woods: 'Clubs', hybrids: 'Clubs',
+      irons: 'Clubs', wedges: 'Clubs', putter: 'Clubs', full_bag: 'Clubs',
+      balls: 'Balls', bag_accessories: 'Accessories',
+    };
+    const categories = [...new Set(profile.looking_for.map((l) => categoryMap[l]).filter(Boolean))];
+    if (categories.length) {
+      where.category = { in: categories };
+    }
+  }
+
   const listings = await prisma.listings.findMany({
     where,
     orderBy: { created_at: 'desc' },
@@ -974,12 +987,8 @@ export async function getRecommendations(
     bag_accessories: 'Accessories',
   };
 
-  if (profile.looking_for?.length) {
-    const categories = [...new Set(profile.looking_for.map((l) => categoryMap[l]).filter(Boolean))];
-    if (categories.length) {
-      where.category = { in: categories };
-    }
-  }
+  // Don't strictly filter by category — we'll use it for ordering instead
+  // This avoids showing only 2 headcovers when that's all that matches
 
   // Filter by budget range
   const budgetMax: Record<string, number> = {
@@ -1016,9 +1025,29 @@ export async function getRecommendations(
     where.brand = { in: profile.brand_preferences, mode: 'insensitive' };
   }
 
-  const [listings, total] = await Promise.all([
+  // Fetch preferred categories first, then backfill with other listings
+  let preferredCategories: string[] = [];
+  if (profile.looking_for?.length) {
+    preferredCategories = [...new Set(profile.looking_for.map((l) => categoryMap[l]).filter(Boolean))];
+  }
+
+  const [preferred, backfill, total] = await Promise.all([
+    preferredCategories.length > 0
+      ? prisma.listings.findMany({
+          where: { ...where, category: { in: preferredCategories } },
+          orderBy: [{ created_at: 'desc' }],
+          take: limit,
+          skip: offset,
+          include: {
+            images: { take: 1, orderBy: { display_order: 'asc' } },
+            listing_attributes: true,
+          },
+        })
+      : Promise.resolve([]),
     prisma.listings.findMany({
-      where,
+      where: preferredCategories.length > 0
+        ? { ...where, category: { notIn: preferredCategories } }
+        : where,
       orderBy: [{ created_at: 'desc' }],
       take: limit,
       skip: offset,
@@ -1029,6 +1058,9 @@ export async function getRecommendations(
     }),
     prisma.listings.count({ where }),
   ]);
+
+  // Preferred first, then backfill up to limit
+  const listings = [...preferred, ...backfill].slice(0, limit);
 
   // Post-filter for dexterity if profile has it
   let filtered = listings;
