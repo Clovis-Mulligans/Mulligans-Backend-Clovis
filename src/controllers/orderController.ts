@@ -307,6 +307,8 @@ export class OrderController {
         completed_at: order.completed_at?.toISOString() || null,
         cancelled_at: order.cancelled_at?.toISOString() || null,
         auto_cancel_at: order.auto_cancel_at?.toISOString() || null,
+        refunded_at: order.refunded_at?.toISOString() || null,
+        refund_amount: order.refund_amount ? parseFloat(order.refund_amount.toString()) : null,
         escrow_release_at: order.escrow_release_at?.toISOString() || null,
         buyer_id: order.buyer_id,
        buyer_name: order.users_orders_buyer_idTousers?.display_name || 'Unknown',
