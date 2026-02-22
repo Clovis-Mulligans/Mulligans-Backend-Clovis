@@ -274,24 +274,27 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
         });
 
         // 5. If this is 2nd+ strike, create automatic 1-star review
-        if (newStrikeCount >= 2) {
-          console.log(`[ESCROW] Seller ${seller.id} has ${newStrikeCount} strikes - creating auto-review`);
-
-          await prisma.reviews.create({
-            data: {
-              id: `review_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              order_id: order.id,
-              reviewer_id: 'system',
-              reviewed_user_id: seller.id,
-              rating: 1,
-              review_text: 'Order automatically cancelled - seller did not ship within the required timeframe.',
-              review_type: 'seller',
-              is_public: true,
-              created_at: now,
-            },
-          });
-
-          await updateUserRating(seller.id);
+       if (newStrikeCount >= 2) {
+          try {
+            console.log(`[ESCROW] Seller ${seller.id} has ${newStrikeCount} strikes - creating auto-review`);
+            await prisma.reviews.create({
+              data: {
+                id: `review_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                order_id: order.id,
+                reviewer_id: 'system',
+                reviewed_user_id: seller.id,
+                rating: 1,
+                review_text: 'Order automatically cancelled - seller did not ship within the required timeframe.',
+                review_type: 'seller',
+                is_public: true,
+                created_at: now,
+              },
+            });
+            await updateUserRating(seller.id);
+            console.log(`[ESCROW] Auto-review created for seller ${seller.id}`);
+          } catch (reviewError) {
+            console.error(`[ESCROW] ⚠️ Failed to create auto-review for seller ${seller.id}, continuing with cancellation:`, reviewError);
+          }
         }
 
         // 6. Notify buyer
