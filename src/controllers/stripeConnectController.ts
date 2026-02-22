@@ -228,7 +228,7 @@ return_url: return_url || 'https://api.mulligans.uk.com/connect/return',
    * Get seller balance
    * GET /api/stripe/connect/balance
    */
-  static async getBalance(req: Request, res: Response) {
+static async getBalance(req: Request, res: Response) {
     try {
       const userId = (req as any).user?.id;
 
@@ -241,25 +241,56 @@ return_url: return_url || 'https://api.mulligans.uk.com/connect/return',
         select: { stripe_connect_id: true },
       });
 
-      if (!user?.stripe_connect_id) {
-        return res.json({
-          available: 0,
-          pending: 0,
-          currency: 'gbp',
-        });
+      // Fetch earnings from orders database (no Stripe calls needed)
+      const [completedOrders, pendingEscrowOrders] = await Promise.all([
+        // Total earned: completed orders where this user was the seller
+        prisma.orders.findMany({
+          where: {
+            seller_id: userId,
+            status: { in: ['completed', 'delivered'] },
+          },
+          select: { seller_payout: true },
+        }),
+        // Pending escrow: delivered but not yet released
+        prisma.orders.findMany({
+          where: {
+            seller_id: userId,
+            status: 'delivered',
+          },
+          select: { seller_payout: true },
+        }),
+      ]);
+
+      const totalEarned = completedOrders.reduce(
+        (sum, o) => sum + (o.seller_payout ? parseFloat(o.seller_payout.toString()) : 0), 0
+      );
+      const pendingEscrow = pendingEscrowOrders.reduce(
+        (sum, o) => sum + (o.seller_payout ? parseFloat(o.seller_payout.toString()) : 0), 0
+      );
+
+      // Stripe balance (may be £0 if auto-payouts are on)
+      let available = 0;
+      let pending = 0;
+
+      if (user?.stripe_connect_id) {
+        try {
+          const balance = await stripe.balance.retrieve({
+            stripeAccount: user.stripe_connect_id,
+          });
+          available = (balance.available.find(b => b.currency === 'gbp')?.amount || 0) / 100;
+          pending = (balance.pending.find(b => b.currency === 'gbp')?.amount || 0) / 100;
+        } catch (balanceErr) {
+          console.error('[BALANCE] Stripe balance fetch failed (non-fatal):', balanceErr);
+        }
       }
 
-      const balance = await stripe.balance.retrieve({
-        stripeAccount: user.stripe_connect_id,
-      });
-
-      const available = balance.available.find(b => b.currency === 'gbp')?.amount || 0;
-      const pending = balance.pending.find(b => b.currency === 'gbp')?.amount || 0;
-
       res.json({
-        available: available / 100, // Convert from pence to pounds
-        pending: pending / 100,
+        available,
+        pending,
         currency: 'gbp',
+        total_earned: totalEarned,
+        pending_escrow: pendingEscrow,
+        completed_sales_count: completedOrders.length,
       });
     } catch (error: any) {
       console.error('❌ Get balance error:', error);
