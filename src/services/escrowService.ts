@@ -19,7 +19,7 @@
 
 import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
-import { sendEscrowReleased, sendReturnRefundProcessed } from './emailService';
+import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import crypto from 'crypto';
@@ -166,6 +166,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
         users_orders_seller_idTousers: {
           select: {
             id: true,
+            email: true,
             shipping_strikes: true,
             display_name: true,
           },
@@ -344,6 +345,36 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
           );
         } catch (pushErr) {
           console.error('[ESCROW] Push to seller failed:', pushErr);
+        }
+
+        // EMAIL: Send cancellation emails to both parties
+        try {
+          const buyer = order.users_orders_buyer_idTousers;
+          if (buyer?.email) {
+            await sendOrderCancellation(buyer.email, {
+              recipientName: buyer.display_name || 'there',
+              orderNumber: order.id,
+              itemTitle: listingTitle,
+              cancelReason: 'Seller did not ship within the required timeframe',
+              cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because the seller didn't ship it within ${SHIPPING_DEADLINE_DAYS} days.`,
+              refundMessage: 'A full refund has been issued to your original payment method. Please allow 5-10 business days for it to appear.',
+            });
+            console.log(`[ESCROW] ✅ Cancellation email sent to buyer: ${buyer.email}`);
+          }
+
+          if (seller?.email) {
+            await sendOrderCancellation(seller.email, {
+              recipientName: seller.display_name || 'there',
+              orderNumber: order.id,
+              itemTitle: listingTitle,
+              cancelReason: 'Shipping deadline missed',
+              cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because it wasn't shipped within ${SHIPPING_DEADLINE_DAYS} days.`,
+              refundMessage: 'A refund has been issued to the buyer.',
+            });
+            console.log(`[ESCROW] ✅ Cancellation email sent to seller: ${seller.email}`);
+          }
+        } catch (emailErr) {
+          console.error('[ESCROW] Cancellation email failed (non-fatal):', emailErr);
         }
 
         console.log(`[ESCROW] ✅ Order ${order.id} cancelled successfully`);
