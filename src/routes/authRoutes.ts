@@ -56,7 +56,8 @@ const signupLimiter = rateLimit({
  */
 router.post('/register', signupLimiter, async (req: Request, res: Response) => {
   try {
-    const { email, password, display_name, phone_number, marketing_emails } = req.body;
+    const { email: rawEmail, password, display_name, phone_number, marketing_emails } = req.body;
+const email = rawEmail?.trim().toLowerCase();
 
     console.log('📝 Registering user:', email);
 
@@ -145,7 +146,7 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
       
       // Check if user exists in our database and is unverified
       const existingUser = await prisma.users.findFirst({
-        where: { email: req.body.email },
+        where: { email: req.body.email?.trim().toLowerCase() },
       });
 
       if (existingUser && !existingUser.is_verified_seller) {
@@ -167,8 +168,8 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
 
         // Send new verification email
         try {
-          await sendVerificationEmail(req.body.email, verificationCode);
-          console.log('📧 New verification email sent to:', req.body.email);
+          await sendVerificationEmail(req.body.email?.trim().toLowerCase(), verificationCode);
+console.log('📧 New verification email sent to:', req.body.email?.trim().toLowerCase());
         } catch (emailError) {
           console.error('❌ Failed to send verification email:', emailError);
         }
@@ -201,7 +202,8 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
  */
 router.post('/verify-email', async (req: Request, res: Response) => {
   try {
-    const { email, code } = req.body;
+    const { email: rawEmail, code } = req.body;
+const email = rawEmail?.trim().toLowerCase();
 
     if (!email || !code) {
       return res.status(400).json({ error: 'Email and verification code are required' });
@@ -300,7 +302,8 @@ router.post('/verify-email', async (req: Request, res: Response) => {
  */
 router.post('/resend-verification', async (req: Request, res: Response) => {
   try {
-    const { email } = req.body;
+    const { email: rawEmail } = req.body;
+const email = rawEmail?.trim().toLowerCase();
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
@@ -353,7 +356,8 @@ router.post('/resend-verification', async (req: Request, res: Response) => {
  */
 router.post('/forgot-password', async (req: Request, res: Response) => {
   try {
-    const { email } = req.body;
+    const { email: rawEmail } = req.body;
+const email = rawEmail?.trim().toLowerCase();
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
@@ -408,7 +412,8 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
  */
 router.post('/reset-password', async (req: Request, res: Response) => {
   try {
-    const { email, code, password } = req.body;
+    const { email: rawEmail, code, password } = req.body;
+const email = rawEmail?.trim().toLowerCase();
 
     if (!email || !code || !password) {
       return res.status(400).json({ error: 'Email, code, and new password are required' });
@@ -558,7 +563,8 @@ router.post('/change-password', authenticateToken, async (req: any, res: Respons
  */
 router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const { email: rawEmail, password } = req.body;
+const email = rawEmail?.trim().toLowerCase();
 
     console.log('🔑 Login attempt for:', email);
 
