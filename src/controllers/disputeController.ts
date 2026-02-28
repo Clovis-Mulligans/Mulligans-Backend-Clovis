@@ -499,6 +499,10 @@ export class DisputeController {
             refundAmount: requestedRefundAmount.toFixed(2),
             refundPercent: requestedRefundPercent.toString(),
             deadline: sellerDeadline,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send dispute email to seller:', emailError);
@@ -517,6 +521,10 @@ export class DisputeController {
             reasonText: reasonText,
             refundAmount: requestedRefundAmount.toFixed(2),
             refundPercent: requestedRefundPercent.toString(),
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send dispute confirmation to buyer:', emailError);
@@ -978,6 +986,10 @@ export class DisputeController {
             isCounterOffer: responseType === 'counter',
             counterOfferAmount: counterOfferAmount?.toFixed(2),
             sellerMessage: responseText || 'No message provided',
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send dispute response email to buyer:', emailError);
@@ -995,6 +1007,10 @@ export class DisputeController {
             refundAmount: resolutionAmount?.toFixed(2),
             adminNotes: 'The seller accepted your refund request.',
             isBuyer: true,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send resolution email to buyer:', emailError);
@@ -1006,6 +1022,7 @@ export class DisputeController {
         try {
           await sendDisputeEscalatedToAdmin({
             disputeId: disputeId,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             itemTitle: listingTitle,
             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
             buyerName: buyer.display_name || 'Buyer',
@@ -1014,6 +1031,10 @@ export class DisputeController {
             sellerEmail: seller.email || '',
             reasonType: dispute.reason_type,
             escalationReason: 'Seller rejected the buyer\'s claim',
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send escalation email to admin:', emailError);
@@ -1187,6 +1208,10 @@ export class DisputeController {
             refundAmount: counterOfferAmount.toFixed(2),
             adminNotes: 'You accepted the seller\'s counter proposal.',
             isBuyer: true,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send resolution email to buyer:', emailError);
@@ -1203,6 +1228,10 @@ export class DisputeController {
             refundAmount: counterOfferAmount.toFixed(2),
             adminNotes: `The buyer accepted your counter proposal.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ' Your payout is being processed.'}`,
             isBuyer: false,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send resolution email to seller:', emailError);
@@ -1313,6 +1342,7 @@ export class DisputeController {
       try {
         await sendDisputeEscalatedToAdmin({
           disputeId: disputeId,
+          orderNumber: dispute.order_id.slice(-8).toUpperCase(),
           itemTitle: listingTitle,
           refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
           buyerName: buyer.display_name || 'Buyer',
@@ -1320,9 +1350,13 @@ export class DisputeController {
           sellerName: seller.display_name || 'Seller',
           sellerEmail: seller.email || '',
           reasonType: dispute.reason_type,
-          escalationReason: additionalNotes 
+          escalationReason: additionalNotes
             ? `Buyer rejected counter proposal: ${additionalNotes}`
             : 'Buyer rejected the seller\'s counter proposal',
+          itemImageUrl: dispute.orders?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
         });
       } catch (emailError) {
         console.error('⚠️ Failed to send escalation email to admin:', emailError);
@@ -1336,6 +1370,10 @@ export class DisputeController {
             itemTitle: listingTitle,
             orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send escalation confirmation to buyer:', emailError);
@@ -1580,6 +1618,10 @@ export class DisputeController {
             refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
             adminNotes: resolutionNotes,
             isBuyer: true,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
           console.log(`✅ Dispute resolution email sent to buyer: ${buyer.email}`);
         } catch (emailError) {
@@ -1597,6 +1639,10 @@ export class DisputeController {
             refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
             adminNotes: `${resolutionNotes}${transferResult.success && transferResult.amount && transferResult.amount > 0 ? ` £${transferResult.amount.toFixed(2)} has been transferred to your account.` : ''}`,
             isBuyer: false,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
           console.log(`✅ Dispute resolution email sent to seller: ${seller.email}`);
         } catch (emailError) {
@@ -1892,6 +1938,7 @@ export class DisputeController {
             select: {
               listing_title: true,
               listing_image: true,
+              amount: true,
             },
           },
           users_disputes_buyer: {
@@ -1984,6 +2031,7 @@ export class DisputeController {
         try {
           await sendDisputeEscalatedToAdmin({
             disputeId: dispute.id,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             itemTitle: listingTitle,
             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
             buyerName: buyer.display_name || 'Buyer',
@@ -1992,6 +2040,10 @@ export class DisputeController {
             sellerEmail: seller.email || '',
             reasonType: dispute.reason_type,
             escalationReason: 'Auto-escalated: Seller failed to respond within 72 hours',
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send auto-escalation email to admin:', emailError);
@@ -2005,6 +2057,10 @@ export class DisputeController {
               itemTitle: listingTitle,
               orderNumber: dispute.order_id.slice(-8).toUpperCase(),
               refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+              itemImageUrl: dispute.orders?.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
             });
           } catch (emailError) {
             console.error('⚠️ Failed to send auto-escalation confirmation to buyer:', emailError);

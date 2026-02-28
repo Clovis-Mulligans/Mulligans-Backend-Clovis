@@ -361,6 +361,10 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
               cancelReason: 'Seller did not ship within the required timeframe',
               cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because the seller didn't ship it within ${SHIPPING_DEADLINE_DAYS} days.`,
               refundMessage: 'A full refund has been issued to your original payment method. Please allow 5-10 business days for it to appear.',
+              itemImageUrl: listingImage || order.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
             });
             console.log(`[ESCROW] ✅ Cancellation email sent to buyer: ${buyer.email}`);
           }
@@ -373,6 +377,10 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
               cancelReason: 'Shipping deadline missed',
               cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because it wasn't shipped within ${SHIPPING_DEADLINE_DAYS} days.`,
               refundMessage: 'A refund has been issued to the buyer.',
+              itemImageUrl: listingImage || order.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
             });
             console.log(`[ESCROW] ✅ Cancellation email sent to seller: ${seller.email}`);
           }
@@ -724,6 +732,13 @@ export async function autoReleaseEscrow(): Promise<void> {
               salePrice: itemsTotal.toFixed(2),
               fees: labelCostTotal.toFixed(2),
               payoutAmount: payoutAmount,
+              sellerName: seller.display_name || 'Seller',
+              itemName: itemDescription,
+              itemImageUrl: firstOrder.listings?.images?.[0]?.image_url || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${itemsTotal.toFixed(2)}`,
+              earningsUrl: '#',
             });
             console.log('[ESCROW] Escrow released email sent to seller:', seller.email);
           } catch (emailError) {
@@ -953,6 +968,10 @@ export async function autoProcessReturnRefunds(): Promise<void> {
               refundAmount: refundAmount.toFixed(2),
               shippingDeducted: shippingDeducted > 0 ? shippingDeducted.toFixed(2) : undefined,
               orderNumber: order.id.slice(-8).toUpperCase(),
+              itemImageUrl: listingImage || order.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
             });
             console.log(`[ESCROW] Refund email sent to buyer: ${buyer.email}`);
           }

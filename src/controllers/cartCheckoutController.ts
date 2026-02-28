@@ -990,7 +990,7 @@ export class CartCheckoutController {
         // Send sale notification EMAIL to seller
         const sellerEmailRecord = await prisma.users.findUnique({
           where: { id: seller_id },
-          select: { email: true },
+          select: { email: true, display_name: true },
         });
 
         if (sellerEmailRecord?.email) {
@@ -1005,6 +1005,16 @@ export class CartCheckoutController {
               orderNumber: createdOrders[0]?.id || 'N/A',
               buyerName: buyer?.display_name || 'Buyer',
               shippingAddress: shippingAddr,
+              sellerName: sellerEmailRecord?.display_name || 'Seller',
+              itemName: listing_ids.length === 1 ? (createdOrders[0]?.listing_title || 'Item') : `${listing_ids.length} items`,
+              itemImageUrl: createdOrders[0]?.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${subtotal.toFixed(2)}`,
+              buyerProtectionFee: '0.00',
+              sellerEarnings: subtotal.toFixed(2),
+              shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+              shipUrl: '#',
             });
             console.log('[CART] Sale notification email sent to seller:', sellerEmailRecord.email);
           } catch (emailError) {
@@ -1062,6 +1072,19 @@ export class CartCheckoutController {
             itemsList: itemsListHtml,
             totalAmount: `£${grandTotal}`,
             shippingAddress: formattedAddress.replace(/\n/g, '<br>'),
+            orderReference: createdOrders[0]?.id || session.id,
+            itemName: orderItems.length === 1 ? orderItems[0].name : `${orderItems.length} items`,
+            itemImageUrl: createdOrders[0]?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: orderItems.length === 1 ? `£${orderItems[0].price.replace('£', '')}` : `£${grandTotal}`,
+            itemSubtotal: grandTotal,
+            buyerProtectionFee: '0.00',
+            serviceFee: '0.99',
+            shippingCost: '0.00',
+            orderTotal: grandTotal,
+            paymentMethod: 'Card payment',
+            orderUrl: '#',
           });
 
           console.log('[CART] Order confirmation email sent to:', buyer.email);

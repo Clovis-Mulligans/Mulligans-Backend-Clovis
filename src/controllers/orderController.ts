@@ -679,6 +679,14 @@ if (order.disputes) {
             trackingNumber: tracking_number,
             carrier: carrier,
             orderId: orderId,
+            orderReference: orderId,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+            carrierName: carrier,
+            estimatedDelivery: '3-5 business days',
+            trackingUrl: '#',
           });
           console.log('📧 Shipping notification email sent to:', buyerEmail);
         } catch (emailError) {
@@ -784,12 +792,21 @@ if (order.disputes) {
           await sendDeliveryConfirmation(buyerEmailRecord.email, {
             itemTitle: listingTitle,
             orderNumber: orderId,
-            deliveryDate: new Date().toLocaleDateString('en-GB', { 
-              weekday: 'long', 
-              year: 'numeric', 
-              month: 'long', 
-              day: 'numeric' 
+            deliveryDate: new Date().toLocaleDateString('en-GB', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
             }),
+            buyerName: buyerEmailRecord?.display_name || 'there',
+            orderReference: orderId,
+            itemName: listingTitle,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+            confirmUrl: '#',
+            reportIssueUrl: '#',
           });
           console.log('📧 Delivery confirmation email sent to:', buyerEmailRecord.email);
         } catch (emailError) {
@@ -1081,6 +1098,10 @@ if (order.disputes) {
             itemTitle: listingTitle,
             orderNumber: orderId,
             sellerName: sellerUser?.display_name || 'the seller',
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           }).catch(err => console.error('[ORDER] Email error:', err));
         }
 
@@ -1090,6 +1111,10 @@ if (order.disputes) {
             itemTitle: listingTitle,
             orderNumber: orderId,
             buyerName: buyerUser?.display_name || 'The buyer',
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           }).catch(err => console.error('[ORDER] Email error:', err));
         }
       } catch (emailErr) {
@@ -1385,6 +1410,10 @@ if (isBuyerCancelling) {
               ? 'Your order has been cancelled as requested.'
               : `The seller has cancelled your order for "${listingTitle}".`,
             refundMessage: isBuyer ? refundMsg : `${refundMsg} The item has been relisted and is available for other buyers.`,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           });
         }
 
@@ -1398,6 +1427,10 @@ if (isBuyerCancelling) {
               ? `The buyer has cancelled their order for "${listingTitle}". Your item has been relisted.`
               : 'Your cancellation has been processed.',
             refundMessage: isBuyer ? '' : 'A refund has been issued to the buyer.',
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           });
         }
       } catch (emailErr) {
@@ -1679,6 +1712,14 @@ if (isBuyerCancelling) {
             salePrice: salePrice,
             fees: fees,
             payoutAmount: payoutAmount,
+            sellerName: seller?.display_name || 'Seller',
+            itemName: listingTitle,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+            paymentAmount: payoutAmount,
+            earningsUrl: '#',
           });
           console.log('📧 Escrow released email sent to seller:', sellerEmailRecord.email);
         } catch (emailError) {

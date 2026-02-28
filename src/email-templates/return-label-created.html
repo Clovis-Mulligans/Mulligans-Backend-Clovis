@@ -3,64 +3,177 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Return Label Created - Mulligans</title>
+  <title>Return Label Ready — Mulligans</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+
+  <!-- Preheader (hidden) -->
+  <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #EAEAE0;">Your return label is ready &mdash; ship your item back&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;</div>
+
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
     <tr>
       <td align="center" style="padding: 40px 20px;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+
           <!-- Blue Header with Logo -->
           <tr>
             <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
               <img src="https://images.mulligans.uk.com/email-assets/EmailMainHeaderLogo.png" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
             </td>
           </tr>
+
           <!-- Content -->
           <tr>
             <td style="padding: 40px;">
-              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">🏷️ Return Label Created</h1>
-              
-              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{recipientName}},</p>
-              
-              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">{{message}}</p>
-              
-              <!-- Return Details -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
-                <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Item</p>
-                    <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #111827;">{{itemTitle}}</p>
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Carrier</p>
-                    <p style="margin: 0 0 16px 0; font-size: 16px; font-weight: 600; color: #111827;">{{carrier}}</p>
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Tracking Number</p>
-                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #1DC690;">{{trackingNumber}}</p>
-                  </td>
-                </tr>
-              </table>
-              
-              <p style="margin: 0 0 30px 0; color: #6B7280; font-size: 14px; text-align: center;">You can track the return status in the Mulligans app.</p>
-              
-              <!-- CTA Button -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 30px;">
+
+              <!-- Headline -->
+              <h1 style="margin: 0 0 16px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Return Label Ready</h1>
+
+              <!-- Status Badge -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 28px;">
                 <tr>
                   <td align="center">
-                    <a href="https://mulligansgolf.carrd.co" style="display: inline-block; padding: 14px 32px; background-color: #1DC690; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">View in App</a>
+                    <span style="display: inline-block; padding: 6px 16px; background-color: #eff6ff; color: #1e40af; border-radius: 20px; font-size: 13px; font-weight: 600;">Return in Progress</span>
                   </td>
                 </tr>
               </table>
+
+              <!-- Greeting -->
+              <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{recipientName}},</p>
+
+              <p style="margin: 0 0 24px 0; color: #374151; font-size: 16px; line-height: 1.6;">Your return label has been created. Please ship the item back as soon as possible.</p>
+
+              <!-- Item Detail Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
+                <tr>
+                  <td style="padding: 16px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td width="100" valign="top" style="padding-right: 16px;">
+                          <img src="{{itemImageUrl}}" alt="{{itemTitle}}" width="100" height="100" style="display: block; border-radius: 6px; object-fit: cover; background-color: #e5e7eb;">
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #111827;">{{itemTitle}}</p>
+                          <p style="margin: 0 0 4px 0; font-size: 14px; color: #6B7280;">{{itemBrand}} &middot; {{itemCondition}}</p>
+                          <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1C4670;">{{itemPrice}}</p>
+                          <p style="margin: 0; font-size: 13px; color: #9CA3AF;">Order #{{orderReference}}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Shipping Details Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0;">
+                <tr>
+                  <td style="background-color: #f3f4f6; border-radius: 8px; padding: 20px 24px;">
+                    <p style="margin: 0 0 12px 0; font-size: 15px; font-weight: 700; color: #1C4670;">Shipping Details</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="padding: 5px 0;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td style="font-size: 14px; color: #6B7280; width: 120px;">Carrier</td>
+                              <td style="font-size: 14px; font-weight: 600; color: #111827;">{{carrier}}</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 5px 0;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td style="font-size: 14px; color: #6B7280; width: 120px;">Tracking</td>
+                              <td style="font-size: 14px; font-weight: 600; color: #111827;">{{trackingNumber}}</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- Additional instructions -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                      <tr>
+                        <td style="font-size: 14px; color: #374151; line-height: 1.6; padding-top: 12px;">{{message}}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- How to Return Steps -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0;">
+                <tr>
+                  <td>
+                    <p style="margin: 0 0 16px 0; font-size: 16px; font-weight: 600; color: #1C4670;">How to return your item</p>
+
+                    <!-- Step 1 -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 12px;">
+                      <tr>
+                        <td valign="top" width="32" style="padding-right: 12px; padding-top: 1px;">
+                          <span style="display: inline-block; width: 24px; height: 24px; background-color: #1C4670; color: #ffffff; border-radius: 50%; font-size: 13px; font-weight: 700; text-align: center; line-height: 24px;">1</span>
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.6;">Pack the item securely in its original packaging if possible</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Step 2 -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 12px;">
+                      <tr>
+                        <td valign="top" width="32" style="padding-right: 12px; padding-top: 1px;">
+                          <span style="display: inline-block; width: 24px; height: 24px; background-color: #1C4670; color: #ffffff; border-radius: 50%; font-size: 13px; font-weight: 700; text-align: center; line-height: 24px;">2</span>
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.6;">Attach the return label</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Step 3 -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td valign="top" width="32" style="padding-right: 12px; padding-top: 1px;">
+                          <span style="display: inline-block; width: 24px; height: 24px; background-color: #1C4670; color: #ffffff; border-radius: 50%; font-size: 13px; font-weight: 700; text-align: center; line-height: 24px;">3</span>
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.6;">Drop off at your nearest {{carrier}} location</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 8px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="{{labelUrl}}" style="display: inline-block; padding: 14px 40px; background-color: #1DC690; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: bold; border-radius: 6px;">View Return Label</a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Sign-off -->
+              <p style="margin: 32px 0 0 0; color: #374151; font-size: 16px; line-height: 1.6;">Best regards,<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
+
             </td>
           </tr>
+
           <!-- Blue Footer -->
           <tr>
             <td style="padding: 30px 40px; background-color: #1C4670;">
               <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
-              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">© 2025 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligansgolf.carrd.co/#privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
+              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">&copy; 2026 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligans.uk.com/privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
             </td>
           </tr>
+
         </table>
       </td>
     </tr>
   </table>
+
 </body>
 </html>

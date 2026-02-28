@@ -264,6 +264,10 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
           itemTitle: listingTitle,
           orderNumber: orderId.slice(-8).toUpperCase(),
           buyerName: order.users_orders_buyer_idTousers.display_name || 'Buyer',
+          itemImageUrl: order.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
         });
       } catch (emailErr) {
         console.error('[RETURN] Failed to send address needed email:', emailErr);
@@ -650,6 +654,11 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
           carrier: carrierName,
           trackingNumber: transaction.trackingNumber || '',
           message: `The buyer has created a return label and will be sending back "${listingTitle}". Keep an eye out for the delivery.`,
+          orderNumber: returnRequest.order_id?.slice(-8).toUpperCase() || '',
+          itemImageUrl: returnRequest.orders?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(returnRequest.orders?.listings?.price?.toString() || returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
         });
       }
     } catch (emailErr) {
@@ -869,6 +878,11 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
           carrier: carrierName,
           trackingNumber: transaction.trackingNumber || '',
           message: `The seller has purchased a return label for "${listingTitle}". Please print the label and ship the item back to receive your refund.`,
+          orderNumber: returnRequest.order_id?.slice(-8).toUpperCase() || '',
+          itemImageUrl: returnRequest.orders?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(returnRequest.orders?.listings?.price?.toString() || returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
         });
       }
     } catch (emailErr) {
@@ -983,6 +997,11 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
           itemTitle: listingTitle,
           carrier: returnRequest.return_carrier || 'Carrier',
           trackingNumber: returnRequest.return_tracking_number || '',
+          orderNumber: returnRequest.order_id?.slice(-8).toUpperCase() || '',
+          itemImageUrl: returnRequest.orders?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
         });
       }
     } catch (emailErr) {
@@ -1094,6 +1113,10 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
           refundAmount: refundAmount,
           shippingDeducted: returnRequest.shipping_deducted?.toFixed(2) || undefined,
           orderNumber: returnRequest.order_id.slice(-8).toUpperCase(),
+          itemImageUrl: returnRequest.orders?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
         });
       }
     } catch (emailErr) {

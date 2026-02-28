@@ -921,6 +921,15 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
                   month: 'long',
                   day: 'numeric',
                 }),
+                buyerName: buyerEmailRecord?.display_name || 'there',
+                orderReference: order.id,
+                itemName: listingTitle,
+                itemImageUrl: listingImage || '',
+                itemBrand: '',
+                itemCondition: '',
+                itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+                confirmUrl: '#',
+                reportIssueUrl: '#',
               });
             }
           } catch (emailErr) {

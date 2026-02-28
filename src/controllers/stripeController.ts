@@ -948,6 +948,19 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listingTitle}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${itemPrice.toFixed(2)}</td></tr>`,
             totalAmount: `£${parseFloat(metadata.total_price).toFixed(2)}`,
             shippingAddress: shippingAddr,
+            orderReference: order.id,
+            itemName: listingTitle,
+            itemImageUrl: order.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${itemPrice.toFixed(2)}`,
+            itemSubtotal: itemPrice.toFixed(2),
+            buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
+            serviceFee: metadata.service_fee || '0.00',
+            shippingCost: metadata.shipping_cost || '0.00',
+            orderTotal: parseFloat(metadata.total_price).toFixed(2),
+            paymentMethod: 'Card payment',
+            orderUrl: '#',
           });
         }
 
@@ -962,6 +975,16 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             orderNumber: order.id,
             buyerName: buyerRecord?.display_name || 'A buyer',
             shippingAddress: shippingAddr,
+            sellerName: sellerRecord?.display_name || 'Seller',
+            itemName: listingTitle,
+            itemImageUrl: order.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${itemPrice.toFixed(2)}`,
+            buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
+            sellerEarnings: (itemPrice - parseFloat(metadata.buyer_protection_fee || '0')).toFixed(2),
+            shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+            shipUrl: '#',
           });
         }
       } catch (emailErr) {

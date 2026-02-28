@@ -826,6 +826,19 @@ export class NativePaymentController {
           itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listing.title}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${metadata.item_total}</td></tr>`,
           totalAmount: `£${metadata.grand_total}`,
           shippingAddress: addr,
+          orderReference: createdOrder.id,
+          itemName: listing.title,
+          itemImageUrl: listing.images?.[0]?.image_url || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
+          itemSubtotal: metadata.item_total,
+          buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
+          serviceFee: metadata.service_fee || '0.00',
+          shippingCost: metadata.shipping_cost || '0.00',
+          orderTotal: metadata.grand_total,
+          paymentMethod: 'Apple Pay',
+          orderUrl: '#',
         });
       }
 
@@ -840,6 +853,16 @@ export class NativePaymentController {
           orderNumber: createdOrder.id,
           buyerName: buyerRecord?.display_name || 'A buyer',
           shippingAddress: addr,
+          sellerName: sellerRecord?.display_name || 'Seller',
+          itemName: listing.title,
+          itemImageUrl: listing.images?.[0]?.image_url || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
+          buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
+          sellerEarnings: (parseFloat(metadata.item_total) - parseFloat(metadata.buyer_protection_fee || '0')).toFixed(2),
+          shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+          shipUrl: '#',
         });
       }
     } catch (emailErr) {
@@ -1141,12 +1164,28 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
           ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
           : 'See app for details';
 
+        const shipping_total = parseFloat(paymentIntent.metadata?.shipping_total || '0');
+        const platform_fee = parseFloat(paymentIntent.metadata?.platform_fee || '0');
+
         await sendOrderConfirmation(buyerRecord.email, {
           buyerName: buyerRecord.display_name || 'there',
           orderId: orders[0]?.id || 'N/A',
           itemsList: itemsListHtml,
-          totalAmount: `£${(totalAmount + parseFloat(paymentIntent.metadata?.shipping_total || '0') + parseFloat(paymentIntent.metadata?.platform_fee || '0')).toFixed(2)}`,
+          totalAmount: `£${(totalAmount + shipping_total + platform_fee).toFixed(2)}`,
           shippingAddress: shippingAddr,
+          orderReference: orders[0]?.id || 'N/A',
+          itemName: orders.length === 1 ? (orders[0]?.listing_title || 'Your item') : `${orders.length} items`,
+          itemImageUrl: orders[0]?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(orders[0]?.amount?.toString() || '0').toFixed(2)}`,
+          itemSubtotal: totalAmount.toFixed(2),
+          buyerProtectionFee: platform_fee.toFixed(2),
+          serviceFee: '0.99',
+          shippingCost: shipping_total.toFixed(2),
+          orderTotal: (totalAmount + shipping_total + platform_fee).toFixed(2),
+          paymentMethod: 'Apple Pay',
+          orderUrl: '#',
         });
       }
 
@@ -1171,6 +1210,16 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
             shippingAddress: paymentIntent.shipping?.address
               ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
               : 'See app for details',
+            sellerName: sellerRecord?.display_name || 'Seller',
+            itemName: sellerOrderList.length === 1 ? (sellerOrderList[0].listing_title || 'Item') : `${sellerOrderList.length} items`,
+            itemImageUrl: sellerOrderList[0]?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${sellerTotal.toFixed(2)}`,
+            buyerProtectionFee: '0.00',
+            sellerEarnings: sellerTotal.toFixed(2),
+            shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+            shipUrl: '#',
           });
         }
       }

@@ -1,0 +1,1104 @@
+diff --git a/src/controllers/cartCheckoutController.ts b/src/controllers/cartCheckoutController.ts
+index b993a5f..d68e6e7 100644
+--- a/src/controllers/cartCheckoutController.ts
++++ b/src/controllers/cartCheckoutController.ts
+@@ -990,7 +990,7 @@ export class CartCheckoutController {
+         // Send sale notification EMAIL to seller
+         const sellerEmailRecord = await prisma.users.findUnique({
+           where: { id: seller_id },
+-          select: { email: true },
++          select: { email: true, display_name: true },
+         });
+ 
+         if (sellerEmailRecord?.email) {
+@@ -1005,6 +1005,16 @@ export class CartCheckoutController {
+               orderNumber: createdOrders[0]?.id || 'N/A',
+               buyerName: buyer?.display_name || 'Buyer',
+               shippingAddress: shippingAddr,
++              sellerName: sellerEmailRecord?.display_name || 'Seller',
++              itemName: listing_ids.length === 1 ? (createdOrders[0]?.listing_title || 'Item') : `${listing_ids.length} items`,
++              itemImageUrl: createdOrders[0]?.listing_image || '',
++              itemBrand: '',
++              itemCondition: '',
++              itemPrice: `£${subtotal.toFixed(2)}`,
++              buyerProtectionFee: '0.00',
++              sellerEarnings: subtotal.toFixed(2),
++              shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
++              shipUrl: '#',
+             });
+             console.log('[CART] Sale notification email sent to seller:', sellerEmailRecord.email);
+           } catch (emailError) {
+@@ -1062,6 +1072,19 @@ export class CartCheckoutController {
+             itemsList: itemsListHtml,
+             totalAmount: `£${grandTotal}`,
+             shippingAddress: formattedAddress.replace(/\n/g, '<br>'),
++            orderReference: createdOrders[0]?.id || session.id,
++            itemName: orderItems.length === 1 ? orderItems[0].name : `${orderItems.length} items`,
++            itemImageUrl: createdOrders[0]?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: orderItems.length === 1 ? `£${orderItems[0].price.replace('£', '')}` : `£${grandTotal}`,
++            itemSubtotal: grandTotal,
++            buyerProtectionFee: '0.00',
++            serviceFee: '0.99',
++            shippingCost: '0.00',
++            orderTotal: grandTotal,
++            paymentMethod: 'Card payment',
++            orderUrl: '#',
+           });
+ 
+           console.log('[CART] Order confirmation email sent to:', buyer.email);
+diff --git a/src/controllers/disputeController.ts b/src/controllers/disputeController.ts
+index 66faf84..9ba2a94 100644
+--- a/src/controllers/disputeController.ts
++++ b/src/controllers/disputeController.ts
+@@ -499,6 +499,10 @@ export class DisputeController {
+             refundAmount: requestedRefundAmount.toFixed(2),
+             refundPercent: requestedRefundPercent.toString(),
+             deadline: sellerDeadline,
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send dispute email to seller:', emailError);
+@@ -517,6 +521,10 @@ export class DisputeController {
+             reasonText: reasonText,
+             refundAmount: requestedRefundAmount.toFixed(2),
+             refundPercent: requestedRefundPercent.toString(),
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send dispute confirmation to buyer:', emailError);
+@@ -978,6 +986,10 @@ export class DisputeController {
+             isCounterOffer: responseType === 'counter',
+             counterOfferAmount: counterOfferAmount?.toFixed(2),
+             sellerMessage: responseText || 'No message provided',
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send dispute response email to buyer:', emailError);
+@@ -995,6 +1007,10 @@ export class DisputeController {
+             refundAmount: resolutionAmount?.toFixed(2),
+             adminNotes: 'The seller accepted your refund request.',
+             isBuyer: true,
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+@@ -1006,6 +1022,7 @@ export class DisputeController {
+         try {
+           await sendDisputeEscalatedToAdmin({
+             disputeId: disputeId,
++            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+             itemTitle: listingTitle,
+             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+             buyerName: buyer.display_name || 'Buyer',
+@@ -1014,6 +1031,10 @@ export class DisputeController {
+             sellerEmail: seller.email || '',
+             reasonType: dispute.reason_type,
+             escalationReason: 'Seller rejected the buyer\'s claim',
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send escalation email to admin:', emailError);
+@@ -1187,6 +1208,10 @@ export class DisputeController {
+             refundAmount: counterOfferAmount.toFixed(2),
+             adminNotes: 'You accepted the seller\'s counter proposal.',
+             isBuyer: true,
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+@@ -1203,6 +1228,10 @@ export class DisputeController {
+             refundAmount: counterOfferAmount.toFixed(2),
+             adminNotes: `The buyer accepted your counter proposal.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ' Your payout is being processed.'}`,
+             isBuyer: false,
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send resolution email to seller:', emailError);
+@@ -1313,6 +1342,7 @@ export class DisputeController {
+       try {
+         await sendDisputeEscalatedToAdmin({
+           disputeId: disputeId,
++          orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+           itemTitle: listingTitle,
+           refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+           buyerName: buyer.display_name || 'Buyer',
+@@ -1320,9 +1350,13 @@ export class DisputeController {
+           sellerName: seller.display_name || 'Seller',
+           sellerEmail: seller.email || '',
+           reasonType: dispute.reason_type,
+-          escalationReason: additionalNotes 
++          escalationReason: additionalNotes
+             ? `Buyer rejected counter proposal: ${additionalNotes}`
+             : 'Buyer rejected the seller\'s counter proposal',
++          itemImageUrl: dispute.orders?.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+         });
+       } catch (emailError) {
+         console.error('⚠️ Failed to send escalation email to admin:', emailError);
+@@ -1336,6 +1370,10 @@ export class DisputeController {
+             itemTitle: listingTitle,
+             orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send escalation confirmation to buyer:', emailError);
+@@ -1580,6 +1618,10 @@ export class DisputeController {
+             refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
+             adminNotes: resolutionNotes,
+             isBuyer: true,
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+           console.log(`✅ Dispute resolution email sent to buyer: ${buyer.email}`);
+         } catch (emailError) {
+@@ -1597,6 +1639,10 @@ export class DisputeController {
+             refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
+             adminNotes: `${resolutionNotes}${transferResult.success && transferResult.amount && transferResult.amount > 0 ? ` £${transferResult.amount.toFixed(2)} has been transferred to your account.` : ''}`,
+             isBuyer: false,
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+           console.log(`✅ Dispute resolution email sent to seller: ${seller.email}`);
+         } catch (emailError) {
+@@ -1892,6 +1938,7 @@ export class DisputeController {
+             select: {
+               listing_title: true,
+               listing_image: true,
++              amount: true,
+             },
+           },
+           users_disputes_buyer: {
+@@ -1984,6 +2031,7 @@ export class DisputeController {
+         try {
+           await sendDisputeEscalatedToAdmin({
+             disputeId: dispute.id,
++            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+             itemTitle: listingTitle,
+             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+             buyerName: buyer.display_name || 'Buyer',
+@@ -1992,6 +2040,10 @@ export class DisputeController {
+             sellerEmail: seller.email || '',
+             reasonType: dispute.reason_type,
+             escalationReason: 'Auto-escalated: Seller failed to respond within 72 hours',
++            itemImageUrl: dispute.orders?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+           });
+         } catch (emailError) {
+           console.error('⚠️ Failed to send auto-escalation email to admin:', emailError);
+@@ -2005,6 +2057,10 @@ export class DisputeController {
+               itemTitle: listingTitle,
+               orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+               refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
++              itemImageUrl: dispute.orders?.listing_image || '',
++              itemBrand: '',
++              itemCondition: '',
++              itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+             });
+           } catch (emailError) {
+             console.error('⚠️ Failed to send auto-escalation confirmation to buyer:', emailError);
+diff --git a/src/controllers/nativePaymentController.ts b/src/controllers/nativePaymentController.ts
+index 93a8b88..2ac2436 100644
+--- a/src/controllers/nativePaymentController.ts
++++ b/src/controllers/nativePaymentController.ts
+@@ -826,6 +826,19 @@ export class NativePaymentController {
+           itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listing.title}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${metadata.item_total}</td></tr>`,
+           totalAmount: `£${metadata.grand_total}`,
+           shippingAddress: addr,
++          orderReference: createdOrder.id,
++          itemName: listing.title,
++          itemImageUrl: listing.images?.[0]?.image_url || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
++          itemSubtotal: metadata.item_total,
++          buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
++          serviceFee: metadata.service_fee || '0.00',
++          shippingCost: metadata.shipping_cost || '0.00',
++          orderTotal: metadata.grand_total,
++          paymentMethod: 'Apple Pay',
++          orderUrl: '#',
+         });
+       }
+ 
+@@ -840,6 +853,16 @@ export class NativePaymentController {
+           orderNumber: createdOrder.id,
+           buyerName: buyerRecord?.display_name || 'A buyer',
+           shippingAddress: addr,
++          sellerName: sellerRecord?.display_name || 'Seller',
++          itemName: listing.title,
++          itemImageUrl: listing.images?.[0]?.image_url || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
++          buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
++          sellerEarnings: (parseFloat(metadata.item_total) - parseFloat(metadata.buyer_protection_fee || '0')).toFixed(2),
++          shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
++          shipUrl: '#',
+         });
+       }
+     } catch (emailErr) {
+@@ -1141,12 +1164,28 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
+           ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
+           : 'See app for details';
+ 
++        const shipping_total = parseFloat(paymentIntent.metadata?.shipping_total || '0');
++        const platform_fee = parseFloat(paymentIntent.metadata?.platform_fee || '0');
++
+         await sendOrderConfirmation(buyerRecord.email, {
+           buyerName: buyerRecord.display_name || 'there',
+           orderId: orders[0]?.id || 'N/A',
+           itemsList: itemsListHtml,
+-          totalAmount: `£${(totalAmount + parseFloat(paymentIntent.metadata?.shipping_total || '0') + parseFloat(paymentIntent.metadata?.platform_fee || '0')).toFixed(2)}`,
++          totalAmount: `£${(totalAmount + shipping_total + platform_fee).toFixed(2)}`,
+           shippingAddress: shippingAddr,
++          orderReference: orders[0]?.id || 'N/A',
++          itemName: orders.length === 1 ? (orders[0]?.listing_title || 'Your item') : `${orders.length} items`,
++          itemImageUrl: orders[0]?.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(orders[0]?.amount?.toString() || '0').toFixed(2)}`,
++          itemSubtotal: totalAmount.toFixed(2),
++          buyerProtectionFee: platform_fee.toFixed(2),
++          serviceFee: '0.99',
++          shippingCost: shipping_total.toFixed(2),
++          orderTotal: (totalAmount + shipping_total + platform_fee).toFixed(2),
++          paymentMethod: 'Apple Pay',
++          orderUrl: '#',
+         });
+       }
+ 
+@@ -1171,6 +1210,16 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
+             shippingAddress: paymentIntent.shipping?.address
+               ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
+               : 'See app for details',
++            sellerName: sellerRecord?.display_name || 'Seller',
++            itemName: sellerOrderList.length === 1 ? (sellerOrderList[0].listing_title || 'Item') : `${sellerOrderList.length} items`,
++            itemImageUrl: sellerOrderList[0]?.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${sellerTotal.toFixed(2)}`,
++            buyerProtectionFee: '0.00',
++            sellerEarnings: sellerTotal.toFixed(2),
++            shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
++            shipUrl: '#',
+           });
+         }
+       }
+diff --git a/src/controllers/orderController.ts b/src/controllers/orderController.ts
+index 254a995..7813759 100644
+--- a/src/controllers/orderController.ts
++++ b/src/controllers/orderController.ts
+@@ -679,6 +679,14 @@ if (order.disputes) {
+             trackingNumber: tracking_number,
+             carrier: carrier,
+             orderId: orderId,
++            orderReference: orderId,
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
++            carrierName: carrier,
++            estimatedDelivery: '3-5 business days',
++            trackingUrl: '#',
+           });
+           console.log('📧 Shipping notification email sent to:', buyerEmail);
+         } catch (emailError) {
+@@ -784,12 +792,21 @@ if (order.disputes) {
+           await sendDeliveryConfirmation(buyerEmailRecord.email, {
+             itemTitle: listingTitle,
+             orderNumber: orderId,
+-            deliveryDate: new Date().toLocaleDateString('en-GB', { 
+-              weekday: 'long', 
+-              year: 'numeric', 
+-              month: 'long', 
+-              day: 'numeric' 
++            deliveryDate: new Date().toLocaleDateString('en-GB', {
++              weekday: 'long',
++              year: 'numeric',
++              month: 'long',
++              day: 'numeric'
+             }),
++            buyerName: buyerEmailRecord?.display_name || 'there',
++            orderReference: orderId,
++            itemName: listingTitle,
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
++            confirmUrl: '#',
++            reportIssueUrl: '#',
+           });
+           console.log('📧 Delivery confirmation email sent to:', buyerEmailRecord.email);
+         } catch (emailError) {
+@@ -1081,6 +1098,10 @@ if (order.disputes) {
+             itemTitle: listingTitle,
+             orderNumber: orderId,
+             sellerName: sellerUser?.display_name || 'the seller',
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+           }).catch(err => console.error('[ORDER] Email error:', err));
+         }
+ 
+@@ -1090,6 +1111,10 @@ if (order.disputes) {
+             itemTitle: listingTitle,
+             orderNumber: orderId,
+             buyerName: buyerUser?.display_name || 'The buyer',
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+           }).catch(err => console.error('[ORDER] Email error:', err));
+         }
+       } catch (emailErr) {
+@@ -1385,6 +1410,10 @@ if (isBuyerCancelling) {
+               ? 'Your order has been cancelled as requested.'
+               : `The seller has cancelled your order for "${listingTitle}".`,
+             refundMessage: isBuyer ? refundMsg : `${refundMsg} The item has been relisted and is available for other buyers.`,
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+           });
+         }
+ 
+@@ -1398,6 +1427,10 @@ if (isBuyerCancelling) {
+               ? `The buyer has cancelled their order for "${listingTitle}". Your item has been relisted.`
+               : 'Your cancellation has been processed.',
+             refundMessage: isBuyer ? '' : 'A refund has been issued to the buyer.',
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+           });
+         }
+       } catch (emailErr) {
+@@ -1679,6 +1712,14 @@ if (isBuyerCancelling) {
+             salePrice: salePrice,
+             fees: fees,
+             payoutAmount: payoutAmount,
++            sellerName: seller?.display_name || 'Seller',
++            itemName: listingTitle,
++            itemImageUrl: listingImage || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
++            paymentAmount: payoutAmount,
++            earningsUrl: '#',
+           });
+           console.log('📧 Escrow released email sent to seller:', sellerEmailRecord.email);
+         } catch (emailError) {
+diff --git a/src/controllers/returnController.ts b/src/controllers/returnController.ts
+index ef13a80..f286086 100644
+--- a/src/controllers/returnController.ts
++++ b/src/controllers/returnController.ts
+@@ -264,6 +264,10 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
+           itemTitle: listingTitle,
+           orderNumber: orderId.slice(-8).toUpperCase(),
+           buyerName: order.users_orders_buyer_idTousers.display_name || 'Buyer',
++          itemImageUrl: order.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
+         });
+       } catch (emailErr) {
+         console.error('[RETURN] Failed to send address needed email:', emailErr);
+@@ -650,6 +654,11 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
+           carrier: carrierName,
+           trackingNumber: transaction.trackingNumber || '',
+           message: `The buyer has created a return label and will be sending back "${listingTitle}". Keep an eye out for the delivery.`,
++          orderNumber: returnRequest.order_id?.slice(-8).toUpperCase() || '',
++          itemImageUrl: returnRequest.orders?.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(returnRequest.orders?.listings?.price?.toString() || returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
+         });
+       }
+     } catch (emailErr) {
+@@ -869,6 +878,11 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res:
+           carrier: carrierName,
+           trackingNumber: transaction.trackingNumber || '',
+           message: `The seller has purchased a return label for "${listingTitle}". Please print the label and ship the item back to receive your refund.`,
++          orderNumber: returnRequest.order_id?.slice(-8).toUpperCase() || '',
++          itemImageUrl: returnRequest.orders?.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(returnRequest.orders?.listings?.price?.toString() || returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
+         });
+       }
+     } catch (emailErr) {
+@@ -983,6 +997,11 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
+           itemTitle: listingTitle,
+           carrier: returnRequest.return_carrier || 'Carrier',
+           trackingNumber: returnRequest.return_tracking_number || '',
++          orderNumber: returnRequest.order_id?.slice(-8).toUpperCase() || '',
++          itemImageUrl: returnRequest.orders?.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
+         });
+       }
+     } catch (emailErr) {
+@@ -1094,6 +1113,10 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
+           refundAmount: refundAmount,
+           shippingDeducted: returnRequest.shipping_deducted?.toFixed(2) || undefined,
+           orderNumber: returnRequest.order_id.slice(-8).toUpperCase(),
++          itemImageUrl: returnRequest.orders?.listing_image || '',
++          itemBrand: '',
++          itemCondition: '',
++          itemPrice: `£${parseFloat(returnRequest.orders?.amount?.toString() || '0').toFixed(2)}`,
+         });
+       }
+     } catch (emailErr) {
+diff --git a/src/controllers/shippingController.ts b/src/controllers/shippingController.ts
+index 4501203..45a4ce2 100644
+--- a/src/controllers/shippingController.ts
++++ b/src/controllers/shippingController.ts
+@@ -921,6 +921,15 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
+                   month: 'long',
+                   day: 'numeric',
+                 }),
++                buyerName: buyerEmailRecord?.display_name || 'there',
++                orderReference: order.id,
++                itemName: listingTitle,
++                itemImageUrl: listingImage || '',
++                itemBrand: '',
++                itemCondition: '',
++                itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
++                confirmUrl: '#',
++                reportIssueUrl: '#',
+               });
+             }
+           } catch (emailErr) {
+diff --git a/src/controllers/stripeController.ts b/src/controllers/stripeController.ts
+index b4420a5..459a7b5 100644
+--- a/src/controllers/stripeController.ts
++++ b/src/controllers/stripeController.ts
+@@ -948,6 +948,19 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
+             itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listingTitle}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${itemPrice.toFixed(2)}</td></tr>`,
+             totalAmount: `£${parseFloat(metadata.total_price).toFixed(2)}`,
+             shippingAddress: shippingAddr,
++            orderReference: order.id,
++            itemName: listingTitle,
++            itemImageUrl: order.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${itemPrice.toFixed(2)}`,
++            itemSubtotal: itemPrice.toFixed(2),
++            buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
++            serviceFee: metadata.service_fee || '0.00',
++            shippingCost: metadata.shipping_cost || '0.00',
++            orderTotal: parseFloat(metadata.total_price).toFixed(2),
++            paymentMethod: 'Card payment',
++            orderUrl: '#',
+           });
+         }
+ 
+@@ -962,6 +975,16 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
+             orderNumber: order.id,
+             buyerName: buyerRecord?.display_name || 'A buyer',
+             shippingAddress: shippingAddr,
++            sellerName: sellerRecord?.display_name || 'Seller',
++            itemName: listingTitle,
++            itemImageUrl: order.listing_image || '',
++            itemBrand: '',
++            itemCondition: '',
++            itemPrice: `£${itemPrice.toFixed(2)}`,
++            buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
++            sellerEarnings: (itemPrice - parseFloat(metadata.buyer_protection_fee || '0')).toFixed(2),
++            shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
++            shipUrl: '#',
+           });
+         }
+       } catch (emailErr) {
+diff --git a/src/routes/adminRoutes.ts b/src/routes/adminRoutes.ts
+index 87181bf..e5fbf7a 100644
+--- a/src/routes/adminRoutes.ts
++++ b/src/routes/adminRoutes.ts
+@@ -946,6 +946,10 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
+         itemTitle: order.listing_title || 'your item',
+         refundAmount: amount.toFixed(2),
+         orderNumber: order.id,
++        itemImageUrl: order.listing_image || '',
++        itemBrand: '',
++        itemCondition: '',
++        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+       }).catch(err => console.error('Email error:', err));
+     }
+ 
+@@ -955,6 +959,10 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
+         itemTitle: order.listing_title || 'the item',
+         buyerName: buyer?.display_name || 'The buyer',
+         orderNumber: order.id,
++        itemImageUrl: order.listing_image || '',
++        itemBrand: '',
++        itemCondition: '',
++        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+       }).catch(err => console.error('Email error:', err));
+     }
+ 
+@@ -1061,6 +1069,10 @@ router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res)
+         itemTitle: order.listing_title || 'your item',
+         reason: reason,
+         orderNumber: order.id,
++        itemImageUrl: order.listing_image || '',
++        itemBrand: '',
++        itemCondition: '',
++        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+       }).catch(err => console.error('Email error:', err));
+     }
+ 
+@@ -1069,6 +1081,10 @@ router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res)
+         sellerName: sellerFull.display_name || 'there',
+         itemTitle: order.listing_title || 'the item',
+         orderNumber: order.id,
++        itemImageUrl: order.listing_image || '',
++        itemBrand: '',
++        itemCondition: '',
++        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+       }).catch(err => console.error('Email error:', err));
+     }
+ 
+diff --git a/src/services/emailService.ts b/src/services/emailService.ts
+index c312c5f..1c35acb 100644
+--- a/src/services/emailService.ts
++++ b/src/services/emailService.ts
+@@ -89,7 +89,7 @@ export async function sendOrderConfirmation(buyerEmail: string, data: Record<str
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+     to: buyerEmail,
+-    subject: `Order Confirmed - #${data.orderId}`,
++    subject: `Order Confirmed - #${data.orderReference || data.orderId}`,
+     html: html,
+   });
+   
+@@ -107,7 +107,7 @@ export async function sendShippingNotification(buyerEmail: string, data: Record<
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+     to: buyerEmail,
+-    subject: `Your Order Has Shipped - #${data.orderNumber}`,
++    subject: `Your Order Has Shipped - #${data.orderReference || data.orderNumber}`,
+     html: html,
+   });
+   
+@@ -125,7 +125,7 @@ export async function sendDeliveryConfirmation(buyerEmail: string, data: Record<
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+     to: buyerEmail,
+-    subject: `Your Order Has Been Delivered - #${data.orderNumber}`,
++    subject: `Your Order Has Been Delivered - #${data.orderReference || data.orderNumber}`,
+     html: html,
+   });
+   
+@@ -224,6 +224,10 @@ export async function sendReturnAddressNeeded(
+     itemTitle: string;
+     orderNumber: string;
+     buyerName: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('return-address-needed', {
+@@ -231,6 +235,12 @@ export async function sendReturnAddressNeeded(
+     itemTitle: data.itemTitle,
+     orderNumber: data.orderNumber,
+     buyerName: data.buyerName,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    deadline: '48 hours',
++    addressUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -290,18 +300,27 @@ export async function sendDisputeOpenedToSeller(
+     refundAmount: string;
+     refundPercent: string;
+     deadline: Date;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('dispute-opened-seller', {
+     sellerName: data.sellerName,
+     buyerName: data.buyerName,
+-    itemTitle: data.itemTitle,
+-    orderNumber: data.orderNumber,
++    itemName: data.itemTitle,
++    orderReference: data.orderNumber,
+     reasonType: formatReasonType(data.reasonType),
+     reasonText: data.reasonText || 'No additional details provided',
+     refundAmount: data.refundAmount,
+     refundPercent: data.refundPercent,
+     deadline: formatDate(data.deadline),
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    respondUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -331,17 +350,26 @@ export async function sendDisputeOpenedToBuyer(
+     reasonText: string;
+     refundAmount: string;
+     refundPercent: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('dispute-opened-buyer', {
+     buyerName: data.buyerName,
+     sellerName: data.sellerName,
+-    itemTitle: data.itemTitle,
+-    orderNumber: data.orderNumber,
++    itemName: data.itemTitle,
++    orderReference: data.orderNumber,
+     reasonType: formatReasonType(data.reasonType),
+     reasonText: data.reasonText || 'No additional details provided',
+     refundAmount: data.refundAmount,
+     refundPercent: data.refundPercent,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    disputeUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -369,6 +397,10 @@ export async function sendDisputeResponseToBuyer(
+     isCounterOffer: boolean;
+     counterOfferAmount?: string;
+     sellerMessage: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   // Set colors and text based on response type
+@@ -397,14 +429,19 @@ export async function sendDisputeResponseToBuyer(
+   
+   const html = loadTemplate('dispute-response-buyer', {
+     buyerName: data.buyerName,
+-    itemTitle: data.itemTitle,
+-    orderNumber: data.orderNumber,
++    itemName: data.itemTitle,
++    orderReference: data.orderNumber,
+     responseType: responseType,
+     responseBackground: responseBackground,
+     responseBorder: responseBorder,
+     responseColor: responseColor,
+     counterOfferSection: counterOfferSection,
+     sellerMessage: data.sellerMessage || 'No message provided',
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    reviewUrl: '#',
+   });
+   
+   const subject = data.isCounterOffer 
+@@ -438,11 +475,16 @@ export async function sendDisputeEscalatedToAdmin(
+     sellerEmail: string;
+     reasonType: string;
+     escalationReason: string;
++    orderNumber?: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('dispute-escalated-admin', {
+     disputeId: data.disputeId,
+-    itemTitle: data.itemTitle,
++    itemName: data.itemTitle,
+     refundAmount: data.refundAmount,
+     buyerName: data.buyerName,
+     buyerEmail: data.buyerEmail,
+@@ -450,6 +492,12 @@ export async function sendDisputeEscalatedToAdmin(
+     sellerEmail: data.sellerEmail,
+     reasonType: formatReasonType(data.reasonType),
+     escalationReason: data.escalationReason,
++    orderReference: data.orderNumber || '',
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    adminUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -475,13 +523,22 @@ export async function sendDisputeEscalatedToBuyer(
+     itemTitle: string;
+     orderNumber: string;
+     refundAmount: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('dispute-escalated-buyer', {
+     buyerName: data.buyerName,
+-    itemTitle: data.itemTitle,
+-    orderNumber: data.orderNumber,
++    itemName: data.itemTitle,
++    orderReference: data.orderNumber,
+     refundAmount: data.refundAmount,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    disputeUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -510,6 +567,10 @@ export async function sendDisputeResolved(
+     refundAmount?: string;
+     adminNotes: string;
+     isBuyer: boolean;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   // Set colors and content based on resolution type and recipient
+@@ -562,8 +623,8 @@ export async function sendDisputeResolved(
+   
+   const html = loadTemplate('dispute-resolved', {
+     userName: data.userName,
+-    itemTitle: data.itemTitle,
+-    orderNumber: data.orderNumber,
++    itemName: data.itemTitle,
++    orderReference: data.orderNumber,
+     decisionTitle: decisionTitle,
+     decisionBackground: decisionBackground,
+     decisionBorder: decisionBorder,
+@@ -571,6 +632,11 @@ export async function sendDisputeResolved(
+     refundAmountSection: refundAmountSection,
+     adminNotes: data.adminNotes,
+     nextSteps: nextSteps,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    orderUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -621,6 +687,11 @@ export async function sendReturnLabelCreated(
+     carrier: string;
+     trackingNumber: string;
+     message: string;
++    orderNumber?: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('return-label-created', {
+@@ -629,6 +700,12 @@ export async function sendReturnLabelCreated(
+     carrier: data.carrier,
+     trackingNumber: data.trackingNumber,
+     message: data.message,
++    orderReference: data.orderNumber || '',
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    labelUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -653,6 +730,11 @@ export async function sendReturnShipped(
+     itemTitle: string;
+     carrier: string;
+     trackingNumber: string;
++    orderNumber?: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   const html = loadTemplate('return-shipped', {
+@@ -660,6 +742,12 @@ export async function sendReturnShipped(
+     itemTitle: data.itemTitle,
+     carrier: data.carrier,
+     trackingNumber: data.trackingNumber,
++    orderReference: data.orderNumber || '',
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    trackingUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -685,6 +773,10 @@ export async function sendReturnRefundProcessed(
+     refundAmount: string;
+     shippingDeducted?: string;
+     orderNumber: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+   // Build shipping note if there was a deduction
+@@ -699,6 +791,11 @@ export async function sendReturnRefundProcessed(
+     refundAmount: data.refundAmount,
+     shippingNote: shippingNote,
+     orderNumber: data.orderNumber,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    refundUrl: '#',
+   });
+   
+   const { error } = await resend.emails.send({
+@@ -726,9 +823,23 @@ export async function sendInsuranceClaimApprovedToBuyer(
+     itemTitle: string;
+     refundAmount: string;
+     orderNumber: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+-  const html = loadTemplate('insurance-claim-approved-buyer', data);
++  const html = loadTemplate('insurance-claim-approved-buyer', {
++    buyerName: data.buyerName,
++    itemTitle: data.itemTitle,
++    refundAmount: data.refundAmount,
++    orderNumber: data.orderNumber,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    refundUrl: '#',
++  });
+   
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+@@ -752,9 +863,22 @@ export async function sendInsuranceClaimApprovedToSeller(
+     itemTitle: string;
+     buyerName: string;
+     orderNumber: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+-  const html = loadTemplate('insurance-claim-approved-seller', data);
++  const html = loadTemplate('insurance-claim-approved-seller', {
++    sellerName: data.sellerName,
++    itemTitle: data.itemTitle,
++    buyerName: data.buyerName,
++    orderNumber: data.orderNumber,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++  });
+   
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+@@ -778,9 +902,23 @@ export async function sendInsuranceClaimDeniedToBuyer(
+     itemTitle: string;
+     reason: string;
+     orderNumber: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+-  const html = loadTemplate('insurance-claim-denied-buyer', data);
++  const html = loadTemplate('insurance-claim-denied-buyer', {
++    buyerName: data.buyerName,
++    itemTitle: data.itemTitle,
++    reason: data.reason,
++    orderNumber: data.orderNumber,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    supportUrl: 'mailto:info@mulligans.uk.com',
++  });
+   
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+@@ -803,9 +941,21 @@ export async function sendInsuranceClaimDeniedToSeller(
+     sellerName: string;
+     itemTitle: string;
+     orderNumber: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+-  const html = loadTemplate('insurance-claim-denied-seller', data);
++  const html = loadTemplate('insurance-claim-denied-seller', {
++    sellerName: data.sellerName,
++    itemTitle: data.itemTitle,
++    orderNumber: data.orderNumber,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++  });
+   
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+@@ -833,9 +983,23 @@ export async function sendInsuranceReportReceivedToBuyer(
+     itemTitle: string;
+     orderNumber: string;
+     sellerName: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+-  const html = loadTemplate('insurance-report-received-buyer', data);
++  const html = loadTemplate('insurance-report-received-buyer', {
++    buyerName: data.buyerName,
++    itemTitle: data.itemTitle,
++    orderNumber: data.orderNumber,
++    sellerName: data.sellerName,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++    claimUrl: '#',
++  });
+   
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+@@ -859,9 +1023,22 @@ export async function sendInsuranceReportReceivedToSeller(
+     itemTitle: string;
+     orderNumber: string;
+     buyerName: string;
++    itemImageUrl?: string;
++    itemBrand?: string;
++    itemCondition?: string;
++    itemPrice?: string;
+   }
+ ): Promise<void> {
+-  const html = loadTemplate('insurance-report-received-seller', data);
++  const html = loadTemplate('insurance-report-received-seller', {
++    sellerName: data.sellerName,
++    itemTitle: data.itemTitle,
++    orderNumber: data.orderNumber,
++    buyerName: data.buyerName,
++    itemImageUrl: data.itemImageUrl || '',
++    itemBrand: data.itemBrand || '',
++    itemCondition: data.itemCondition || '',
++    itemPrice: data.itemPrice || '',
++  });
+   
+   const { error } = await resend.emails.send({
+     from: FROM_ADDRESS,
+diff --git a/src/services/escrowService.ts b/src/services/escrowService.ts
+index 3a7962e..f6c7d61 100644
+--- a/src/services/escrowService.ts
++++ b/src/services/escrowService.ts
+@@ -361,6 +361,10 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
+               cancelReason: 'Seller did not ship within the required timeframe',
+               cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because the seller didn't ship it within ${SHIPPING_DEADLINE_DAYS} days.`,
+               refundMessage: 'A full refund has been issued to your original payment method. Please allow 5-10 business days for it to appear.',
++              itemImageUrl: listingImage || order.listing_image || '',
++              itemBrand: '',
++              itemCondition: '',
++              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+             });
+             console.log(`[ESCROW] ✅ Cancellation email sent to buyer: ${buyer.email}`);
+           }
+@@ -373,6 +377,10 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
+               cancelReason: 'Shipping deadline missed',
+               cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because it wasn't shipped within ${SHIPPING_DEADLINE_DAYS} days.`,
+               refundMessage: 'A refund has been issued to the buyer.',
++              itemImageUrl: listingImage || order.listing_image || '',
++              itemBrand: '',
++              itemCondition: '',
++              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+             });
+             console.log(`[ESCROW] ✅ Cancellation email sent to seller: ${seller.email}`);
+           }
+@@ -724,6 +732,13 @@ export async function autoReleaseEscrow(): Promise<void> {
+               salePrice: itemsTotal.toFixed(2),
+               fees: labelCostTotal.toFixed(2),
+               payoutAmount: payoutAmount,
++              sellerName: seller.display_name || 'Seller',
++              itemName: itemDescription,
++              itemImageUrl: firstOrder.listings?.images?.[0]?.image_url || '',
++              itemBrand: '',
++              itemCondition: '',
++              itemPrice: `£${itemsTotal.toFixed(2)}`,
++              earningsUrl: '#',
+             });
+             console.log('[ESCROW] Escrow released email sent to seller:', seller.email);
+           } catch (emailError) {
+@@ -953,6 +968,10 @@ export async function autoProcessReturnRefunds(): Promise<void> {
+               refundAmount: refundAmount.toFixed(2),
+               shippingDeducted: shippingDeducted > 0 ? shippingDeducted.toFixed(2) : undefined,
+               orderNumber: order.id.slice(-8).toUpperCase(),
++              itemImageUrl: listingImage || order.listing_image || '',
++              itemBrand: '',
++              itemCondition: '',
++              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+             });
+             console.log(`[ESCROW] Refund email sent to buyer: ${buyer.email}`);
+           }

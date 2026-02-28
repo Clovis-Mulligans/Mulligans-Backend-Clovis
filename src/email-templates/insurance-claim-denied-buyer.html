@@ -3,75 +3,135 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lost Item Claim Update - Mulligans</title>
+  <title>Claim Update — Mulligans</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+
+  <!-- Preheader (hidden) -->
+  <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #EAEAE0;">Update on your lost item claim&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;</div>
+
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
     <tr>
       <td align="center" style="padding: 40px 20px;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+
           <!-- Blue Header with Logo -->
           <tr>
             <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
               <img src="https://images.mulligans.uk.com/email-assets/EmailMainHeaderLogo.png" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
             </td>
           </tr>
+
           <!-- Content -->
           <tr>
             <td style="padding: 40px;">
-              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Lost Item Claim Update</h1>
-              
-              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
-              
-              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">We've completed our investigation into your lost item claim.</p>
-              
-              <!-- Order Details -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
-                <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Item</p>
-                    <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #111827;">{{itemTitle}}</p>
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Order Number</p>
-                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">#{{orderNumber}}</p>
-                  </td>
-                </tr>
-              </table>
-              
-              <!-- Denial Notice -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #fef2f2; border-radius: 8px; border: 1px solid #fecaca; margin-bottom: 30px;">
-                <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 8px 0; font-size: 16px; font-weight: 600; color: #991b1b;">Claim Not Approved</p>
-                    <p style="margin: 0 0 12px 0; font-size: 14px; color: #991b1b; line-height: 1.6;"><strong>Reason:</strong> {{reason}}</p>
-                    <p style="margin: 0; font-size: 14px; color: #7f1d1d; line-height: 1.6;">Unfortunately, we were unable to approve your claim based on our investigation.</p>
-                  </td>
-                </tr>
-              </table>
-              
-              <p style="margin: 0 0 30px 0; color: #374151; font-size: 14px; line-height: 1.6;">If you believe this decision is incorrect or have additional information to provide, please contact our support team.</p>
-              
-              <!-- CTA Button -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 30px;">
+
+              <!-- Headline -->
+              <h1 style="margin: 0 0 16px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Claim Update</h1>
+
+              <!-- Status Badge -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 28px;">
                 <tr>
                   <td align="center">
-                    <a href="mailto:info@mulligans.uk.com?subject=Claim%20Appeal%20-%20Order%20{{orderNumber}}" style="display: inline-block; padding: 14px 32px; background-color: #1DC690; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">Contact Support</a>
+                    <span style="display: inline-block; padding: 6px 16px; background-color: #fef2f2; color: #991b1b; border-radius: 20px; font-size: 13px; font-weight: 600;">Not Approved</span>
                   </td>
                 </tr>
               </table>
-              
-              <p style="margin: 0; color: #374151; font-size: 16px; line-height: 1.6;">Best regards,<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
+
+              <!-- Greeting -->
+              <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
+
+              <p style="margin: 0 0 24px 0; color: #374151; font-size: 16px; line-height: 1.6;">After carefully reviewing your claim, we weren't able to approve it at this time. We understand this is disappointing and we're sorry we couldn't reach a different outcome.</p>
+
+              <!-- Item Detail Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
+                <tr>
+                  <td style="padding: 16px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td width="100" valign="top" style="padding-right: 16px;">
+                          <img src="{{itemImageUrl}}" alt="{{itemTitle}}" width="100" height="100" style="display: block; border-radius: 6px; object-fit: cover; background-color: #e5e7eb;">
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #111827;">{{itemTitle}}</p>
+                          <p style="margin: 0 0 4px 0; font-size: 14px; color: #6B7280;">{{itemBrand}} &middot; {{itemCondition}}</p>
+                          <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1C4670;">{{itemPrice}}</p>
+                          <p style="margin: 0; font-size: 13px; color: #9CA3AF;">Order #{{orderNumber}}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Reason Box (neutral grey) -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0;">
+                <tr>
+                  <td style="background-color: #f3f4f6; border-radius: 8px; padding: 20px 24px; border-left: 4px solid #9CA3AF;">
+                    <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 600; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em;">Decision reason</p>
+                    <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.6;">{{reason}}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- What You Can Do -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0;">
+                <tr>
+                  <td>
+                    <p style="margin: 0 0 12px 0; font-size: 16px; font-weight: 600; color: #1C4670;">What you can do</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td valign="top" style="padding-bottom: 10px;">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td valign="top" style="font-size: 15px; color: #374151; padding-right: 8px; line-height: 1.6;">&bull;</td>
+                              <td style="font-size: 15px; color: #374151; line-height: 1.6;">If you have additional information, you can contact our support team</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td valign="top">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td valign="top" style="font-size: 15px; color: #374151; padding-right: 8px; line-height: 1.6;">&bull;</td>
+                              <td style="font-size: 15px; color: #374151; line-height: 1.6;">We're here to help and want to find the best resolution for you</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 8px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="{{supportUrl}}" style="display: inline-block; padding: 14px 40px; background-color: #1DC690; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: bold; border-radius: 6px;">Contact Support</a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Sign-off -->
+              <p style="margin: 32px 0 0 0; color: #374151; font-size: 16px; line-height: 1.6;">With our apologies,<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
+
             </td>
           </tr>
+
           <!-- Blue Footer -->
           <tr>
             <td style="padding: 30px 40px; background-color: #1C4670;">
               <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
-              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">© 2025 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligansgolf.carrd.co/#privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
+              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">&copy; 2026 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligans.uk.com/privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
             </td>
           </tr>
+
         </table>
       </td>
     </tr>
   </table>
+
 </body>
 </html>

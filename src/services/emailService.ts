@@ -89,7 +89,7 @@ export async function sendOrderConfirmation(buyerEmail: string, data: Record<str
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Order Confirmed - #${data.orderId}`,
+    subject: `Order Confirmed - #${data.orderReference || data.orderId}`,
     html: html,
   });
   
@@ -107,7 +107,7 @@ export async function sendShippingNotification(buyerEmail: string, data: Record<
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Your Order Has Shipped - #${data.orderNumber}`,
+    subject: `Your Order Has Shipped - #${data.orderReference || data.orderNumber}`,
     html: html,
   });
   
@@ -125,7 +125,7 @@ export async function sendDeliveryConfirmation(buyerEmail: string, data: Record<
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Your Order Has Been Delivered - #${data.orderNumber}`,
+    subject: `Your Order Has Been Delivered - #${data.orderReference || data.orderNumber}`,
     html: html,
   });
   
@@ -224,6 +224,10 @@ export async function sendReturnAddressNeeded(
     itemTitle: string;
     orderNumber: string;
     buyerName: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('return-address-needed', {
@@ -231,6 +235,12 @@ export async function sendReturnAddressNeeded(
     itemTitle: data.itemTitle,
     orderNumber: data.orderNumber,
     buyerName: data.buyerName,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    deadline: '48 hours',
+    addressUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -290,18 +300,27 @@ export async function sendDisputeOpenedToSeller(
     refundAmount: string;
     refundPercent: string;
     deadline: Date;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-opened-seller', {
     sellerName: data.sellerName,
     buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     reasonType: formatReasonType(data.reasonType),
     reasonText: data.reasonText || 'No additional details provided',
     refundAmount: data.refundAmount,
     refundPercent: data.refundPercent,
     deadline: formatDate(data.deadline),
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    respondUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -331,17 +350,26 @@ export async function sendDisputeOpenedToBuyer(
     reasonText: string;
     refundAmount: string;
     refundPercent: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-opened-buyer', {
     buyerName: data.buyerName,
     sellerName: data.sellerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     reasonType: formatReasonType(data.reasonType),
     reasonText: data.reasonText || 'No additional details provided',
     refundAmount: data.refundAmount,
     refundPercent: data.refundPercent,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    disputeUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -369,6 +397,10 @@ export async function sendDisputeResponseToBuyer(
     isCounterOffer: boolean;
     counterOfferAmount?: string;
     sellerMessage: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   // Set colors and text based on response type
@@ -397,14 +429,19 @@ export async function sendDisputeResponseToBuyer(
   
   const html = loadTemplate('dispute-response-buyer', {
     buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     responseType: responseType,
     responseBackground: responseBackground,
     responseBorder: responseBorder,
     responseColor: responseColor,
     counterOfferSection: counterOfferSection,
     sellerMessage: data.sellerMessage || 'No message provided',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    reviewUrl: '#',
   });
   
   const subject = data.isCounterOffer 
@@ -438,11 +475,16 @@ export async function sendDisputeEscalatedToAdmin(
     sellerEmail: string;
     reasonType: string;
     escalationReason: string;
+    orderNumber?: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-escalated-admin', {
     disputeId: data.disputeId,
-    itemTitle: data.itemTitle,
+    itemName: data.itemTitle,
     refundAmount: data.refundAmount,
     buyerName: data.buyerName,
     buyerEmail: data.buyerEmail,
@@ -450,6 +492,12 @@ export async function sendDisputeEscalatedToAdmin(
     sellerEmail: data.sellerEmail,
     reasonType: formatReasonType(data.reasonType),
     escalationReason: data.escalationReason,
+    orderReference: data.orderNumber || '',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    adminUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -475,13 +523,22 @@ export async function sendDisputeEscalatedToBuyer(
     itemTitle: string;
     orderNumber: string;
     refundAmount: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-escalated-buyer', {
     buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     refundAmount: data.refundAmount,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    disputeUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -510,6 +567,10 @@ export async function sendDisputeResolved(
     refundAmount?: string;
     adminNotes: string;
     isBuyer: boolean;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   // Set colors and content based on resolution type and recipient
@@ -562,8 +623,8 @@ export async function sendDisputeResolved(
   
   const html = loadTemplate('dispute-resolved', {
     userName: data.userName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     decisionTitle: decisionTitle,
     decisionBackground: decisionBackground,
     decisionBorder: decisionBorder,
@@ -571,6 +632,11 @@ export async function sendDisputeResolved(
     refundAmountSection: refundAmountSection,
     adminNotes: data.adminNotes,
     nextSteps: nextSteps,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    orderUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -621,6 +687,11 @@ export async function sendReturnLabelCreated(
     carrier: string;
     trackingNumber: string;
     message: string;
+    orderNumber?: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('return-label-created', {
@@ -629,6 +700,12 @@ export async function sendReturnLabelCreated(
     carrier: data.carrier,
     trackingNumber: data.trackingNumber,
     message: data.message,
+    orderReference: data.orderNumber || '',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    labelUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -653,6 +730,11 @@ export async function sendReturnShipped(
     itemTitle: string;
     carrier: string;
     trackingNumber: string;
+    orderNumber?: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('return-shipped', {
@@ -660,6 +742,12 @@ export async function sendReturnShipped(
     itemTitle: data.itemTitle,
     carrier: data.carrier,
     trackingNumber: data.trackingNumber,
+    orderReference: data.orderNumber || '',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    trackingUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -685,6 +773,10 @@ export async function sendReturnRefundProcessed(
     refundAmount: string;
     shippingDeducted?: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   // Build shipping note if there was a deduction
@@ -699,6 +791,11 @@ export async function sendReturnRefundProcessed(
     refundAmount: data.refundAmount,
     shippingNote: shippingNote,
     orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    refundUrl: '#',
   });
   
   const { error } = await resend.emails.send({
@@ -726,9 +823,23 @@ export async function sendInsuranceClaimApprovedToBuyer(
     itemTitle: string;
     refundAmount: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-approved-buyer', data);
+  const html = loadTemplate('insurance-claim-approved-buyer', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    refundAmount: data.refundAmount,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    refundUrl: '#',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
@@ -752,9 +863,22 @@ export async function sendInsuranceClaimApprovedToSeller(
     itemTitle: string;
     buyerName: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-approved-seller', data);
+  const html = loadTemplate('insurance-claim-approved-seller', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    buyerName: data.buyerName,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
@@ -778,9 +902,23 @@ export async function sendInsuranceClaimDeniedToBuyer(
     itemTitle: string;
     reason: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-denied-buyer', data);
+  const html = loadTemplate('insurance-claim-denied-buyer', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    reason: data.reason,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    supportUrl: 'mailto:info@mulligans.uk.com',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
@@ -803,9 +941,21 @@ export async function sendInsuranceClaimDeniedToSeller(
     sellerName: string;
     itemTitle: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-denied-seller', data);
+  const html = loadTemplate('insurance-claim-denied-seller', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
@@ -833,9 +983,23 @@ export async function sendInsuranceReportReceivedToBuyer(
     itemTitle: string;
     orderNumber: string;
     sellerName: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-report-received-buyer', data);
+  const html = loadTemplate('insurance-report-received-buyer', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    sellerName: data.sellerName,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    claimUrl: '#',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
@@ -859,9 +1023,22 @@ export async function sendInsuranceReportReceivedToSeller(
     itemTitle: string;
     orderNumber: string;
     buyerName: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-report-received-seller', data);
+  const html = loadTemplate('insurance-report-received-seller', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    buyerName: data.buyerName,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,

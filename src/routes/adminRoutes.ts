@@ -946,6 +946,10 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
         itemTitle: order.listing_title || 'your item',
         refundAmount: amount.toFixed(2),
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -955,6 +959,10 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
         itemTitle: order.listing_title || 'the item',
         buyerName: buyer?.display_name || 'The buyer',
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -1061,6 +1069,10 @@ router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res) 
         itemTitle: order.listing_title || 'your item',
         reason: reason,
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -1069,6 +1081,10 @@ router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res) 
         sellerName: sellerFull.display_name || 'there',
         itemTitle: order.listing_title || 'the item',
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
