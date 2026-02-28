@@ -3,59 +3,82 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Account Deletion Request - Admin Notification</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Account Deletion Request — Admin Notification</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+
+  <!-- Preheader (hidden) -->
+  <div style="display: none; max-height: 0; overflow: hidden; mso-hide: all; font-size: 1px; line-height: 1px; color: #EAEAE0;">
+    Account deletion requested — {{userName}} ({{userEmail}}) scheduled for {{deletionDate}}&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;
+  </div>
+
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
     <tr>
       <td align="center" style="padding: 40px 20px;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-          <!-- Blue Header with Logo -->
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+
+          <!-- Blue Header with Logo + Admin Label -->
           <tr>
             <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
               <img src="https://mulligans-golf-images-mvp.s3.eu-west-2.amazonaws.com/email-assets/EmailMainHeaderLogo" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
+              <p style="margin: 10px 0 0 0; font-size: 12px; color: #93c5fd; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;">Internal — Admin Notification</p>
             </td>
           </tr>
+
           <!-- Content -->
           <tr>
             <td style="padding: 40px;">
-              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Account Deletion Request</h1>
 
-              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6; text-align: center;">A user has requested account deletion. Details below.</p>
+              <!-- Headline -->
+              <h1 style="margin: 0 0 16px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Account Deletion Request</h1>
 
-              <!-- User Details Table -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+              <!-- Status Badge -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 28px;">
                 <tr>
-                  <td style="padding: 20px;">
+                  <td align="center">
+                    <span style="display: inline-block; padding: 6px 16px; background-color: #fffbeb; color: #92400e; border: 1px solid #F59E0B; border-radius: 20px; font-size: 13px; font-weight: 600;">Pending Deletion</span>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Summary -->
+              <p style="margin: 0 0 24px 0; color: #374151; font-size: 16px; line-height: 1.6; text-align: center;">A user has requested account deletion. Details below.</p>
+
+              <!-- User Details -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+                <tr>
+                  <td style="padding: 20px 24px;">
+                    <p style="margin: 0 0 16px 0; font-size: 14px; font-weight: 600; color: #1C4670; text-transform: uppercase; letter-spacing: 0.05em;">User Details</p>
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                       <tr>
-                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">User ID</p>
-                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827; font-family: monospace;">{{userId}}</p>
+                        <td style="padding-bottom: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">User ID</p>
+                          <p style="margin: 0; font-size: 14px; font-weight: 600; color: #111827; font-family: monospace;">{{userId}}</p>
                         </td>
                       </tr>
                       <tr>
-                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Email</p>
-                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827;">{{userEmail}}</p>
+                        <td style="padding-bottom: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Display Name</p>
+                          <p style="margin: 0; font-size: 15px; color: #111827; font-weight: 600;">{{userName}}</p>
                         </td>
                       </tr>
                       <tr>
-                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Display Name</p>
-                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827;">{{userName}}</p>
+                        <td style="padding-bottom: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Email</p>
+                          <p style="margin: 0; font-size: 15px; color: #111827;"><a href="mailto:{{userEmail}}" style="color: #1C4670; text-decoration: none;">{{userEmail}}</a></p>
                         </td>
                       </tr>
                       <tr>
-                        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Scheduled Deletion</p>
-                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #991b1b;">{{deletionDate}}</p>
+                        <td style="padding-bottom: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Scheduled Deletion</p>
+                          <p style="margin: 0; font-size: 16px; font-weight: 700; color: #991b1b;">{{deletionDate}}</p>
                         </td>
                       </tr>
                       <tr>
-                        <td style="padding: 8px 0;">
-                          <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase;">Listings Suspended</p>
-                          <p style="margin: 4px 0 0 0; font-size: 14px; font-weight: 600; color: #111827;">{{listingsSuspended}}</p>
+                        <td style="border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Listings Suspended</p>
+                          <p style="margin: 0; font-size: 15px; font-weight: 600; color: #111827;">{{listingsSuspended}}</p>
                         </td>
                       </tr>
                     </table>
@@ -63,18 +86,27 @@
                 </tr>
               </table>
 
-              <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.6; text-align: center;">No action required unless you need to intervene before the scheduled deletion date.</p>
+              <!-- Info note -->
+              <p style="margin: 24px 0 0 0; color: #6b7280; font-size: 14px; line-height: 1.6; text-align: center;">No action required unless you need to intervene before the scheduled deletion date.</p>
+
             </td>
           </tr>
-          <!-- Blue Footer -->
+
+          <!-- Footer (simpler, internal) -->
           <tr>
-            <td style="padding: 30px 40px; background-color: #1C4670;">
-              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">This is an internal notification for Mulligans administrators.</p>
+            <td style="background-color: #1C4670; padding: 30px 40px; text-align: center;">
+              <p style="margin: 0 0 6px 0; font-size: 13px; color: #9CA3AF;">Mulligans Golf Limited — Internal Admin Notification</p>
+              <p style="margin: 0 0 6px 0; font-size: 12px; color: #9CA3AF;">&copy; 2026 Mulligans Golf Limited. All rights reserved.</p>
+              <p style="margin: 0; font-size: 12px;">
+                <a href="https://mulligans.uk.com/privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a>
+              </p>
             </td>
           </tr>
+
         </table>
       </td>
     </tr>
   </table>
+
 </body>
 </html>
