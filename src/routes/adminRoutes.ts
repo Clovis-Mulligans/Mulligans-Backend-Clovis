@@ -1520,6 +1520,167 @@ router.patch('/listings/:id/moderate', adminAuth, adminActionLimiter, async (req
   }
 });
 
+
+// Get all pro store applications (paginated, filterable)
+router.get('/pro-store/applications', adminAuth, async (req, res) => {
+  try {
+    const { status, page = '1', limit = '20' } = req.query as Record<string, string>;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+    if (status && ['pending', 'approved', 'rejected', 'info_requested'].includes(status)) {
+      where.status = status;
+    }
+
+    const [applications, total] = await Promise.all([
+      prisma.pro_store_applications.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              email: true,
+              display_name: true,
+              avatar_url: true,
+              created_at: true,
+              total_sales: true,
+              is_verified_seller: true,
+            },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+        take: limitNum,
+        skip,
+      }),
+      prisma.pro_store_applications.count({ where }),
+    ]);
+
+    res.json({
+      applications,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    });
+  } catch (error: any) {
+    console.error('❌ Get pro store applications error:', error);
+    res.status(500).json({ error: 'Failed to fetch pro store applications' });
+  }
+});
+
+
+// Get single pro store application detail (includes review_notes)
+router.get('/pro-store/applications/:id', adminAuth, async (req, res) => {
+  try {
+    const application = await prisma.pro_store_applications.findUnique({
+      where: { id: req.params.id },
+      include: {
+        user: {
+          select: {
+            email: true,
+            display_name: true,
+            avatar_url: true,
+            total_sales: true,
+            is_verified_seller: true,
+            created_at: true,
+            is_banned: true,
+          },
+        },
+      },
+    });
+
+    if (!application) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+
+    res.json({ application });
+  } catch (error: any) {
+    console.error('❌ Get pro store application detail error:', error);
+    res.status(500).json({ error: 'Failed to fetch application details' });
+  }
+});
+
+
+// Review a pro store application (approve / reject / info_requested)
+router.patch('/pro-store/applications/:id/review', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    const { action, review_notes } = req.body;
+
+    if (!action || !['approve', 'reject', 'info_requested'].includes(action)) {
+      res.status(400).json({ error: 'action must be one of: approve, reject, info_requested' });
+      return;
+    }
+
+    const application = await prisma.pro_store_applications.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!application) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+
+    // Status mapping — action values map to correct status strings
+const STATUS_MAP: Record<string, string> = {
+  approve: 'approved',
+  reject: 'rejected',
+  info_requested: 'info_requested',
+};
+
+// Run as a single transaction
+const updatedApplication = await prisma.$transaction(async (tx) => {
+  // a. Update the application
+  const updated = await tx.pro_store_applications.update({
+    where: { id: req.params.id },
+    data: {
+      status: STATUS_MAP[action],
+      review_notes: review_notes || null,
+      reviewed_by: 'admin',
+      reviewed_at: new Date(),
+    },
+  });
+
+  // b. If approved, update the user
+  if (action === 'approve') {
+    await tx.users.update({
+      where: { id: application.user_id },
+      data: {
+        is_pro_store: true,
+        pro_store_approved_at: new Date(),
+      },
+    });
+  } 
+
+      // c. Write to audit log
+      await tx.admin_audit_log.create({
+        data: {
+          action: `pro_store_${action}`,
+          target_type: 'user',
+          target_id: application.user_id,
+          details: {
+            application_id: application.id,
+            business_name: application.business_name,
+            review_notes: review_notes || null,
+          },
+          admin_ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+            || req.socket.remoteAddress
+            || 'unknown',
+        },
+      });
+
+      return updated;
+    });
+
+    res.json({ application: updatedApplication });
+  } catch (error: any) {
+    console.error('❌ Review pro store application error:', error);
+    res.status(500).json({ error: 'Failed to review application' });
+  }
+});
+
 // DASHBOARD STATS ROUTES
 // ============================================
 
