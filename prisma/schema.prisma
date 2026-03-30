@@ -273,6 +273,12 @@ model users {
   verification_code                            String?
   verification_code_expires                    DateTime?
   verified_seller_at                           DateTime?
+  is_pro_store                                 Boolean           @default(false)
+  pro_store_name                               String?           @db.VarChar(100)
+  pro_store_website                            String?           @db.VarChar(255)
+  pro_store_approved_at                        DateTime?
+  subscription_status                          String?           @db.VarChar(30)
+  subscription_started_at                      DateTime?
   blocked_by                                   blocked_users[]   @relation("BlockedByBlocks")
   users_blocked                                blocked_users[]   @relation("BlockerBlocks")
   cart_items                                   cart_items[]
@@ -301,6 +307,7 @@ model users {
   // Chip AI Caddy relations
   fitting_profile                          fitting_profiles?
   chip_conversations                       chip_conversations[]
+  pro_store_applications                   pro_store_applications[]
 }
 
 model notifications {
@@ -671,4 +678,32 @@ model admin_audit_log {
   @@index([action])
   @@index([target_type, target_id])
   @@index([created_at])
+}
+
+model pro_store_applications {
+  id                  String    @id @default(uuid())
+  user_id             String
+  business_name       String    @db.VarChar(100)
+  business_email      String    @db.VarChar(255)
+  business_phone      String    @db.VarChar(30)
+  website             String    @db.VarChar(255)
+  seller_type         String    @db.VarChar(30)
+  description         String    @db.VarChar(500)
+  estimated_listings  String    @db.VarChar(20)
+  instagram_handle    String?   @db.VarChar(100)
+  has_existing_store  Boolean   @default(false)
+  existing_store_url  String?   @db.VarChar(255)
+  status              String    @default("pending") @db.VarChar(20)
+  review_notes        String?
+  reviewed_by         String?   @db.VarChar(100)
+  reviewed_at         DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  user                users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([created_at])
+  @@map("pro_store_applications")
 }
