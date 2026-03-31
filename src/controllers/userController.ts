@@ -778,52 +778,85 @@ const salesCount = await prisma.orders.count({
   /**
    * Get user's own listings (for profile)
    */
-  static async getMyListings(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const userId = req.user!.id;
-      const { page = 1, limit = 20, status = 'active' } = req.query;
+ static async getMyListings(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userId = req.user!.id;
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      category,
+      condition,
+      minPrice,
+      maxPrice,
+      search,
+      sort = 'recent',
+    } = req.query;
 
-      console.log('📋 GET /users/my-listings - User ID:', userId, 'Status:', status);
+    console.log('📋 GET /users/my-listings - User ID:', userId, 'Filters:', req.query);
 
-      const skip = (Number(page) - 1) * Number(limit);
+    const skip = (Number(page) - 1) * Number(limit);
 
-      const [listings, total] = await Promise.all([
-        prisma.listings.findMany({
-          where: {
-            seller_id: userId,
-            status: status as string,
-          },
-          include: {
-            images: {
-              orderBy: { display_order: 'asc' },
-              take: 1,
-            },
-          },
-          orderBy: { created_at: 'desc' },
-          skip,
-          take: Number(limit),
-        }),
-        prisma.listings.count({
-          where: {
-            seller_id: userId,
-            status: status as string,
-          },
-        }),
-      ]);
+    // Build where clause
+    const where: Record<string, unknown> = { seller_id: userId };
 
-      console.log(`✅ Returned ${listings.length} listings (${total} total)`);
-
-      res.json({
-        listings,
-        total,
-        page: Number(page),
-        totalPages: Math.ceil(total / Number(limit)),
-      });
-    } catch (error) {
-      console.error('❌ Get my listings error:', error);
-      res.status(500).json({ error: 'Failed to get listings' });
+    if (status && status !== 'all') {
+      where.status = status as string;
     }
+    if (category) {
+      where.category = category as string;
+    }
+    if (condition) {
+      where.condition_overall = Number(condition);
+    }
+    if (minPrice || maxPrice) {
+      where.price = {};
+      if (minPrice) (where.price as Record<string, unknown>).gte = String(Number(minPrice));
+      if (maxPrice) (where.price as Record<string, unknown>).lte = String(Number(maxPrice));
+    }
+    if (search) {
+      where.OR = [
+        { title: { contains: search as string, mode: 'insensitive' } },
+        { brand: { contains: search as string, mode: 'insensitive' } },
+        { description: { contains: search as string, mode: 'insensitive' } },
+      ];
+    }
+
+    const orderBy =
+      sort === 'price_asc'
+        ? { price: 'asc' as const }
+        : sort === 'price_desc'
+        ? { price: 'desc' as const }
+        : { created_at: 'desc' as const };
+
+    const [listings, total] = await Promise.all([
+      prisma.listings.findMany({
+        where,
+        include: {
+          images: {
+            orderBy: { display_order: 'asc' },
+          },
+        },
+        orderBy,
+        skip,
+        take: Number(limit),
+      }),
+      prisma.listings.count({ where }),
+    ]);
+
+    console.log(`✅ Returned ${listings.length} listings (${total} total)`);
+    res.json({
+      listings,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / Number(limit)),
+    });
+  } catch (error) {
+    console.error('❌ Get my listings error:', error);
+    res.status(500).json({ error: 'Failed to get listings' });
   }
+}
 
   /**
  * Get a specific user's listings (public route for seller profiles)

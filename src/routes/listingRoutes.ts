@@ -44,6 +44,9 @@ router.post(
 
 router.put('/:id', authenticateToken, ListingController.updateListing);
 
+router.patch('/bulk', authenticateToken, ListingController.bulkUpdateListings);
+router.post('/bulk-delete', authenticateToken, ListingController.bulkDeleteListings);
+
 router.delete('/:id', authenticateToken, ListingController.deleteListing);
 
 router.delete('/:id/images/:imageId', authenticateToken, ListingController.deleteListingImage);

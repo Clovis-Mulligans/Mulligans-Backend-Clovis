@@ -1232,4 +1232,109 @@ if (keyword) {
       res.status(500).json({ error: 'Failed to track view' });
     }
   }
+
+  static async bulkUpdateListings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.id;
+      const { ids, status, price, price_adjustment_percent, original_price } = req.body;
+
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: 'ids must be a non-empty array' });
+        return;
+      }
+
+      // Verify all listings belong to this seller
+      const owned = await prisma.listings.count({
+        where: { id: { in: ids }, seller_id: userId },
+      });
+
+      if (owned !== ids.length) {
+        res.status(403).json({ error: 'You do not own all of these listings' });
+        return;
+      }
+
+      const updateData: Record<string, unknown> = {};
+
+      if (status) {
+        updateData.status = status;
+      }
+
+      if (price !== undefined) {
+        updateData.price = String(price);
+        if (original_price !== undefined) {
+          updateData.original_price = String(original_price);
+        }
+      }
+
+      if (price_adjustment_percent !== undefined) {
+        // Apply percentage adjustment to each listing individually
+        const listings = await prisma.listings.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, price: true },
+        });
+
+        await Promise.all(
+          listings.map((listing) => {
+            const currentPrice = parseFloat(listing.price.toString());
+            const newPrice = currentPrice * (1 + price_adjustment_percent / 100);
+            return prisma.listings.update({
+              where: { id: listing.id },
+              data: { price: String(Math.max(0, newPrice).toFixed(2)) },
+            });
+          })
+        );
+
+        res.json({ updated: ids.length });
+        return;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        res.status(400).json({ error: 'No update data provided' });
+        return;
+      }
+
+      await prisma.listings.updateMany({
+        where: { id: { in: ids }, seller_id: userId },
+        data: updateData,
+      });
+
+      res.json({ updated: ids.length });
+    } catch (error) {
+      console.error('❌ Bulk update listings error:', error);
+      res.status(500).json({ error: 'Failed to bulk update listings' });
+    }
+  }
+
+  static async bulkDeleteListings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.id;
+      const { ids } = req.body;
+
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: 'ids must be a non-empty array' });
+        return;
+      }
+
+      // Verify all listings belong to this seller
+      const owned = await prisma.listings.count({
+        where: { id: { in: ids }, seller_id: userId },
+      });
+
+      if (owned !== ids.length) {
+        res.status(403).json({ error: 'You do not own all of these listings' });
+        return;
+      }
+
+      // Soft delete — set status to deleted
+      await prisma.listings.updateMany({
+        where: { id: { in: ids }, seller_id: userId },
+        data: { status: 'deleted' },
+      });
+
+      res.json({ deleted: ids.length });
+    } catch (error) {
+      console.error('❌ Bulk delete listings error:', error);
+      res.status(500).json({ error: 'Failed to bulk delete listings' });
+    }
+  }
 } 
