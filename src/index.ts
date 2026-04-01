@@ -48,7 +48,6 @@ import disputeRoutes from './routes/disputeRoutes';
 import adminRoutes from './routes/adminRoutes';
 import connectRedirectRoutes from './routes/connectRedirectRoutes';
 import returnRoutes from './routes/returnRoutes';
-import testRoutes from './routes/testRoutes';
 // OFFER SYSTEM IMPORTS
 import offerRoutes from './routes/offerRoutes';
 import listingOfferRoutes from './routes/listingOfferRoutes';
@@ -135,7 +134,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // Test routes disabled in production — re-enable locally by setting NODE_ENV=development
 if (process.env.NODE_ENV === 'development') {
-  app.use('/api/test', testRoutes);
   console.log('⚠️ Test routes enabled (development mode)');
 }
 
