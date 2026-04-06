@@ -9,6 +9,7 @@ const navBadges = {
   claims: 0,
   support: 0,
   feedback: 0,
+  proStore: 0,
 };
 
 // Get current page from URL
@@ -76,6 +77,11 @@ function generateSidebar() {
           <a href="users.html" class="nav-item ${currentPage === 'users' ? 'active' : ''}">
             <span class="nav-item-icon">👥</span>
             Users
+          </a>
+          <a href="pro-store-applications.html" class="nav-item ${currentPage === 'pro-store-applications' ? 'active' : ''}">
+            <span class="nav-item-icon">🏪</span>
+            Pro Store Applications
+            <span class="nav-item-badge" id="navBadgeProStore" style="display: none;">0</span>
           </a>
         </div>
         
@@ -145,11 +151,18 @@ async function loadNavBadges() {
       updateNavBadge('returns', pending);
     }
 
-    // Load claims count
+   // Load claims count
     const claimsRes = await apiRequest(`${API_BASE}/claims`);
     if (claimsRes.ok) {
       const data = await claimsRes.json();
       updateNavBadge('claims', data.stats?.reported || 0);
+    }
+
+    // Load pro store applications count
+    const proStoreRes = await apiRequest(`${API_BASE}/pro-store/applications?status=pending&limit=1`);
+    if (proStoreRes.ok) {
+      const data = await proStoreRes.json();
+      updateNavBadge('proStore', data.total || 0);
     }
   } catch (error) {
     console.error('Failed to load nav badges:', error);
