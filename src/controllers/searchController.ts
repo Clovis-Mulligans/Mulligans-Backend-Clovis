@@ -642,13 +642,15 @@ if (size) {
               orderBy: { display_order: 'asc' },
               take: 1,
             },
-           users: {
+          users: {
               select: {
                 id: true,
                 email: true,
                 display_name: true,
                 rating: true,
                 is_verified_seller: true,
+                is_pro_store: true,
+                pro_store_name: true,
               },
             },
             listing_attributes: true,

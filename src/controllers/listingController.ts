@@ -64,12 +64,14 @@ export class ListingController {
             ],
             take: 1,
           },
-          users: {
+         users: {
             select: {
               id: true,
               display_name: true,
               rating: true,
               is_verified_seller: true,
+              is_pro_store: true,
+              pro_store_name: true,
             },
           },
         },
@@ -782,6 +784,8 @@ if (keyword) {
                 display_name: true,
                 rating: true,
                 is_verified_seller: true,
+                is_pro_store: true,
+                pro_store_name: true,
               },
             },
           },
@@ -841,12 +845,14 @@ if (keyword) {
       // Get seller info
       const seller = await prisma.users.findUnique({
         where: { id: listing.seller_id },
-        select: {
+       select: {
           id: true,
           display_name: true,
           rating: true,
           avatar_url: true,
           is_verified_seller: true,
+          is_pro_store: true,
+          pro_store_name: true,
         },
       });
 
@@ -887,6 +893,17 @@ if (keyword) {
               { id: 'asc' },
             ],
             take: 1,
+          },
+          users: {
+            select: {
+              id: true,
+              display_name: true,
+              rating: true,
+              avatar_url: true,
+              is_verified_seller: true,
+              is_pro_store: true,
+              pro_store_name: true,
+            },
           },
         },
         orderBy: { created_at: 'desc' }
