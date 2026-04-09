@@ -88,17 +88,20 @@ export const CartController = {
           listings: {
             include: {
               images: {
-                take: 1
+                take: 1,
+orderBy: { id: 'asc' }
               },
              users: {
-                select: {
-                  id: true,
-                  display_name: true,
-                  avatar_url: true,
-                  postcode_area: true,
-                  rating: true,
-                  is_verified_seller: true
-                }
+               select: {
+  id: true,
+  display_name: true,
+  avatar_url: true,
+  postcode_area: true,
+  rating: true,
+  is_verified_seller: true,
+  is_pro_store: true,
+  pro_store_name: true
+}
               }
             }
           }
@@ -180,8 +183,10 @@ export const CartController = {
             seller_avatar: seller.avatar_url,
             seller_postcode: seller.postcode_area,
             seller_rating: seller.rating,
-            seller_is_verified_seller_seller: seller.is_verified_seller || false,
-            items: [],
+           seller_is_verified_seller_seller: seller.is_verified_seller || false,
+is_pro_store: seller.is_pro_store ?? false,
+pro_store_name: seller.pro_store_name ?? null,
+items: [],
             subtotal: 0,
             shipping_cost: 0
           };
