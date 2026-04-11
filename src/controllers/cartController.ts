@@ -226,6 +226,8 @@ items: [],
           offer_price: item.offer_price ? Number(item.offer_price) : null,
           offer_expires_at: item.offer_id ? (offerExpiryMap[item.offer_id as string] || null) : null,
           condition_overall: item.listings.condition_overall ?? null,
+          brand: item.listings.brand ?? null,
+          model: item.listings.model ?? null
         });
 
         sellerGroups[sellerId].subtotal += lineTotal;
