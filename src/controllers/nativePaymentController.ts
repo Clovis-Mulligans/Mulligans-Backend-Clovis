@@ -241,7 +241,7 @@ export class NativePaymentController {
       const unitPrice = effectiveUnitPrice;
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
-      const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
+      const baseShipping = shippingCost;
       const insurancePremium = itemTotal * SHIPPING_INSURANCE_RATE;
       const shippingTotal = baseShipping > 0
         ? parseFloat((baseShipping + insurancePremium).toFixed(2))
@@ -960,7 +960,7 @@ export class NativePaymentController {
         const itemTotal = effectiveUnitPrice * itemData.quantity;
         // H1 cosmetic fix: only the max-shipping listing per seller carries shipping
         const isShippingWinner = sellerShippingWinner[listing.seller_id] === itemData.listing_id;
-        const orderShipping = isShippingWinner ? Math.ceil(itemData.quantity / 5) * shippingCost : 0;
+        const orderShipping = isShippingWinner ? shippingCost : 0;
         const sellerPayout = itemTotal + orderShipping;
         const listingImage = listing.images?.[0]?.image_url || null;
 
