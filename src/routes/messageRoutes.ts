@@ -90,23 +90,22 @@ router.patch('/read-all', authenticateToken, async (req: any, res) => {
 // Create or get conversation
 router.post('/conversations', authenticateToken, async (req: any, res) => {
   try {
-    const { listing_id, seller_id } = req.body;
+   const { listing_id, seller_id, buyer_id: requestBuyerId } = req.body;
     const userId = req.user.sub || req.user.id;
-
     console.log('[MSG] Create conversation request:');
     console.log('   listing_id:', listing_id);
     console.log('   seller_id:', seller_id);
+    console.log('   buyer_id from request:', requestBuyerId);
     console.log('   authenticated userId:', userId);
-
-    const buyer = await prisma.users.findUnique({
+    const currentUser = await prisma.users.findUnique({
       where: { id: userId }
     });
-
-    if (!buyer) {
+    if (!currentUser) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    const buyer_id = buyer.id;
+    // If authenticated user is the seller, use the buyer_id from request
+    // This handles "Message Buyer" from the sold order screen
+    const buyer_id = userId === seller_id && requestBuyerId ? requestBuyerId : currentUser.id;
 
     let conversation = await prisma.conversations.findFirst({
       where: {
