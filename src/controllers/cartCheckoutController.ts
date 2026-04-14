@@ -468,8 +468,8 @@ export class CartCheckoutController {
           has_offers: hasOffers ? 'true' : 'false',
           ...offerMetadataKeys,
         },
-        success_url: `${process.env.FRONTEND_URL || 'https://mulligans.uk.com'}/order-confirmation?session_id={CHECKOUT_SESSION_ID}&type=cart`,
-cancel_url: `${process.env.FRONTEND_URL || 'https://mulligans.uk.com'}/cart`,
+        success_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-cancelled`,
       });
 
       console.log('[CART] Cart checkout session created:', session.id);
