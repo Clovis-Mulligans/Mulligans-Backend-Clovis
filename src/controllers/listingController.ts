@@ -53,10 +53,13 @@ export class ListingController {
 
       // Get featured/recent active listings (limit to 20 for home screen)
       const allListings = await prisma.listings.findMany({
-        where: { 
-          status: 'active',
-        },
-        include: {
+  where: {
+    status: 'active',
+    users: {
+      is_pro_store: true,
+    },
+  },
+  include: {
           images: {
             orderBy: [
               { display_order: 'asc' },
@@ -76,7 +79,7 @@ export class ListingController {
           },
         },
         orderBy: { created_at: 'desc' },
-        take: 20,
+        take: 30,
       });
 
       console.log(`📦 Found ${allListings.length} active listings`);
