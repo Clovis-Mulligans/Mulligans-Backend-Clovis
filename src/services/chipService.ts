@@ -10,6 +10,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import {
   sanitiseUserMessage,
   isAbusiveContent,
@@ -173,7 +174,7 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
       ? prisma.listings.findUnique({
           where: { id: listingId },
           include: {
-            images: { select: { image_url: true }, take: 1, orderBy: { display_order: 'asc' } },
+            images: { select: { image_url: true }, take: 1, orderBy: PRIMARY_IMAGE_ORDER },
             listing_attributes: true,
             users: { select: { display_name: true, rating: true, total_sales: true } },
           },
@@ -361,7 +362,7 @@ async function fetchMatchingListingsForContext(
     orderBy: { created_at: 'desc' },
     take: 10,
     include: {
-      images: { take: 1, orderBy: { display_order: 'asc' } },
+      images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
       listing_attributes: true,
     },
   });
@@ -588,7 +589,7 @@ async function fetchListingCards(listingIds: string[]): Promise<RecommendedListi
       status: 'active',
     },
     include: {
-      images: { take: 1, orderBy: { display_order: 'asc' } },
+      images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
     },
   });
 
@@ -960,7 +961,7 @@ export async function getRecommendations(
         take: limit,
         skip: offset,
         include: {
-          images: { take: 1, orderBy: { display_order: 'asc' } },
+          images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
         },
       }),
       prisma.listings.count({ where: { status: 'active' } }),
@@ -1039,7 +1040,7 @@ export async function getRecommendations(
           take: limit,
           skip: offset,
           include: {
-            images: { take: 1, orderBy: { display_order: 'asc' } },
+            images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
             listing_attributes: true,
           },
         })
@@ -1052,7 +1053,7 @@ export async function getRecommendations(
       take: limit,
       skip: offset,
       include: {
-        images: { take: 1, orderBy: { display_order: 'asc' } },
+        images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
         listing_attributes: true,
       },
     }),

@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { authenticateToken } from '../middleware/auth';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import rateLimit from 'express-rate-limit';
@@ -232,7 +233,7 @@ router.post('/', authenticateToken, messageLimiter, async (req: any, res) => {
           include: {
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' }
+              orderBy: PRIMARY_IMAGE_ORDER
             }
           }
         }

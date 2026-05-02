@@ -6,6 +6,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
 import Stripe from 'stripe';
@@ -421,7 +422,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
           include: {
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -700,7 +701,7 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
           include: {
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -883,7 +884,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
                 include: {
                   images: {
                     take: 1,
-                    orderBy: { display_order: 'asc' },
+                    orderBy: PRIMARY_IMAGE_ORDER,
                   },
                 },
               },

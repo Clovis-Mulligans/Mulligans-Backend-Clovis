@@ -18,6 +18,7 @@
 // ✅ Comprehensive logging for audit trail
 
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
@@ -159,7 +160,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
             title: true,
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -429,7 +430,7 @@ export async function autoReleaseEscrow(): Promise<void> {
             title: true,
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -790,7 +791,7 @@ export async function autoProcessReturnRefunds(): Promise<void> {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             },
@@ -1044,7 +1045,7 @@ export async function autoExpireReturns(): Promise<void> {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             },
@@ -1201,7 +1202,7 @@ export async function checkLostInTransit(): Promise<void> {
             title: true,
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -1294,7 +1295,7 @@ export async function autoEscalateDisputes(): Promise<void> {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             },

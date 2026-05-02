@@ -3,6 +3,7 @@
 
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { sendPushNotification } from './pushNotificationController';
 
@@ -52,7 +53,7 @@ export class MessageController {
               price: true,
               status: true,
               images: {
-                where: { is_primary: true },
+                orderBy: PRIMARY_IMAGE_ORDER,
                 take: 1,
               },
             },
@@ -92,7 +93,7 @@ export class MessageController {
                 price: true,
                 status: true,
                 images: {
-                  where: { is_primary: true },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                   take: 1,
                 },
               },
@@ -156,7 +157,7 @@ export class MessageController {
                 price: true,
                 status: true,
                 images: {
-                  where: { is_primary: true },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                   take: 1,
                 },
               },
@@ -322,7 +323,7 @@ export class MessageController {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },

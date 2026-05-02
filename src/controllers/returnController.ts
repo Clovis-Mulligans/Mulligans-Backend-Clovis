@@ -6,6 +6,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
@@ -1154,7 +1155,7 @@ export const getReturnRequest = async (req: AuthenticatedRequest, res: Response)
           include: {
             listings: {
               include: {
-                images: { take: 1, orderBy: { display_order: 'asc' } },
+                images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
               },
             },
             users_orders_buyer_idTousers: {

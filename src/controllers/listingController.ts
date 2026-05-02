@@ -1,6 +1,7 @@
 // src/controllers/listingController.ts
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
 
@@ -61,10 +62,7 @@ export class ListingController {
   },
   include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
             take: 1,
           },
          users: {
@@ -282,10 +280,7 @@ export class ListingController {
         where: { id: listing.id },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
           }
         },
       });
@@ -775,10 +770,7 @@ if (keyword) {
           where,
           include: {
             images: {
-              orderBy: [
-                { display_order: 'asc' },
-                { id: 'asc' },
-              ],
+              orderBy: PRIMARY_IMAGE_ORDER,
               take: 1,
             },
             users: {
@@ -832,10 +824,7 @@ if (keyword) {
         where: { id },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
       });
@@ -891,10 +880,7 @@ if (keyword) {
         },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
             take: 1,
           },
           users: {
@@ -1058,10 +1044,7 @@ if (keyword) {
         where: { id },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
           listing_attributes: true,
         },

@@ -9,6 +9,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
@@ -156,7 +157,7 @@ export class OrderController {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -271,7 +272,7 @@ export class OrderController {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -368,7 +369,7 @@ export class OrderController {
               shipping_cost: true,
               images: {
                 select: { image_url: true },
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -610,7 +611,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -725,7 +726,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -844,7 +845,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -978,7 +979,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1176,7 +1177,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1511,7 +1512,7 @@ if (isBuyerCancelling) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1602,7 +1603,7 @@ if (isBuyerCancelling) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1762,7 +1763,7 @@ if (isBuyerCancelling) {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1853,7 +1854,7 @@ if (isBuyerCancelling) {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },

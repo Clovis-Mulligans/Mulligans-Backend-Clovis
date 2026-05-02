@@ -9,6 +9,7 @@
 
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 
 // Cart expiry time: 72 hours in milliseconds
@@ -89,7 +90,7 @@ export const CartController = {
             include: {
               images: {
                 take: 1,
-orderBy: { id: 'asc' }
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
              users: {
                select: {

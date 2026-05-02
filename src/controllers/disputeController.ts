@@ -11,6 +11,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
@@ -347,7 +348,7 @@ export class DisputeController {
               price: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1789,7 +1790,7 @@ export class DisputeController {
                   price: true,
                   images: {
                     select: { image_url: true },
-                    orderBy: { display_order: 'asc' },
+                    orderBy: PRIMARY_IMAGE_ORDER,
                   },
                 },
               },

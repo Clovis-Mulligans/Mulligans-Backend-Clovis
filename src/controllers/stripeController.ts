@@ -38,6 +38,7 @@ import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -599,7 +600,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         include: {
           images: {
             take: 1,
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
       });

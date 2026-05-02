@@ -27,6 +27,7 @@ import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
@@ -106,7 +107,7 @@ export class NativePaymentController {
       const listing = await prisma.listings.findUnique({
         where: { id: listing_id },
         include: {
-          images: { take: 1, orderBy: { created_at: 'asc' } },
+          images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
           users: {
             select: {
               id: true,
@@ -340,7 +341,7 @@ export class NativePaymentController {
         include: {
           listings: {
             include: {
-              images: { take: 1, orderBy: { created_at: 'asc' } },
+              images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
               users: {
                 select: {
                   id: true,
@@ -599,7 +600,7 @@ export class NativePaymentController {
     // Initial listing read for metadata only (image, title, price) — NOT for stock decisions
     const listing = await prisma.listings.findUnique({
       where: { id: listingId },
-      include: { images: { take: 1 } },
+      include: { images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER } },
     });
 
     if (!listing) {
@@ -939,7 +940,7 @@ export class NativePaymentController {
       for (const itemData of itemsData) {
         const listing = await tx.listings.findUnique({
           where: { id: itemData.listing_id },
-          include: { images: { take: 1 } },
+          include: { images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER } },
         });
 
         if (!listing) {

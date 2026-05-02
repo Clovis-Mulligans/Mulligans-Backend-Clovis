@@ -2,6 +2,7 @@
 // UPDATED: Added getCurrentUser and updateCurrentUser methods for /me endpoint
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
 
@@ -834,7 +835,7 @@ const salesCount = await prisma.orders.count({
         where,
         include: {
           images: {
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
         orderBy,
@@ -933,7 +934,7 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
         where,
         include: {
           images: {
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
             take: 1, // Only get first image for grid view
           },
         },
@@ -1290,7 +1291,7 @@ const reviewCount = await prisma.reviews.count({
             include: {
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },

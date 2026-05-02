@@ -1,6 +1,7 @@
 // src/controllers/reviewController.ts
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -112,7 +113,7 @@ export class ReviewController {
                   id: true,
                   title: true,
                   images: {
-                    where: { is_primary: true },
+                    orderBy: PRIMARY_IMAGE_ORDER,
                     select: { image_url: true },
                     take: 1,
                   },
@@ -243,7 +244,7 @@ export class ReviewController {
                   id: true,
                   title: true,
                   images: {
-                    where: { is_primary: true },
+                    orderBy: PRIMARY_IMAGE_ORDER,
                     select: { image_url: true },
                     take: 1,
                   },

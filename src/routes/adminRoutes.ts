@@ -6,6 +6,7 @@ import { adminAuth, verifyAdminPassword, adminLogout } from '../middleware/admin
 import { DisputeController } from '../controllers/disputeController';
 import { AdminReportsController } from '../controllers/adminReportsController';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { 
@@ -173,7 +174,7 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
           condition_overall: true,
           images: {
             select: { image_url: true },
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
       });
@@ -725,7 +726,7 @@ router.get('/claims/:id', adminAuth, async (req, res) => {
             images: {
               select: { image_url: true },
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },

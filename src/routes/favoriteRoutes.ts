@@ -2,6 +2,7 @@
 // UPDATED: Explicitly includes listing status for sold badge display
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 
 const router = Router();
@@ -81,7 +82,7 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
       // Get the listing's first image for the notification
       const listingImage = await prisma.images.findFirst({
         where: { listing_id: listing_id },
-        orderBy: { display_order: 'asc' }
+        orderBy: PRIMARY_IMAGE_ORDER,
       });
 
       await prisma.notifications.create({

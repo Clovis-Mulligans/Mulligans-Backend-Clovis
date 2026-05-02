@@ -2,6 +2,7 @@
 // ✅ FIXED: Strict matching for suggestions - no more false positives
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 
 
@@ -366,7 +367,7 @@ export class SearchController {
           images: {
             select: { image_url: true },
             take: 1,
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
         take: 3,
@@ -639,7 +640,7 @@ if (size) {
           take: Number(limit),
           include: {
             images: {
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
               take: 1,
             },
           users: {
@@ -768,7 +769,7 @@ if (size) {
           take: Number(limit),
           include: {
             images: {
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
               take: 1,
             },
             orders: {
