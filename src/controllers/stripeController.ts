@@ -278,9 +278,7 @@ export class StripeController {
       const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
       const shippingInsuranceRate = 0.0125;
       const insurancePremium = itemPrice * shippingInsuranceRate;
-      const shippingTotal = baseShipping > 0
-        ? parseFloat((baseShipping + insurancePremium).toFixed(2))
-        : 0;
+      const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
 
       // [Issue #24] Grand total now includes shipping
       const totalPrice = itemPrice + platformFee + shippingTotal;
