@@ -84,6 +84,14 @@ export async function sendWelcomeEmail(userEmail: string, userName: string): Pro
 // ============================================
 
 export async function sendOrderConfirmation(buyerEmail: string, data: Record<string, string>): Promise<void> {
+  if (data.serviceFee && data.serviceFee !== '0.00') {
+    data.serviceFeeRow = `<tr>
+                        <td style="font-size: 15px; color: #374151; padding: 6px 0;">Service Fee</td>
+                        <td align="right" style="font-size: 15px; color: #374151; padding: 6px 0;">${data.serviceFee}</td>
+                      </tr>`;
+  } else {
+    data.serviceFeeRow = '';
+  }
   const html = loadTemplate('order-confirmation', data);
   
   const { error } = await resend.emails.send({

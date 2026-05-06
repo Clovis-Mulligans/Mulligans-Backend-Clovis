@@ -862,8 +862,8 @@ export class NativePaymentController {
           itemBrand: '',
           itemCondition: '',
           itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
-          buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
-          sellerEarnings: (parseFloat(metadata.item_total) - parseFloat(metadata.buyer_protection_fee || '0')).toFixed(2),
+          buyerProtectionFee: '0.00',
+          sellerEarnings: metadata.seller_payout || metadata.item_total,
           shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
           shipUrl: '#',
         });
