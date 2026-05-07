@@ -718,6 +718,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               quantity: orderQuantity,
               selected_size: selectedSize,  // SIZE VARIANT
               seller_payout: sellerPayout,
+              buyer_total: parseFloat(metadata.total_price),
               currency: 'GBP',
               stripe_payment_intent_id: session.payment_intent as string,
               stripe_payment_method_id: paymentMethodId,

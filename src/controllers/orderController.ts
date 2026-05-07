@@ -496,6 +496,7 @@ if (order.disputes) {
         selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
+        buyer_total: isBuyer && order.buyer_total ? parseFloat(order.buyer_total.toString()) : undefined,
         currency: order.currency,
         status: order.status,
         created_at: order.created_at.toISOString(),

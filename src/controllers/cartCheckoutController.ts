@@ -790,6 +790,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 selected_size: selectedSize,
                 shipping_cost: orderShipping,
                 seller_payout: (effectivePrice * orderQuantity) + orderShipping,
+                buyer_total: parseFloat(((orderItemTotal / totalItemsValue) * parseFloat(grandTotal)).toFixed(2)),
                 listing_title: listing.title,
                 listing_image: listingImage,
                 listing_price: effectivePrice,
