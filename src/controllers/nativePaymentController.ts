@@ -28,6 +28,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
@@ -41,7 +42,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // Platform fee calculation (same as cart checkout)
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99 per item
-const SHIPPING_INSURANCE_RATE = 0.0125; // 1.25% shipping insurance premium
 const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
@@ -243,7 +243,7 @@ export class NativePaymentController {
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
       const baseShipping = shippingCost;
-      const insurancePremium = itemTotal * SHIPPING_INSURANCE_RATE;
+      const insurancePremium = itemTotal * INSURANCE_RATE;
       const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
       const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
       // [Issue #24] Grand total now includes shipping
@@ -412,7 +412,7 @@ export class NativePaymentController {
       // H1: Sum the max shipping cost across all sellers
       const baseShippingTotal = Object.values(sellerMaxShipping).reduce((sum, cost) => sum + cost, 0);
 
-      const insurancePremium = itemsTotal * SHIPPING_INSURANCE_RATE;
+      const insurancePremium = itemsTotal * INSURANCE_RATE;
       const shippingTotal = parseFloat((baseShippingTotal + insurancePremium).toFixed(2));
 
       const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);

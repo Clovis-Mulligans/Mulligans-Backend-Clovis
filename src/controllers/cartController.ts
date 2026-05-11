@@ -10,6 +10,7 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
 import { AuthenticatedRequest } from '../middleware/auth';
 
 // Cart expiry time: 72 hours in milliseconds
@@ -19,8 +20,6 @@ const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 // Buyer protection fee
 const BUYER_PROTECTION_PERCENTAGE = 0.075; // 7.5%
 const BUYER_PROTECTION_FIXED = 0.99; // £0.99
-const INSURANCE_RATE = 0.0125; // 1.25% shipping insurance
-
 // ============================================
 // HELPER: Get available stock for a specific size
 // ============================================

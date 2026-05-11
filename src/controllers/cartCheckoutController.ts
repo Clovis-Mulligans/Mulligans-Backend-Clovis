@@ -43,6 +43,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -64,8 +65,6 @@ interface AuthenticatedRequest extends Request {
 // Platform fee calculation
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
-const INSURANCE_RATE = 0.0125; // 1.25% shipping insurance (Shippo/XCover)
-
 // Escrow constants
 const SHIPPING_DEADLINE_DAYS = 5;
 

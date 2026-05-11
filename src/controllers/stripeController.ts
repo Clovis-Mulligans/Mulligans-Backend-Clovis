@@ -39,6 +39,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -276,8 +277,7 @@ export class StripeController {
       // [Issue #24] Calculate shipping cost
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
-      const shippingInsuranceRate = 0.0125;
-      const insurancePremium = itemPrice * shippingInsuranceRate;
+      const insurancePremium = itemPrice * INSURANCE_RATE;
       const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
 
       // [Issue #24] Grand total now includes shipping
