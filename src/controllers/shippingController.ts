@@ -74,7 +74,7 @@ const shippo = new Shippo({
 /**
  * Get seller's real address from Stripe Connect, with postcode fallback
  */
-async function getSellerAddress(sellerId: string): Promise<{ street: string; city: string; postcode: string }> {
+export async function getSellerAddress(sellerId: string): Promise<{ street: string; city: string; postcode: string }> {
   const seller = await prisma.users.findUnique({
     where: { id: sellerId },
     select: { stripe_connect_id: true, postcode_area: true },

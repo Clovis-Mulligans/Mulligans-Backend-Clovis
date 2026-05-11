@@ -5,7 +5,7 @@
 
 import { prisma } from '../lib/prisma';
 import { Shippo } from 'shippo';
-import { PARCEL_SIZES } from '../controllers/shippingController';
+import { PARCEL_SIZES, getSellerAddress } from '../controllers/shippingController';
 
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
@@ -171,15 +171,20 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
 
     const estimatedCity = getEstimatedCity(sellerPostcode);
 
+    const realSellerAddress = await getSellerAddress(order.seller_id);
+    if (realSellerAddress.street === '1 High Street') {
+      console.warn(`[AUTO-SHIP] Order ${orderId}: seller address is placeholder — Stripe Connect address unavailable`);
+    }
+
     // 5. Create Shippo shipment to get rates
     console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${sellerPostcode} → ${shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '?'}`);
 
     const shipment = await shippo.shipments.create({
       addressFrom: {
         name: seller?.display_name || 'Seller',
-        street1: '1 High Street',
-        city: estimatedCity,
-        zip: sellerPostcode,
+        street1: realSellerAddress.street,
+        city: realSellerAddress.city,
+        zip: realSellerAddress.postcode,
         country: 'GB',
       },
       addressTo: {
