@@ -34,6 +34,7 @@ import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
+import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -293,6 +294,7 @@ export class NativePaymentController {
           seller_payout: (itemTotal + baseShipping).toFixed(2),
           grand_total: grandTotal.toFixed(2),
           offer_id: validatedOfferId || '',
+          insurance_premium: insurancePremium.toFixed(2),
           discount_amount: discountAmount.toFixed(2),
         },
       });
@@ -443,6 +445,7 @@ export class NativePaymentController {
           shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           grand_total: grandTotal.toFixed(2),
+          insurance_premium: insurancePremium.toFixed(2),
           has_offers: Object.keys(offerMetadata).length > 0 ? 'true' : 'false',
           ...offerMetadata,
         },
@@ -509,6 +512,25 @@ export class NativePaymentController {
         postal_code: rawAddress.postal_code || rawAddress.postalCode || rawAddress.postcode || '',
         country: rawAddress.country || 'GB',
       } : null;
+
+      // Validation per Q1 decision (Hybrid: reject critical fields, allow optional)
+      try {
+        validateShippingAddress(resolvedAddress);
+      } catch (err) {
+        if (err instanceof AddressValidationError) {
+          console.error('[PAY] Address validation failed:', {
+            paymentIntentId,
+            userId,
+            missingFields: err.missingFields,
+          });
+          return res.status(400).json({
+            error: 'Shipping address incomplete',
+            missing_fields: err.missingFields,
+            message: 'Please ensure your shipping address includes a valid street, city, and postcode.',
+          });
+        }
+        throw err;
+      }
 
       console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE');
       if (resolvedAddress) {
@@ -594,6 +616,8 @@ export class NativePaymentController {
     const orderQuantity = parseInt(metadata.quantity) || 1;
     const selectedSize = metadata.selected_size || null;
     const offerId = metadata.offer_id || null;
+    const insurancePremium = parseFloat(metadata.insurance_premium || '0');
+    const insuredValue = parseFloat(metadata.item_total || '0');
 
     // Initial listing read for metadata only (image, title, price) — NOT for stock decisions
     const listing = await prisma.listings.findUnique({
@@ -671,6 +695,8 @@ export class NativePaymentController {
           auto_cancel_at: autoCancelAt,
           shipping_address: shippingAddress ?? Prisma.JsonNull,
           updated_at: new Date(),
+          insurance_premium: insurancePremium,
+          insured_value: insuredValue,
           // OFFER SYSTEM: Store offer details on the order
           offer_id: offerId || null,
           original_list_price: offerId ? originalListPrice : null,
@@ -890,6 +916,8 @@ export class NativePaymentController {
   ) {
     const metadata = paymentIntent.metadata;
     const buyerId = metadata.buyer_id;
+    const totalInsurancePremium = parseFloat(metadata.insurance_premium || '0');
+    const totalItemsValue = parseFloat(metadata.items_total || '0');
 
     // Parse items from metadata (format: "listing_id:qty,listing_id:qty")
     const itemsData = metadata.items.split(',').map((item: string) => {
@@ -995,6 +1023,8 @@ export class NativePaymentController {
             auto_cancel_at: autoCancelAt,
             shipping_address: shippingAddress ?? Prisma.JsonNull,
             updated_at: new Date(),
+            insurance_premium: totalItemsValue > 0 ? (itemTotal / totalItemsValue) * totalInsurancePremium : 0,
+            insured_value: itemTotal,
             // OFFER SYSTEM: Store offer details on order
             offer_id: offerInfo?.offer_id || null,
             original_list_price: offerInfo ? originalListPrice : null,

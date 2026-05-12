@@ -49,6 +49,7 @@ import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { validateShippingAddress } from '../utils/addressValidation';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -640,6 +641,9 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         postal_code: shippingAddress.postal_code || '',
         country: shippingAddress.country || 'GB',
       } : null;
+      // Validation per Q1/Q2 decision — throw propagates up to webhook handler
+      // in stripeController.ts:443 which logs, emails info@mulligans.uk.com, and returns 200
+      validateShippingAddress(shippingAddressJson);
 
       // Check if orders already exist (idempotency)
       const existingOrders = await prisma.orders.findMany({

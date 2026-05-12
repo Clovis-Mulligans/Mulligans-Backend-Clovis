@@ -46,6 +46,8 @@ import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
+import { sendEmail } from '../utils/email';
+import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -376,6 +378,7 @@ export class StripeController {
           service_fee: '0.00',
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
+          insurance_premium: insurancePremium.toFixed(2),
           escrow: 'true',
           offer_id: validatedOfferId || '',  // OFFER SYSTEM
         },
@@ -449,8 +452,27 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           // Immediately payout platform fee to bank account
           await StripeController.payoutPlatformFee(fullSession);
         } catch (fulfillmentError: any) {
-          // Log the full error for investigation
-          console.error('[WEBHOOK] Order fulfillment failed for session:', webhookSession.id, fulfillmentError);
+          // Specific handling for address validation failures (Q1/Q2 decision)
+          if (fulfillmentError instanceof AddressValidationError) {
+            console.error('[WEBHOOK_VALIDATION_FAILURE]', {
+              sessionId: webhookSession.id,
+              missingFields: fulfillmentError.missingFields,
+            });
+
+            // Email ops (fire-and-forget — prevent email failure from cascading)
+            sendEmail({
+              to: 'info@mulligans.uk.com',
+              subject: '[Mulligans Alert] Checkout webhook address validation failed',
+              text: `A Stripe Checkout webhook arrived with an invalid shipping address.\n\n` +
+                    `Session: ${webhookSession.id}\n` +
+                    `Missing fields: ${fulfillmentError.missingFields.join(', ')}\n\n` +
+                    `Manual reconciliation required - buyer's payment is in Stripe but no order was created. ` +
+                    `Either refund the buyer or contact them for address correction.`,
+            }).catch(emailErr => console.error('[OPS_EMAIL_FAILED]', emailErr));
+          } else {
+            // Generic fallback — existing behaviour preserved
+            console.error('[WEBHOOK] Order fulfillment failed for session:', webhookSession.id, fulfillmentError);
+          }
           // Still return 200 to prevent Stripe retries that could cause duplicates.
           // The idempotency checks in fulfillOrder/fulfillCartOrder provide some protection,
           // but uncontrolled retries are still dangerous.
@@ -633,6 +655,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
       console.log('Shipping address JSON:', shippingAddressJson);
 
+      // Validation per Q1/Q2 decision — throw propagates up to webhook handler at line 449
+      // which logs, emails info@mulligans.uk.com, and returns 200 to Stripe
+      validateShippingAddress(shippingAddressJson);
+
       // Get payment method
       let paymentMethodId: string | null = null;
       if (session.payment_intent) {
@@ -660,6 +686,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       const discountAmount = offerId
         ? (originalListPrice - effectiveUnitPrice) * orderQuantity
         : 0;
+
+        // Insurance — read from metadata for storage on order (FIX 3 / FINDING G-7)
+      const insurancePremium = parseFloat(metadata.insurance_premium || '0');
+      const insuredValue = parseFloat(metadata.item_price || '0');
 
       // ESCROW: Auto-cancel date (5 days)
       const autoCancelAt = new Date();
@@ -727,6 +757,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               auto_cancel_at: autoCancelAt,
               shipping_address: shippingAddressJson ?? Prisma.JsonNull,
               updated_at: new Date(),
+              insurance_premium: insurancePremium,
+              insured_value: insuredValue,
               // OFFER SYSTEM: Store offer details on the order
               offer_id: offerId || null,
               original_list_price: offerId ? originalListPrice : null,
