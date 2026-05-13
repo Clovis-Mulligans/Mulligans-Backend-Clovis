@@ -7,6 +7,12 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const FROM_ADDRESS = 'Mulligans <hello@mail.mulligans.uk.com>';
 const ADMIN_EMAIL = 'info@mulligans.uk.com';
+const REPLY_TO_CUSTOMER = 'info@mulligans.uk.com';
+
+function shortId(orderId: string): string {
+  const cleaned = orderId.replace(/^order_/, '');
+  return cleaned.substring(0, 8);
+}
 
 function loadTemplate(templateName: string, variables: Record<string, string>): string {
   // Path goes from dist/services/ up to project root, then into src/email-templates/
@@ -97,10 +103,11 @@ export async function sendOrderConfirmation(buyerEmail: string, data: Record<str
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Order Confirmed - #${data.orderReference || data.orderId}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Order Confirmed - #${shortId(data.orderReference || data.orderId)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send order confirmation:', error);
     throw new Error(error.message);
@@ -115,10 +122,11 @@ export async function sendShippingNotification(buyerEmail: string, data: Record<
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Your Order Has Shipped - #${data.orderReference || data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Your Order Has Shipped - #${shortId(data.orderReference || data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send shipping notification:', error);
     throw new Error(error.message);
@@ -133,10 +141,11 @@ export async function sendDeliveryConfirmation(buyerEmail: string, data: Record<
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Your Order Has Been Delivered - #${data.orderReference || data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Your Order Has Been Delivered - #${shortId(data.orderReference || data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send delivery confirmation:', error);
     throw new Error(error.message);
@@ -151,10 +160,11 @@ export async function sendReviewReminder(buyerEmail: string, data: Record<string
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: `How Was Your Purchase? - Mulligans`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send review reminder:', error);
     throw new Error(error.message);
@@ -173,10 +183,11 @@ export async function sendSaleNotification(sellerEmail: string, data: Record<str
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `🎉 You Made a Sale! - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `You Made a Sale! - #${shortId(data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send sale notification:', error);
     throw new Error(error.message);
@@ -191,10 +202,11 @@ export async function sendEscrowReleased(sellerEmail: string, data: Record<strin
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `💰 Payment Released - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Payment Released - #${shortId(data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send escrow released email:', error);
     throw new Error(error.message);
@@ -209,7 +221,8 @@ export async function sendOrderCancellation(recipientEmail: string, data: Record
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: recipientEmail,
-    subject: `Order Cancelled - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Order Cancelled - #${shortId(data.orderNumber)}`,
     html: html,
   });
 
@@ -254,10 +267,11 @@ export async function sendReturnAddressNeeded(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `⚠️ Action Required: Complete Stripe Setup for Return - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Action needed: return address required`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send return address needed email:', error);
     throw new Error(error.message);
@@ -334,10 +348,11 @@ export async function sendDisputeOpenedToSeller(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `⚠️ Dispute Opened - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Dispute Opened - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute opened email to seller:', error);
     throw new Error(error.message);
@@ -383,10 +398,11 @@ export async function sendDisputeOpenedToBuyer(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: `Dispute Submitted - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute confirmation to buyer:', error);
     throw new Error(error.message);
@@ -452,17 +468,18 @@ export async function sendDisputeResponseToBuyer(
     reviewUrl: '#',
   });
   
-  const subject = data.isCounterOffer 
-    ? `💬 Counter Offer Received - ${data.itemTitle}`
-    : `💬 Seller Responded - ${data.itemTitle}`;
-  
+  const subject = data.isCounterOffer
+    ? `Counter Offer Received - ${data.itemTitle}`
+    : `Seller Responded - ${data.itemTitle}`;
+
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: subject,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute response to buyer:', error);
     throw new Error(error.message);
@@ -511,7 +528,7 @@ export async function sendDisputeEscalatedToAdmin(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: ADMIN_EMAIL,
-    subject: `🚨 Escalated Dispute - Review Required - ${data.disputeId.slice(-8)}`,
+    subject: `Escalated Dispute - Review Required - ${data.disputeId.slice(-8)}`,
     html: html,
   });
   
@@ -552,10 +569,11 @@ export async function sendDisputeEscalatedToBuyer(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `🔍 Dispute Under Review - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Dispute Under Review - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send escalation confirmation to buyer:', error);
     throw new Error(error.message);
@@ -650,10 +668,11 @@ export async function sendDisputeResolved(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: email,
-    subject: `⚖️ Dispute Resolved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Dispute Resolved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute resolution email:', error);
     throw new Error(error.message);
@@ -719,10 +738,11 @@ export async function sendReturnLabelCreated(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: recipientEmail,
-    subject: `🏷️ Return Label Created - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Return Label Created - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send return label created email:', error);
     throw new Error(error.message);
@@ -761,10 +781,11 @@ export async function sendReturnShipped(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `📦 Return Item Shipped - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Return Item Shipped - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send return shipped email:', error);
     throw new Error(error.message);
@@ -809,10 +830,11 @@ export async function sendReturnRefundProcessed(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `✅ Refund Processed - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Refund Processed - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send refund processed email:', error);
     throw new Error(error.message);
@@ -852,10 +874,11 @@ export async function sendInsuranceClaimApprovedToBuyer(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `✅ Lost Item Claim Approved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Claim Approved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim approved email to buyer:', error);
     throw new Error(error.message);
@@ -891,10 +914,11 @@ export async function sendInsuranceClaimApprovedToSeller(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `📦 Lost Item Claim Resolved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Claim Resolved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim approved email to seller:', error);
     throw new Error(error.message);
@@ -931,10 +955,11 @@ export async function sendInsuranceClaimDeniedToBuyer(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: `Lost Item Claim Update - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim denied email to buyer:', error);
     throw new Error(error.message);
@@ -968,10 +993,11 @@ export async function sendInsuranceClaimDeniedToSeller(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `✅ Lost Item Claim Resolved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Claim Resolved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim denied email to seller:', error);
     throw new Error(error.message);
@@ -1012,10 +1038,11 @@ export async function sendInsuranceReportReceivedToBuyer(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `📦 Lost Item Report Received - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Report Received - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send report received email to buyer:', error);
     throw new Error(error.message);
@@ -1051,10 +1078,11 @@ export async function sendInsuranceReportReceivedToSeller(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `📦 Item Reported Lost - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Item Reported Lost - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send report received email to seller:', error);
     throw new Error(error.message);
@@ -1085,6 +1113,7 @@ export async function sendDeletionRequested(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: userEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: 'Account Deletion Requested - Mulligans',
     html: html,
   });
@@ -1112,6 +1141,7 @@ export async function sendDeletionCancelled(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: userEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: 'Account Deletion Cancelled - Mulligans',
     html: html,
   });
