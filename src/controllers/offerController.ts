@@ -159,7 +159,7 @@ export class OfferController {
       // Validate offer amount range
       if (offerAmount < minOffer) {
         return res.status(400).json({
-          error: `Offer must be at least 50% of the list price (£${minOffer.toFixed(2)})`,
+          error: `Your offer of £${offerAmount.toFixed(2)} is below the minimum of £${minOffer.toFixed(2)}. Sellers won't see offers below 50% of the listing price.`,
           min_offer: Number(minOffer.toFixed(2)),
           list_price: listPrice,
         });

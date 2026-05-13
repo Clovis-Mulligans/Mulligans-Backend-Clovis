@@ -11,7 +11,10 @@ const router = Router();
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const favorites = await prisma.favorites.findMany({
-      where: { user_id: req.user!.id },
+      where: {
+        user_id: req.user!.id,
+        listings: { status: { not: 'deleted' } },
+      },
       include: {
         listings: {
           include: {

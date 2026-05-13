@@ -829,7 +829,7 @@ if (keyword) {
         },
       });
 
-      if (!listing) {
+      if (!listing || listing.status === 'deleted') {
         res.status(404).json({ error: 'Listing not found' });
         return;
       }
@@ -1081,9 +1081,15 @@ if (keyword) {
         return;
       }
 
+      // Already deleted — idempotent
+      if (listing.status === 'deleted') {
+        res.json({ message: 'Listing deleted successfully' });
+        return;
+      }
+
       // Check for active orders before allowing deletion
       const ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered'];
-      
+
       const activeOrders = await prisma.orders.findFirst({
         where: {
           listing_id: id,
@@ -1097,9 +1103,9 @@ if (keyword) {
 
       if (activeOrders) {
         console.log(`🚫 Cannot delete listing ${id} - has active order ${activeOrders.id} (status: ${activeOrders.status})`);
-        
+
         let message = 'This listing has an active order and cannot be deleted.';
-        
+
         if (['pending', 'paid', 'to_ship'].includes(activeOrders.status)) {
           message = 'This listing has an order waiting to be shipped. Please ship the item first.';
         } else if (['shipped', 'in_transit'].includes(activeOrders.status)) {
@@ -1108,23 +1114,17 @@ if (keyword) {
           message = 'This listing has a recently delivered order. Please wait until transaction completes.';
         }
 
-        res.status(400).json({ 
+        res.status(400).json({
           error: message,
           order_status: activeOrders.status,
         });
         return;
       }
 
-      // Delete images from S3 one by one
-      if (listing.images.length > 0) {
-        for (const img of listing.images) {
-          await S3Service.deleteImage(img.s3_key);
-        }
-      }
-
-      // Delete listing (will cascade delete images in database)
-      await prisma.listings.delete({
+      // Soft delete — preserve data for historical orders/offers
+      await prisma.listings.update({
         where: { id },
+        data: { status: 'deleted', deleted_at: new Date(), updated_at: new Date() },
       });
 
       res.json({ message: 'Listing deleted successfully' });

@@ -102,6 +102,7 @@ model listings {
   parcel_size         String?
   shipping_cost       Decimal?             @db.Decimal(10, 2)
   quantity            Int                  @default(1)
+  deleted_at          DateTime?
   cart_items          cart_items[]
   conversations       conversations[]
   favorites           favorites[]
