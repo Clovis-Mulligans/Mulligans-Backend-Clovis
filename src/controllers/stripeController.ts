@@ -289,8 +289,8 @@ export class StripeController {
       const platformFeePence = Math.round(platformFee * 100);
       const shippingTotalPence = Math.round(shippingTotal * 100);
 
-      // Calculate seller payout (what they'll receive after escrow)
-      const sellerPayout = itemPrice + baseShipping;
+      // Calculate seller payout (what they'll receive after escrow) — item only, shipping is platform's
+      const sellerPayout = itemPrice;
 
       console.log('Price breakdown:', {
         unitPrice: unitPrice.toFixed(2),

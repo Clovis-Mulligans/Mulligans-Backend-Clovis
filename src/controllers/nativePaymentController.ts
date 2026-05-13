@@ -291,7 +291,7 @@ export class NativePaymentController {
           platform_fee: platformFee.toFixed(2),
           buyer_protection_fee: platformFee.toFixed(2),
           service_fee: '0.00',
-          seller_payout: (itemTotal + baseShipping).toFixed(2),
+          seller_payout: itemTotal.toFixed(2),
           grand_total: grandTotal.toFixed(2),
           offer_id: validatedOfferId || '',
           insurance_premium: insurancePremium.toFixed(2),
@@ -989,7 +989,7 @@ export class NativePaymentController {
         // H1 cosmetic fix: only the max-shipping listing per seller carries shipping
         const isShippingWinner = sellerShippingWinner[listing.seller_id] === itemData.listing_id;
         const orderShipping = isShippingWinner ? shippingCost : 0;
-        const sellerPayout = itemTotal + orderShipping;
+        const sellerPayout = itemTotal;
         const listingImage = listing.images?.[0]?.image_url || null;
 
         // [D-C1] STOCK VALIDATION: Check before decrementing

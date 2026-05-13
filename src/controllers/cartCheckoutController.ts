@@ -24,7 +24,7 @@
 // CRITICAL FIXES (9 Feb 2026)
 // ==========================================
 // [E-C3]  Removed non-null assertion on session.metadata; added explicit null checks
-// [P-C2]  seller_payout now includes shipping: (effectivePrice * orderQuantity) + orderShipping
+// [P-C2]  seller_payout stores item-only amount: effectivePrice * orderQuantity (shipping is platform's)
 // [D-C2]  Order ID generation changed from Math.random() to crypto.randomUUID()
 // [D-C1]  Atomic stock update with updateMany WHERE guard for non-size-variant listings
 // ==========================================
@@ -781,7 +781,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             // Create order
             // OFFER SYSTEM: Include offer_id, original_list_price, discount_amount
             // [D-C2] Order ID now uses crypto.randomUUID() instead of Math.random()
-            // [P-C2] seller_payout now includes shipping cost
+            // [P-C2] seller_payout is item-only — shipping is platform's
             const order = await tx.orders.create({
               data: {
                 id: `order_${crypto.randomUUID()}`,
@@ -792,7 +792,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 quantity: orderQuantity,
                 selected_size: selectedSize,
                 shipping_cost: orderShipping,
-                seller_payout: (effectivePrice * orderQuantity) + orderShipping,
+                seller_payout: effectivePrice * orderQuantity,
                 buyer_total: parseFloat(((orderItemTotal / totalItemsValue) * parseFloat(grandTotal)).toFixed(2)),
                 listing_title: listing.title,
                 listing_image: listingImage,
