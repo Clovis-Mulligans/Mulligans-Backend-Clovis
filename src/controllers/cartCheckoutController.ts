@@ -50,6 +50,7 @@ import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { validateShippingAddress } from '../utils/addressValidation';
+import { logStockDecrement } from '../lib/stockUtils';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -835,8 +836,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               });
 
               if (stockResult.count === 0) {
-                throw new Error(`Stock race condition detected for listing ${listingId}`);
+                console.log(`[STOCK] GUARD_FAILED listing=${listingId} requested=${orderQuantity} cause=cart_checkout`);
+                throw new Error(`Insufficient stock for listing ${listingId}`);
               }
+              logStockDecrement(listingId, currentStock, orderQuantity, 'cart_checkout');
             } else {
               // Size-variant: update with computed values (race window minimised by being inside tx)
               await tx.listings.update({
@@ -848,6 +851,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                   updated_at: new Date(),
                 },
               });
+              logStockDecrement(listingId, currentStock, orderQuantity, 'cart_checkout');
+
             }
 
             // [Issue #2] Track listings that sold out for offer expiry

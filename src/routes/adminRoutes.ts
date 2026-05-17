@@ -17,6 +17,7 @@ import {
 } from '../services/emailService';
 import { AdminStatsController } from '../controllers/adminStatsController';
 import { logAdminAction, AUDIT_ACTIONS } from '../lib/auditLogger';
+import { restoreListingStock } from '../lib/stockUtils';
 
 import rateLimit from 'express-rate-limit';
 
@@ -516,6 +517,7 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
           select: {
             id: true,
             amount: true,
+            quantity: true,
             stripe_payment_intent_id: true,
             listing_id: true,
           },
@@ -576,15 +578,14 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
       },
     });
 
-    // Relist the item if listing exists
+    // Return refund: item came back to seller, restore listing stock
     if (returnRequest.orders.listing_id) {
-      await prisma.listings.update({
-        where: { id: returnRequest.orders.listing_id },
-        data: {
-          status: 'active',
-          updated_at: now,
-        },
-      });
+      await restoreListingStock(
+        prisma,
+        returnRequest.orders.listing_id,
+        returnRequest.orders.quantity || 1,
+        'return_refund',
+      );
     }
 
     console.log(`✅ Admin processed refund for return ${req.params.id}: £${refundAmount.toFixed(2)}`);

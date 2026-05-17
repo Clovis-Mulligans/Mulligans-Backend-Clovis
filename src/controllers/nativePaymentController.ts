@@ -35,6 +35,7 @@ import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
+import { logStockDecrement } from '../lib/stockUtils';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -593,7 +594,10 @@ export class NativePaymentController {
       });
     } catch (error: any) {
       console.error('[PAY] Error confirming payment:', error);
-      res.status(500).json({ error: error.message || 'Failed to confirm payment' });
+      const userMessage = error.message?.includes('Insufficient stock')
+        ? 'This item is no longer available. Your payment has been refunded.'
+        : (error.message || 'Failed to confirm payment');
+      res.status(500).json({ error: userMessage });
     }
   }
 
@@ -722,8 +726,10 @@ export class NativePaymentController {
         });
 
         if (stockResult.count === 0) {
-          throw new Error(`Stock race condition detected for listing ${listingId}`);
+          console.log(`[STOCK] GUARD_FAILED listing=${listingId} requested=${orderQuantity} cause=native_checkout`);
+          throw new Error(`Insufficient stock for listing ${listingId}`);
         }
+        logStockDecrement(listingId, freshListing.quantity, orderQuantity, 'native_checkout');
       } else {
         // Size-variant: update with computed values (race window minimised by being inside tx)
         await tx.listings.update({
@@ -735,6 +741,7 @@ export class NativePaymentController {
             updated_at: new Date(),
           },
         });
+        logStockDecrement(listingId, freshListing.quantity, orderQuantity, 'native_checkout');
       }
 
       // Remove from cart if present
@@ -1049,8 +1056,10 @@ export class NativePaymentController {
         });
 
         if (stockResult.count === 0) {
-          throw new Error(`Stock race condition detected for listing ${itemData.listing_id}`);
+          console.log(`[STOCK] GUARD_FAILED listing=${itemData.listing_id} requested=${itemData.quantity} cause=native_checkout`);
+          throw new Error(`Insufficient stock for listing ${itemData.listing_id}`);
         }
+        logStockDecrement(itemData.listing_id, listing.quantity, itemData.quantity, 'native_checkout');
 
         // Track sold listings for offer expiry
         if (shouldMarkSold) {

@@ -48,6 +48,7 @@ import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
+import { logStockDecrement } from '../lib/stockUtils';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -784,8 +785,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             });
 
             if (stockResult.count === 0) {
-              throw new Error(`Stock race condition detected for listing ${listing_id}`);
+              console.log(`[STOCK] GUARD_FAILED listing=${listing_id} requested=${orderQuantity} cause=single_checkout`);
+              throw new Error(`Insufficient stock for listing ${listing_id}`);
             }
+            logStockDecrement(listing_id, freshListing.quantity, orderQuantity, 'single_checkout');
           } else {
             // Size-variant: update with computed values (race window minimised by being inside tx)
             await tx.listings.update({
@@ -797,6 +800,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 updated_at: new Date(),
               },
             });
+            logStockDecrement(listing_id, freshListing.quantity, orderQuantity, 'single_checkout');
           }
 
           // Remove from buyer's cart (if was in cart)

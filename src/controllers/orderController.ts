@@ -14,6 +14,7 @@ import Stripe from 'stripe';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { restoreListingStock } from '../lib/stockUtils';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -1290,16 +1291,14 @@ if (isBuyerCancelling) {
           },
         });
 
-        // Relist the item
+        // Restore stock and relist the item
         if (order.listing_id) {
-          await tx.listings.update({
-            where: { id: order.listing_id },
-            data: {
-              status: 'active',
-              updated_at: now,
-            },
-          });
-          console.log('📋 Item relisted:', order.listing_id);
+          await restoreListingStock(
+            tx,
+            order.listing_id,
+            order.quantity || 1,
+            'order_cancelled',
+          );
         }
 
         // Increment user's cancellation count
