@@ -853,11 +853,51 @@ if (keyword) {
         where: { listing_id: id },
       });
 
+      // Bug 1 (F2): Look up authenticated buyer's accepted offer on this listing
+      let viewer_active_offer: {
+        offer_id: string;
+        offer_amount: string;
+        accepted_at: string;
+        expires_at: string;
+        status: string;
+      } | null = null;
+
+      const viewerId = (req as any).user?.id;
+      if (viewerId && viewerId !== listing.seller_id) {
+        const activeOffer = await prisma.offers.findFirst({
+          where: {
+            listing_id: id,
+            buyer_id: viewerId,
+            status: { in: ['ACCEPTED', 'COUNTER_ACCEPTED'] },
+            acceptance_expires_at: { gt: new Date() },
+          },
+          orderBy: { created_at: 'desc' },
+          select: {
+            id: true,
+            final_amount: true,
+            responded_at: true,
+            acceptance_expires_at: true,
+            status: true,
+          },
+        });
+
+        if (activeOffer && activeOffer.final_amount && activeOffer.acceptance_expires_at) {
+          viewer_active_offer = {
+            offer_id: activeOffer.id,
+            offer_amount: activeOffer.final_amount.toString(),
+            accepted_at: activeOffer.responded_at?.toISOString() || '',
+            expires_at: activeOffer.acceptance_expires_at.toISOString(),
+            status: activeOffer.status,
+          };
+        }
+      }
+
       res.json({ 
         listing: { 
           ...listing, 
           seller,
           favorite_count: favoriteCount,
+          viewer_active_offer,
         } 
       });
     } catch (error) {

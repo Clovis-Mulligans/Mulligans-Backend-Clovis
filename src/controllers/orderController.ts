@@ -496,6 +496,10 @@ if (order.disputes) {
         quantity: order.quantity || 1,  // ✅ SIZE VARIANT
         selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
+        shipping_total: parseFloat(
+          ((order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0) +
+           (order.insurance_premium ? parseFloat(order.insurance_premium.toString()) : 0)).toFixed(2)
+        ),
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
         buyer_total: isBuyer && order.buyer_total ? parseFloat(order.buyer_total.toString()) : undefined,
         currency: order.currency,

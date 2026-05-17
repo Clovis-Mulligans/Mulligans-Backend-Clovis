@@ -174,6 +174,12 @@ export const getParcelSizes = async (req: Request, res: Response) => {
       name: value.name,
       description: value.description,
       price: value.price,
+      length: value.length,
+      width: value.width,
+      height: value.height,
+      weight: value.weight,
+      dimensions: `${value.length}×${value.width}×${value.height}cm`,
+      max_weight: `${value.weight}kg`,
     }));
 
     res.json({
