@@ -66,12 +66,14 @@ async function notifyUser(
   message: string,
   relatedId: string,
   imageUrl: string | null,
-  offerId: string
+  offerId: string,
+  listingId?: string
 ): Promise<void> {
+  const notifId = generateNotificationId();
   // In-app notification
   await prisma.notifications.create({
     data: {
-      id: generateNotificationId(),
+      id: notifId,
       user_id: userId,
       type: 'offer',
       title,
@@ -84,8 +86,10 @@ async function notifyUser(
   // Push notification
   try {
     await sendPushNotification(userId, title, message, {
+      notification_id: notifId,
       type: 'offer',
       offer_id: offerId,
+      listing_id: listingId,
     });
   } catch (e) {
     console.error('[OFFERS] Push failed:', e);
@@ -241,7 +245,8 @@ export class OfferController {
         `${buyer?.display_name || 'A buyer'} offered £${offerAmount.toFixed(2)} for "${listing.title}"`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Offer created: ${offer.id} - £${offerAmount.toFixed(2)} on listing ${listing_id}`);
@@ -595,7 +600,8 @@ export class OfferController {
         `Your offer of £${offerAmount.toFixed(2)} for "${offer.listings.title}" has been accepted! Complete your purchase within 24 hours.`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Offer accepted: ${offer.id}`);
@@ -693,7 +699,8 @@ export class OfferController {
         `Your offer of £${offerAmount.toFixed(2)} for "${offer.listings.title}" was declined by the seller.`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Offer declined: ${offer.id}`);
@@ -822,7 +829,8 @@ export class OfferController {
         `The seller has countered your offer with £${counterAmount.toFixed(2)} for "${offer.listings.title}". You have 24 hours to respond.`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Offer countered: ${offer.id} - counter: £${counterAmount.toFixed(2)}`);
@@ -928,7 +936,8 @@ export class OfferController {
         `The buyer accepted your counter offer of £${counterAmount.toFixed(2)} for "${offer.listings.title}". Waiting for them to complete the purchase.`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Counter accepted: ${offer.id}`);
@@ -1022,7 +1031,8 @@ export class OfferController {
         `The buyer declined your counter offer of £${counterAmount.toFixed(2)} for "${offer.listings.title}".`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Counter declined: ${offer.id}`);
@@ -1108,7 +1118,8 @@ export class OfferController {
         `The buyer withdrew their offer of £${offerAmount.toFixed(2)} for "${offer.listings.title}".`,
         offer.id,
         listingImage,
-        offer.id
+        offer.id,
+        offer.listing_id
       );
 
       console.log(`[OFFERS] Offer withdrawn: ${offer.id}`);

@@ -650,9 +650,10 @@ if (order.disputes) {
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
+      const shippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: shippedNotifId,
           user_id: order.buyer_id,
           type: 'shipped',
           title: 'Your item has shipped! 📦',
@@ -670,7 +671,7 @@ if (order.disputes) {
           order.buyer_id,
           '📦 Your item has shipped!',
           `"${listingTitle}" is on its way! Tracking: ${tracking_number}`,
-          { type: 'order_update', order_id: orderId, is_buyer: true }
+          { notification_id: shippedNotifId, type: 'purchase_shipped', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);
@@ -761,9 +762,10 @@ if (order.disputes) {
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
+      const deliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: deliveredNotifId,
           user_id: order.buyer_id,
           type: 'delivered',
           title: 'Item delivered! 🎉',
@@ -779,7 +781,7 @@ if (order.disputes) {
           order.buyer_id,
           'Item Delivered!',
           `"${listingTitle}" has been delivered. You have ${ESCROW_RELEASE_DAYS} days to confirm.`,
-          { type: 'delivered', order_id: orderId }
+          { notification_id: deliveredNotifId, type: 'purchase_delivered', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -920,9 +922,10 @@ if (order.disputes) {
       // Notify seller
       const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
+      const payoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: payoutNotifId,
           user_id: seller.id,
           type: 'payout',
           title: 'Payment Released! 💰',
@@ -938,7 +941,7 @@ if (order.disputes) {
           seller.id,
           'Payment Released!',
           `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
-          { type: 'payout', order_id: orderId }
+          { notification_id: payoutNotifId, type: 'payout_released', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1036,9 +1039,10 @@ if (order.disputes) {
       });
 
       // Notify buyer - claim is being processed
+      const lostBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: lostBuyerNotifId,
           user_id: order.buyer_id,
           type: 'order_update',
           title: 'Lost Item Report Received',
@@ -1054,16 +1058,17 @@ if (order.disputes) {
           order.buyer_id,
           'Lost Item Report Received',
           `We're investigating your lost item report for "${listingTitle}".`,
-          { type: 'order_update', order_id: orderId }
+          { notification_id: lostBuyerNotifId, type: 'order_update', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
       }
 
       // Notify seller
+      const lostSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: lostSellerNotifId,
           user_id: order.seller_id,
           type: 'order_issue',
           title: 'Item Reported Lost in Transit',
@@ -1079,7 +1084,7 @@ if (order.disputes) {
           order.seller_id,
           'Item Reported Lost',
           `"${listingTitle}" was reported as lost by the buyer. Investigation in progress.`,
-          { type: 'order_issue', order_id: orderId }
+          { notification_id: lostSellerNotifId, type: 'order_issue', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1367,9 +1372,10 @@ if (isBuyerCancelling) {
         ? `${cancelledBy} cancelled the order for "${listingTitle}". Your item has been relisted. Reason: ${fullCancelReason}`
         : `${cancelledBy} cancelled the order for "${listingTitle}". A refund has been processed. Reason: ${fullCancelReason}`;
 
+      const cancelledNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: cancelledNotifId,
           user_id: otherUser?.id || '',
           type: 'order_cancelled',
           title: 'Order Cancelled',
@@ -1385,7 +1391,7 @@ if (isBuyerCancelling) {
           otherUser?.id || '',
           'Order Cancelled',
           notificationMessage.substring(0, 100),
-          { type: 'order_cancelled', order_id: orderId }
+          { notification_id: cancelledNotifId, type: 'order_cancelled', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1553,9 +1559,10 @@ if (isBuyerCancelling) {
       });
 
       // Notify seller
+      const disputeSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: disputeSellerNotifId,
           user_id: order.seller_id,
           type: 'dispute',
           title: 'Dispute Opened',
@@ -1571,7 +1578,7 @@ if (isBuyerCancelling) {
           order.seller_id,
           'Dispute Opened',
           `A dispute has been opened for "${listingTitle}". Payment is on hold.`,
-          { type: 'dispute', order_id: orderId }
+          { notification_id: disputeSellerNotifId, type: 'dispute_opened', order_id: orderId, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1676,9 +1683,10 @@ if (isBuyerCancelling) {
       // Notify seller
       const payoutAmount = parseFloat(sellerPayout.toString()).toFixed(2);
 
+      const escrowPayoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: escrowPayoutNotifId,
           user_id: seller.id,
           type: 'payout',
           title: 'Payment Released! 💰',
@@ -1694,7 +1702,7 @@ if (isBuyerCancelling) {
           seller.id,
           'Payment Released!',
           `£${payoutAmount} for "${listingTitle}" has been transferred.`,
-          { type: 'payout', order_id: orderId }
+          { notification_id: escrowPayoutNotifId, type: 'payout_released', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);

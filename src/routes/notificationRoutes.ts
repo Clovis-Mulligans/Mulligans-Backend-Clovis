@@ -54,11 +54,25 @@ router.get('/', authenticateToken, async (req: any, res) => {
 router.patch('/:id/read', authenticateToken, async (req: any, res) => {
   try {
     const notificationId = req.params.id;
-    const notification = await prisma.notifications.update({
+    const userId = req.user.sub || req.user.id;
+
+    const notification = await prisma.notifications.findUnique({
       where: { id: notificationId },
-      data: { is_read: true }
+      select: { id: true, user_id: true, is_read: true },
     });
-    res.json(notification);
+
+    if (!notification || notification.user_id !== userId) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    if (!notification.is_read) {
+      await prisma.notifications.update({
+        where: { id: notificationId },
+        data: { is_read: true },
+      });
+    }
+
+    res.json({ success: true });
   } catch (error) {
     console.error('Failed to mark notification as read:', error);
     res.status(500).json({ error: 'Failed to mark notification as read' });

@@ -926,10 +926,11 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       const autoShipPush = autoLabelResult.success
         ? `Your shipping label is ready. Print and ship!`
         : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
+      const notifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       if (needsVerification) {
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: notifId,
             user_id: seller_id,
             type: 'payout',
             title: 'Congratulations on your sale!',
@@ -941,7 +942,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       } else {
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: notifId,
             user_id: seller_id,
             type: 'sale',
             title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
@@ -958,7 +959,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           seller_id,
           autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You made a sale!',
          `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipPush}`,
-          { type: 'sale', order_id: order.id }
+          { notification_id: notifId, type: 'sale_made', order_id: order.id }
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);

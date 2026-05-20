@@ -945,9 +945,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         const qtyText = sellerTotalQty > 1 ? ` (${sellerTotalQty} items)` : '';
 
         if (needsVerification) {
+          const sellerNeedsVerifyNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
           await prisma.notifications.create({
             data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: sellerNeedsVerifyNotifId,
               user_id: seller_id,
               type: 'payout',
               title: 'Congratulations on your sale!',
@@ -963,7 +964,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               seller_id,
               'Congratulations on your sale!',
               `You sold ${listing_ids.length} item(s) for £${subtotal}. Add bank details to get paid.`,
-              { type: 'sale', order_id: createdOrders[0]?.id }
+              { notification_id: sellerNeedsVerifyNotifId, type: 'sale_made', order_id: createdOrders[0]?.id }
             );
           } catch (pushErr) {
             console.error('[CART] Push to seller failed:', pushErr);
@@ -972,9 +973,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
           const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
           const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
+          const sellerVerifiedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
           await prisma.notifications.create({
             data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: sellerVerifiedNotifId,
               user_id: seller_id,
               type: 'sale',
              title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
@@ -990,7 +992,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               seller_id,
               allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
               `You sold ${listing_ids.length} item(s) for £${subtotal}. ${cartAutoMsg}`,
-              { type: 'sale', order_id: createdOrders[0]?.id }
+              { notification_id: sellerVerifiedNotifId, type: 'sale_made', order_id: createdOrders[0]?.id }
             );
           } catch (pushErr) {
             console.error('[CART] Push to seller failed:', pushErr);
@@ -1041,9 +1043,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       const itemText = totalItems === 1 ? '1 item' : `${totalItems} items`;
 
       // Notify buyer with image
+      const buyerCartNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: buyerCartNotifId,
           user_id: buyerId,
           type: 'order',
           title: 'Payment Successful!',
@@ -1059,7 +1062,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           buyerId,
           'Payment Successful!',
           `Your order of ${itemText} is confirmed. Sellers will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
-          { type: 'order', order_id: createdOrders[0]?.id }
+          { notification_id: buyerCartNotifId, type: 'purchase_paid', order_id: createdOrders[0]?.id }
         );
       } catch (pushErr) {
         console.error('[CART] Push to buyer failed:', pushErr);

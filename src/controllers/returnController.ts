@@ -234,9 +234,10 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
     // If awaiting address, notify seller specifically
     if (initialStatus === 'awaiting_address' && !isSeller) {
       // In-app notification
+      const returnAddressNeededNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: returnAddressNeededNotifId,
           user_id: order.seller_id,
           type: 'return_address_needed',
           title: '⚠️ Action Required: Return Address Needed',
@@ -252,7 +253,7 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
           order.seller_id,
           '⚠️ Action Required',
           `Complete your Stripe setup to receive the returned "${listingTitle}"`,
-          { type: 'return_address_needed', return_id: returnRequest.id, order_id: orderId }
+          { notification_id: returnAddressNeededNotifId, type: 'return_requested', return_id: returnRequest.id, order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[RETURN] Push notification failed:', pushErr);
@@ -279,9 +280,10 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
     const otherUserId = isBuyer ? order.seller_id : order.buyer_id;
 
     // In-app notification
+    const returnApprovedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: returnApprovedNotifId,
         user_id: otherUserId,
         type: 'return_approved',
         title: 'Return Approved',
@@ -299,7 +301,7 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
         otherUserId,
         'Return Approved',
         `Return approved for "${listingTitle}"`,
-        { type: 'return_approved', return_id: returnRequest.id, order_id: orderId }
+        { notification_id: returnApprovedNotifId, type: 'return_approved', return_id: returnRequest.id, order_id: orderId }
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
@@ -622,9 +624,10 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
     const seller = returnRequest.orders.users_orders_seller_idTousers;
 
     // In-app notification to seller
+    const returnLabelCreatedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: returnLabelCreatedNotifId,
         user_id: returnRequest.orders.seller_id,
         type: 'return_label_created',
         title: 'Return Label Created',
@@ -640,7 +643,7 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
         returnRequest.orders.seller_id,
         'Return Label Created',
         `Buyer is returning "${listingTitle}". Tracking: ${transaction.trackingNumber}`,
-        { type: 'return_label_created', return_id: returnId }
+        { notification_id: returnLabelCreatedNotifId, type: 'return_approved', return_id: returnId, order_id: returnRequest.order_id }
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
@@ -846,9 +849,10 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
     const buyer = returnRequest.orders.users_orders_buyer_idTousers;
 
     // In-app notification to buyer
+    const returnLabelReadyNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: returnLabelReadyNotifId,
         user_id: returnRequest.orders.buyer_id,
         type: 'return_label_created',
         title: 'Return Label Ready',
@@ -864,7 +868,7 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
         returnRequest.orders.buyer_id,
         'Return Label Ready',
         `Return label ready for "${listingTitle}". Ship it back to get your refund.`,
-        { type: 'return_label_ready', return_id: returnId }
+        { notification_id: returnLabelReadyNotifId, type: 'return_approved', return_id: returnId, order_id: returnRequest.order_id }
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
@@ -966,9 +970,10 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
     const seller = returnRequest.orders.users_orders_seller_idTousers;
 
     // In-app notification to seller
+    const returnShippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: returnShippedNotifId,
         user_id: returnRequest.orders.seller_id,
         type: 'return_shipped',
         title: 'Return Item Shipped',
@@ -984,7 +989,7 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
         returnRequest.orders.seller_id,
         'Return Item Shipped',
         `Return is on its way! Tracking: ${returnRequest.return_tracking_number}`,
-        { type: 'return_shipped', return_id: returnId }
+        { notification_id: returnShippedNotifId, type: 'return_shipped', return_id: returnId, order_id: returnRequest.order_id }
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);
@@ -1081,9 +1086,10 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
     const refundAmount = returnRequest.refund_amount?.toFixed(2) || '0.00';
 
     // In-app notification to buyer
+    const returnDeliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: returnDeliveredNotifId,
         user_id: returnRequest.orders.buyer_id,
         type: 'return_delivered',
         title: 'Return Received',
@@ -1099,7 +1105,7 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
         returnRequest.orders.buyer_id,
         'Return Received',
         `Seller received your return. Refund processing in ${RETURN_ESCROW_DAYS} days.`,
-        { type: 'return_delivered', return_id: returnId }
+        { notification_id: returnDeliveredNotifId, type: 'return_refunded', return_id: returnId, order_id: returnRequest.order_id }
       );
     } catch (pushErr) {
       console.error('[RETURN] Push notification failed:', pushErr);

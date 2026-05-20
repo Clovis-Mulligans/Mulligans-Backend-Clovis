@@ -567,9 +567,10 @@ const carrier = carrierName !== 'Unknown'
     // Create notification for buyer
     const listingImage = order.listings?.images?.[0]?.image_url || null;
     
+    const labelCreatedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: labelCreatedNotifId,
         user_id: order.buyer_id,
         type: 'shipping_label_created',
         title: 'Shipping Label Created',
@@ -585,7 +586,7 @@ const carrier = carrierName !== 'Unknown'
         order.buyer_id,
         'Shipping Label Created',
         `The seller is preparing to ship your order. Tracking: ${transaction.trackingNumber}`,
-        { type: 'shipping', order_id: orderId }
+        { notification_id: labelCreatedNotifId, type: 'purchase_shipped', order_id: orderId }
       );
     } catch (pushErr) {
       console.error('[SHIP] Push notification failed:', pushErr);
@@ -772,9 +773,10 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
     // ✅ FIX: Add image_url and use consistent type
     const listingImage = order.listings?.images?.[0]?.image_url || null;
     
+    const shippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: shippedNotifId,
         user_id: order.buyer_id,
         type: 'shipped',  // ✅ FIX: Use 'shipped' to match frontend
         title: 'Your Order Has Shipped! 📦',
@@ -790,7 +792,7 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
         order.buyer_id,
         'Your Order Has Shipped!',
         `"${order.listings?.title || 'Your item'}" is on its way! Tracking: ${order.tracking_number}`,
-        { type: 'shipped', order_id: orderId }
+        { notification_id: shippedNotifId, type: 'purchase_shipped', order_id: orderId }
       );
     } catch (pushErr) {
       console.error('[SHIP] Push notification failed:', pushErr);
@@ -899,9 +901,10 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
           const listingImage = orderWithListing?.listings?.images?.[0]?.image_url || null;
           const listingTitle = orderWithListing?.listings?.title || 'Your item';
           
+          const webhookDeliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
           await prisma.notifications.create({
             data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: webhookDeliveredNotifId,
               user_id: order.buyer_id,
               type: 'delivered',  // ✅ FIX: Use 'delivered' to match frontend
               title: 'Your Order Has Been Delivered! 🎉',
@@ -949,7 +952,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
               order.buyer_id,
               'Your Order Has Been Delivered!',
               `"${listingTitle}" has arrived. Confirm receipt or report any issues.`,
-              { type: 'delivered', order_id: order.id }
+              { notification_id: webhookDeliveredNotifId, type: 'purchase_delivered', order_id: order.id }
             );
           } catch (pushErr) {
             console.error('[SHIP] Push notification failed:', pushErr);

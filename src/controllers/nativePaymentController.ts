@@ -789,9 +789,10 @@ export class NativePaymentController {
     const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
     const offerText = offerId ? ` at your offer price of £${effectiveUnitPrice.toFixed(2)}` : '';
 
+    const nativeSingleBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: nativeSingleBuyerNotifId,
         user_id: buyerId,
         type: 'order',
         title: 'Payment Successful!',
@@ -807,15 +808,16 @@ export class NativePaymentController {
         buyerId,
         'Payment Successful!',
         `Your order for "${listing.title}" is confirmed. Shipping within ${SHIPPING_DEADLINE_DAYS} days.`,
-        { type: 'order', order_id: createdOrder.id }
+        { notification_id: nativeSingleBuyerNotifId, type: 'purchase_paid', order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to buyer failed:', pushErr);
     }
 
+    const nativeSingleSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: nativeSingleSellerNotifId,
         user_id: sellerId,
         type: 'sale',
         title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
@@ -831,7 +833,7 @@ export class NativePaymentController {
         sellerId,
         autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You Made a Sale!',
         `"${listing.title}" sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready. Print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
-        { type: 'sale', order_id: createdOrder.id }
+        { notification_id: nativeSingleSellerNotifId, type: 'sale_made', order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to seller failed:', pushErr);
@@ -1120,9 +1122,10 @@ export class NativePaymentController {
     const firstImage = orders[0]?.listing?.images?.[0]?.image_url || null;
     const totalItems = orders.reduce((sum, o) => sum + o.quantity, 0);
 
+    const nativeCartBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: nativeCartBuyerNotifId,
         user_id: buyerId,
         type: 'order',
         title: 'Payment Successful!',
@@ -1138,7 +1141,7 @@ export class NativePaymentController {
         buyerId,
         'Payment Successful!',
         `Your order of ${totalItems} item${totalItems > 1 ? 's' : ''} is confirmed.`,
-        { type: 'order', order_id: orders[0]?.id }
+        { notification_id: nativeCartBuyerNotifId, type: 'purchase_paid', order_id: orders[0]?.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to buyer failed:', pushErr);
@@ -1162,9 +1165,10 @@ export class NativePaymentController {
 
 const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
       const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
+      const nativeCartSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: nativeCartSellerNotifId,
           user_id: sellerId,
           type: 'sale',
           title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Items Sold!',
@@ -1180,7 +1184,7 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
           sellerId,
           allLabelsReady ? 'Items Sold — Labels Ready!' : 'You Made a Sale!',
           `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
-          { type: 'sale', order_id: sellerOrderList[0]?.id }
+          { notification_id: nativeCartSellerNotifId, type: 'sale_made', order_id: sellerOrderList[0]?.id }
         );
       } catch (pushErr) {
         console.error('[PAY] Push to seller failed:', pushErr);
