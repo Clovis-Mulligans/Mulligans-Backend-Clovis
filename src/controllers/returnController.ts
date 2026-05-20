@@ -16,6 +16,7 @@ import {
   sendReturnShipped,
   sendReturnRefundProcessed,
 } from '../services/emailService';
+import { normalizeCarrierName } from '../utils/carrierName';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -559,7 +560,7 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
     try {
       const rate = await shippo.rates.get(rateId);
       labelCost = parseFloat(rate.amount || '0');
-      carrierName = rate.provider || 'Unknown';
+      carrierName = normalizeCarrierName(rate.provider) || 'Unknown';
       console.log('💰 Return label cost:', labelCost);
       console.log('📦 Carrier:', carrierName);
     } catch (rateError) {
@@ -752,7 +753,7 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
     try {
       const rate = await shippo.rates.get(rateId);
       labelCost = parseFloat(rate.amount || '0');
-      carrierName = rate.provider || 'Unknown';
+      carrierName = normalizeCarrierName(rate.provider) || 'Unknown';
     } catch (rateError) {
       console.warn('⚠️ Could not fetch rate details');
     }

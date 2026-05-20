@@ -10,6 +10,7 @@ import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
 import Stripe from 'stripe';
+import { normalizeCarrierName } from '../utils/carrierName';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -367,7 +368,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     // Format rates for response
     const rates = trackedRates.map((rate: any) => ({
       id: rate.objectId,
-      carrier: rate.provider,
+      carrier: normalizeCarrierName(rate.provider),
       service: rate.servicelevel?.name || rate.servicelevelName,
       price: parseFloat(rate.amount),
       currency: rate.currency,

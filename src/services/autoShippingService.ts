@@ -4,6 +4,7 @@
 // On failure, order stays in 'to_ship' without a label — seller uses manual wizard.
 
 import { prisma } from '../lib/prisma';
+import { normalizeCarrierName } from '../utils/carrierName';
 import { Shippo } from 'shippo';
 import { PARCEL_SIZES, getSellerAddress } from '../controllers/shippingController';
 
@@ -410,7 +411,7 @@ function filterTrackedRates(rates: any[]): TrackedRate[] {
 
   const formatted: TrackedRate[] = tracked.map((rate: any) => ({
     id: rate.objectId,
-    carrier: rate.provider,
+    carrier: normalizeCarrierName(rate.provider),
     service: rate.servicelevel?.name || rate.servicelevelName || 'Unknown',
     price: parseFloat(rate.amount),
     currency: rate.currency,
