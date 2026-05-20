@@ -850,11 +850,18 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         let newStatus = order.status;
         let deliveredAt = order.delivered_at;
         let escrowReleaseAt: Date | null = null;
-
+        let shippedAt = order.shipped_at;
         // Map Shippo status to our order status
         switch (status) {
+          case 'PRE_TRANSIT':
+            // Carrier has accepted parcel, awaiting first scan
+            // Treat same as TRANSIT for buyer-facing status (parcel is out of seller's hands)
+            newStatus = 'in_transit';
+            if (!shippedAt) shippedAt = new Date();
+            break;
           case 'TRANSIT':
             newStatus = 'in_transit';
+            if (!shippedAt) shippedAt = new Date();
             break;
           case 'DELIVERED':
             newStatus = 'delivered';
@@ -872,12 +879,16 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         }
 
         // Update ALL orders with this tracking number (multi-item shipments)
+        // Per Brief 2 fix: clear auto_cancel_at on ANY tracking event (parcel is with carrier)
+        // and persist shipped_at so dashboards reflect carrier-acceptance time
         await prisma.orders.updateMany({
           where: { tracking_number: trackingNumber },
           data: {
             status: newStatus,
             delivered_at: deliveredAt,
-            escrow_release_at: escrowReleaseAt, // ✅ NEW: Set escrow release date
+            escrow_release_at: escrowReleaseAt,
+            shipped_at: shippedAt,
+            auto_cancel_at: null,
             updated_at: new Date(),
           },
         });
