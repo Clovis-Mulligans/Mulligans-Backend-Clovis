@@ -198,6 +198,8 @@ model orders {
   offer_id                      String?           @db.VarChar(255)
   original_list_price           Decimal?          @db.Decimal(10, 2)
   discount_amount               Decimal?          @default(0) @db.Decimal(10, 2)
+  qr_code_url                   String?
+  qr_code_expires_at            DateTime?
   disputes                      disputes?
   users_orders_buyer_idTousers  users             @relation("orders_buyer_idTousers", fields: [buyer_id], references: [id])
   listings                      listings?         @relation(fields: [listing_id], references: [id])

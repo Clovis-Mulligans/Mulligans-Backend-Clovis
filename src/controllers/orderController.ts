@@ -515,6 +515,8 @@ if (order.disputes) {
         tracking_number: order.tracking_number,
         carrier: order.carrier,
         label_url: order.label_url,
+        qr_code_url: isSeller ? (order.qr_code_url || null) : null,
+        qr_code_expires_at: isSeller ? (order.qr_code_expires_at?.toISOString() || null) : null,
         shipping_address: isSeller ? order.shipping_address : null,
         buyer: {
           id: order.users_orders_buyer_idTousers?.id,

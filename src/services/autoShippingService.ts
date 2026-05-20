@@ -32,6 +32,7 @@ interface AutoLabelResult {
   trackingNumber?: string;
   carrier?: string;
   labelCost?: number;
+  qrCodeUrl?: string;
   failureReason?: string;
 }
 
@@ -211,6 +212,7 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
           currency: 'GBP',
           content: 'Golf equipment',
         },
+        qrCodeRequested: true,
       },
       async: false,
     });
@@ -257,6 +259,26 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
       );
     }
 
+    // 9b. Capture QR code URL and expiry (Evri ParcelShop support)
+    const qrCodeUrl = (transaction as any).qrCodeUrl || (transaction as any).qr_code_url || null;
+    let qrCodeExpiresAt: Date | null = null;
+
+    if (qrCodeUrl && Array.isArray((transaction as any).messages)) {
+      const expiryMsg = ((transaction as any).messages as any[]).find(
+        (m: any) => m.code === 'QrCodeExpirationDate'
+      );
+      if (expiryMsg?.text) {
+        const parsed = new Date(expiryMsg.text);
+        if (!isNaN(parsed.getTime())) {
+          qrCodeExpiresAt = parsed;
+        }
+      }
+    }
+
+    if (qrCodeUrl) {
+      console.log(`[AUTO-SHIP] QR code available for order ${orderId}, expires: ${qrCodeExpiresAt?.toISOString() || 'unknown'}`);
+    }
+
     // 10. Determine label cost
     let labelCost = selectedRate.price;
     if (labelCost === 0 && typeof transaction.rate === 'object' && transaction.rate !== null) {
@@ -273,6 +295,8 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
         carrier: carrier,
         label_url: transaction.labelUrl,
         label_cost: labelCost,
+        qr_code_url: qrCodeUrl,
+        qr_code_expires_at: qrCodeExpiresAt,
         shippo_transaction_id: transaction.objectId,
         label_auto_generated: true,
         status: 'to_ship',
@@ -294,6 +318,8 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
           carrier: carrier,
           label_url: transaction.labelUrl,
           label_cost: 0, // Only primary order gets the label cost
+          qr_code_url: qrCodeUrl,
+          qr_code_expires_at: qrCodeExpiresAt,
           shippo_transaction_id: transaction.objectId,
           label_auto_generated: true,
           status: 'to_ship',
@@ -307,7 +333,7 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
     }
 
     const margin = buyerShippingCost - labelCost;
-    console.log(`[AUTO-SHIP] ✅ Label purchased for order ${orderId}: ${carrier} — £${labelCost.toFixed(2)} (margin: £${margin.toFixed(2)})`);
+    console.log(`[AUTO-SHIP] ✅ Label purchased order=${orderId} carrier=${carrier} £${labelCost.toFixed(2)} (margin: £${margin.toFixed(2)}) qr=${qrCodeUrl ? 'YES' : 'NO'}`);
 
     return {
       success: true,
@@ -316,6 +342,7 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
       trackingNumber: transaction.trackingNumber || undefined,
       carrier,
       labelCost,
+      qrCodeUrl: qrCodeUrl || undefined,
     };
   } catch (error: any) {
     console.error(`[AUTO-SHIP] ❌ Unexpected error for order ${orderId}:`, error.message);
