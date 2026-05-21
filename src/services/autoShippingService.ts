@@ -6,7 +6,7 @@
 import { prisma } from '../lib/prisma';
 import { normalizeCarrierName } from '../utils/carrierName';
 import { Shippo } from 'shippo';
-import { PARCEL_SIZES, getSellerAddress } from '../controllers/shippingController';
+import { PARCEL_SIZES, getSellerAddress, SellerAddress } from '../controllers/shippingController';
 
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
@@ -33,6 +33,7 @@ interface AutoLabelResult {
   carrier?: string;
   labelCost?: number;
   failureReason?: string;
+  skippedReason?: 'seller_not_verified' | 'no_valid_address' | 'no_tracked_rate';
 }
 
 // ============================================
@@ -157,33 +158,40 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
       };
     }
 
-    // 3. Get parcel config from PARCEL_SIZES
+    // 3. HYBRID TRIGGER GATE — three checks before auto-purchasing
+    const seller = order.users_orders_seller_idTousers;
+
+    // Gate 1: Seller must be Stripe-verified
+    if (seller?.stripe_connect_status !== 'active') {
+      console.log(`[AUTO-SHIP] Gate 1 fail: seller ${seller?.id} not verified (status: ${seller?.stripe_connect_status})`);
+      return { success: false, orderId, skippedReason: 'seller_not_verified' };
+    }
+
+    // Gate 2: Seller must have a real address from Stripe
+    const realSellerAddress = await getSellerAddress(order.seller_id);
+    if (!realSellerAddress.isReal) {
+      console.log(`[AUTO-SHIP] Gate 2 fail: no valid address for seller ${seller?.id} (reason: ${realSellerAddress.failureReason})`);
+      return { success: false, orderId, skippedReason: 'no_valid_address' };
+    }
+
+    // 4. Get parcel config from PARCEL_SIZES
     const parcelSize = order.listings?.parcel_size || 'medium';
     const parcelConfig = PARCEL_SIZES[parcelSize as keyof typeof PARCEL_SIZES] || PARCEL_SIZES.medium;
 
-    // 4. Build addresses
-    const seller = order.users_orders_seller_idTousers;
-    const sellerPostcode = seller?.postcode_area || 'SW1A 1AA';
+    // 5. Build addresses
     const shippingAddress = order.shipping_address as any;
 
     if (!shippingAddress) {
       return handleAutoLabelFailure(orderId, 'No shipping address on order');
     }
 
-    const estimatedCity = getEstimatedCity(sellerPostcode);
-
-    const realSellerAddress = await getSellerAddress(order.seller_id);
-    if (realSellerAddress.street === '1 High Street') {
-      console.warn(`[AUTO-SHIP] Order ${orderId}: seller address is placeholder — Stripe Connect address unavailable`);
-    }
-
-    // 5. Create Shippo shipment to get rates
-    console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${sellerPostcode} → ${shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '?'}`);
+    // 6. Create Shippo shipment to get rates
+    console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${realSellerAddress.postcode} → ${shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '?'}`);
 
     const shipment = await shippo.shipments.create({
       addressFrom: {
         name: seller?.display_name || 'Seller',
-        street1: realSellerAddress.street,
+        street1: realSellerAddress.street1,
         city: realSellerAddress.city,
         zip: realSellerAddress.postcode,
         country: 'GB',
@@ -218,8 +226,10 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
     // 6. Filter to tracked rates
     const trackedRates = filterTrackedRates(shipment.rates || []);
 
+    // Gate 3: At least one tracked rate must be available
     if (trackedRates.length === 0) {
-      return handleAutoLabelFailure(orderId, `No tracked rates available (${shipment.rates?.length || 0} total rates returned)`);
+      console.log(`[AUTO-SHIP] Gate 3 fail: no tracked rates (${shipment.rates?.length || 0} total rates returned)`);
+      return { success: false, orderId, skippedReason: 'no_tracked_rate' };
     }
 
     // 7. Cost ceiling check

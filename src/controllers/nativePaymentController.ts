@@ -36,6 +36,7 @@ import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
+import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -563,9 +564,8 @@ export class NativePaymentController {
         });
       }
 
-      // Calculate auto-cancel date
-      const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
+      // Calculate auto-cancel date (5 weekday deadline)
+      const autoCancelAt = calculateShippingDeadline(new Date());
 
       // Create order based on type
       const metadata = paymentIntent.metadata;
@@ -814,14 +814,19 @@ export class NativePaymentController {
       console.error('[PAY] Push to buyer failed:', pushErr);
     }
 
+    const sellerNotifType = autoLabelResult.success ? 'sale_label_ready' : 'sale_action_required';
+    const sellerNotifTitle = autoLabelResult.success ? 'Item sold!' : 'Item sold — action needed';
+    const sellerNotifBody = autoLabelResult.success
+      ? 'Your shipping label is ready. Tap to view your QR code.'
+      : 'Tap to complete shipping details for your sale.';
     const nativeSingleSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
         id: nativeSingleSellerNotifId,
         user_id: sellerId,
-        type: 'sale',
-        title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
-        message: `"${listing.title}"${qtyText} sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready — print it and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
+        type: sellerNotifType,
+        title: sellerNotifTitle,
+        message: sellerNotifBody,
         image_url: listingImage,
         related_id: createdOrder.id,
       },
@@ -831,9 +836,9 @@ export class NativePaymentController {
     try {
       await sendPushNotification(
         sellerId,
-        autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You Made a Sale!',
-        `"${listing.title}" sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready. Print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
-        { notification_id: nativeSingleSellerNotifId, type: 'sale_made', order_id: createdOrder.id }
+        sellerNotifTitle,
+        sellerNotifBody,
+        { notification_id: nativeSingleSellerNotifId, type: sellerNotifType, order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to seller failed:', pushErr);
@@ -896,7 +901,7 @@ export class NativePaymentController {
           itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
           buyerProtectionFee: '0.00',
           sellerEarnings: metadata.seller_payout || metadata.item_total,
-          shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+          shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
           shipUrl: '#',
         });
       }
@@ -1164,15 +1169,19 @@ export class NativePaymentController {
 
 
 const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
-      const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
+      const sellerNotifType = allLabelsReady ? 'sale_label_ready' : 'sale_action_required';
+      const sellerNotifTitle = allLabelsReady ? 'Items sold!' : 'Items sold — action needed';
+      const sellerNotifBody = allLabelsReady
+        ? 'Your shipping labels are ready. Tap to view your QR codes.'
+        : 'Tap to complete shipping details for your sales.';
       const nativeCartSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
           id: nativeCartSellerNotifId,
           user_id: sellerId,
-          type: 'sale',
-          title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Items Sold!',
-          message: `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
+          type: sellerNotifType,
+          title: sellerNotifTitle,
+          message: sellerNotifBody,
           image_url: sellerImage,
           related_id: sellerOrderList[0]?.id,
         },
@@ -1182,9 +1191,9 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
       try {
         await sendPushNotification(
           sellerId,
-          allLabelsReady ? 'Items Sold — Labels Ready!' : 'You Made a Sale!',
-          `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
-          { notification_id: nativeCartSellerNotifId, type: 'sale_made', order_id: sellerOrderList[0]?.id }
+          sellerNotifTitle,
+          sellerNotifBody,
+          { notification_id: nativeCartSellerNotifId, type: sellerNotifType, order_id: sellerOrderList[0]?.id }
         );
       } catch (pushErr) {
         console.error('[PAY] Push to seller failed:', pushErr);
@@ -1262,7 +1271,7 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
             itemPrice: `£${sellerTotal.toFixed(2)}`,
             buyerProtectionFee: '0.00',
             sellerEarnings: sellerTotal.toFixed(2),
-            shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+            shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
             shipUrl: '#',
           });
         }

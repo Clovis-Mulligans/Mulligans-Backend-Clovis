@@ -73,35 +73,83 @@ const shippo = new Shippo({
     };
 
 /**
- * Get seller's real address from Stripe Connect, with postcode fallback
+ * Typed result from getSellerAddress.
+ * isReal: true when Stripe returned a usable address, false otherwise.
  */
-export async function getSellerAddress(sellerId: string): Promise<{ street: string; city: string; postcode: string }> {
+export type SellerAddress = {
+  street1: string;
+  city: string;
+  postcode: string;
+  country: string;
+  isReal: boolean;
+  failureReason?: 'no_stripe_connect' | 'stripe_api_error' | 'no_address_on_account' | 'no_postcode';
+};
+
+/**
+ * Get seller's real address from Stripe Connect.
+ * Returns isReal: false with a failureReason when no valid address is available.
+ */
+export async function getSellerAddress(sellerId: string): Promise<SellerAddress> {
   const seller = await prisma.users.findUnique({
     where: { id: sellerId },
     select: { stripe_connect_id: true, postcode_area: true },
   });
 
-  if (seller?.stripe_connect_id) {
-    try {
-      const account = await stripe.accounts.retrieve(seller.stripe_connect_id);
-      const addr = (account as any).individual?.address || (account as any).company?.address;
-      if (addr?.line1) {
-        return {
-          street: addr.line1,
-          city: addr.city || getEstimatedCity(seller.postcode_area || ''),
-          postcode: addr.postal_code || seller.postcode_area || 'SW1A 1AA',
-        };
-      }
-    } catch (err) {
-      console.warn('[SHIPPING] Could not retrieve seller Stripe address, using fallback');
-    }
+  if (!seller?.stripe_connect_id) {
+    return {
+      street1: '',
+      city: getEstimatedCity(seller?.postcode_area || ''),
+      postcode: seller?.postcode_area || '',
+      country: 'GB',
+      isReal: false,
+      failureReason: 'no_stripe_connect',
+    };
   }
 
-  return {
-    street: '1 High Street',
-    city: getEstimatedCity(seller?.postcode_area || ''),
-    postcode: seller?.postcode_area || 'SW1A 1AA',
-  };
+  try {
+    const account = await stripe.accounts.retrieve(seller.stripe_connect_id);
+    const addr = (account as any).individual?.address || (account as any).company?.address;
+
+    if (!addr?.line1) {
+      return {
+        street1: '',
+        city: getEstimatedCity(seller.postcode_area || ''),
+        postcode: seller.postcode_area || '',
+        country: 'GB',
+        isReal: false,
+        failureReason: 'no_address_on_account',
+      };
+    }
+
+    if (!addr.postal_code && !seller.postcode_area) {
+      return {
+        street1: addr.line1,
+        city: addr.city || getEstimatedCity(''),
+        postcode: '',
+        country: 'GB',
+        isReal: false,
+        failureReason: 'no_postcode',
+      };
+    }
+
+    return {
+      street1: addr.line1,
+      city: addr.city || getEstimatedCity(seller.postcode_area || ''),
+      postcode: addr.postal_code || seller.postcode_area || '',
+      country: 'GB',
+      isReal: true,
+    };
+  } catch (err) {
+    console.warn('[SHIPPING] Could not retrieve seller Stripe address:', err);
+    return {
+      street1: '',
+      city: getEstimatedCity(seller.postcode_area || ''),
+      postcode: seller.postcode_area || '',
+      country: 'GB',
+      isReal: false,
+      failureReason: 'stripe_api_error',
+    };
+  }
 }
 
 // ============================================
@@ -203,7 +251,7 @@ export const getParcelSizes = async (req: Request, res: Response) => {
 // ============================================
 export const getShippingRates = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { orderId } = req.body;
+    const { orderId, senderAddress } = req.body;
 
     if (!orderId) {
       return res.status(400).json({
@@ -246,11 +294,10 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
 
     // Get seller's address info
     const seller = order.users_orders_seller_idTousers;
-    const sellerPostcode = seller?.postcode_area || 'SW1A 1AA'; // Default if not set
 
     // Get buyer's shipping address
     const shippingAddress = order.shipping_address as any;
-    
+
     if (!shippingAddress) {
       return res.status(400).json({
         success: false,
@@ -258,26 +305,42 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       });
     }
 
-    // ✅ Enhanced logging for debugging
+    // Determine origin address: use senderAddress if provided, else Stripe Connect
+    let originStreet1: string;
+    let originCity: string;
+    let originPostcode: string;
+
+    if (senderAddress?.street1 && senderAddress?.postcode) {
+      originStreet1 = senderAddress.street1;
+      originCity = senderAddress.city || getEstimatedCity(senderAddress.postcode);
+      originPostcode = senderAddress.postcode;
+      console.log('[SHIPPING] Using manual senderAddress for rates');
+    } else {
+      const sellerAddr = await getSellerAddress(order.seller_id);
+      if (!sellerAddr.isReal) {
+        return res.status(400).json({
+          success: false,
+          error: 'No valid origin address available. Please provide your address or complete Stripe verification.',
+          addressRequired: true,
+          reason: sellerAddr.failureReason,
+        });
+      }
+      originStreet1 = sellerAddr.street1;
+      originCity = sellerAddr.city;
+      originPostcode = sellerAddr.postcode;
+    }
+
     console.log('📦 Getting Shippo rates for order:', orderId);
-    console.log('📍 Seller postcode:', sellerPostcode);
+    console.log('📍 Origin:', originPostcode);
     console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
     console.log('🛡️ Insurance value:', order.insured_value?.toString() || order.amount.toString());
 
-    
-
-    const estimatedCity = getEstimatedCity(sellerPostcode);
-    console.log('📍 Estimated city for seller:', estimatedCity);
-
-    // Create shipment to get rates using new SDK
-    // Note: For rate calculation, we use a placeholder street address
-    // The actual seller address will be collected when creating the label
     const shipment = await shippo.shipments.create({
       addressFrom: {
         name: seller?.display_name || 'Seller',
-        street1: (await getSellerAddress(order.seller_id)).street,
-        city: estimatedCity,
-        zip: sellerPostcode,
+        street1: originStreet1,
+        city: originCity,
+        zip: originPostcode,
         country: 'GB',
       },
       addressTo: {

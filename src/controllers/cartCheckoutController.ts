@@ -51,6 +51,7 @@ import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { validateShippingAddress } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
+import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -667,9 +668,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         },
       });
 
-      // Auto-cancel date (5 days)
-      const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
+      // Auto-cancel date (5 weekday deadline)
+      const autoCancelAt = calculateShippingDeadline(new Date());
 
       // Create orders for each seller
       const createdOrders: any[] = [];
@@ -931,72 +931,42 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         const sellerFirstImage = first_image || createdOrders.find(o => o.image_url)?.image_url || null;
 
         // Notify seller
-        const sellerUser = await prisma.users.findUnique({
-          where: { id: seller_id },
-          select: { stripe_connect_status: true },
-        });
-
-        const needsVerification = sellerUser?.stripe_connect_status !== 'active';
-
         // Calculate total quantity for this seller
         const sellerTotalQty = createdOrders
           .filter((o: any) => listing_ids.includes(o.listing_id))
           .reduce((sum: number, o: any) => sum + (o.quantity || 1), 0);
         const qtyText = sellerTotalQty > 1 ? ` (${sellerTotalQty} items)` : '';
 
-        if (needsVerification) {
-          const sellerNeedsVerifyNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          await prisma.notifications.create({
-            data: {
-              id: sellerNeedsVerifyNotifId,
-              user_id: seller_id,
-              type: 'payout',
-              title: 'Congratulations on your sale!',
-              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal.toFixed(2)}. Add your bank details to receive payment after delivery.`,
-              image_url: sellerFirstImage,
-              related_id: createdOrders[0]?.id,
-            },
-          });
+        const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
+        const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
+        const sellerNotifType = allLabelsReady ? 'sale_label_ready' : 'sale_action_required';
+        const sellerNotifTitle = allLabelsReady ? 'Items sold!' : 'Items sold — action needed';
+        const sellerNotifBody = allLabelsReady
+          ? 'Your shipping labels are ready. Tap to view your QR codes.'
+          : 'Tap to complete shipping details for your sales.';
+        const sellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await prisma.notifications.create({
+          data: {
+            id: sellerNotifId,
+            user_id: seller_id,
+            type: sellerNotifType,
+            title: sellerNotifTitle,
+            message: sellerNotifBody,
+            image_url: sellerFirstImage,
+            related_id: createdOrders[0]?.id,
+          },
+        });
 
-          // PUSH: Notify seller (needs verification)
-          try {
-            await sendPushNotification(
-              seller_id,
-              'Congratulations on your sale!',
-              `You sold ${listing_ids.length} item(s) for £${subtotal}. Add bank details to get paid.`,
-              { notification_id: sellerNeedsVerifyNotifId, type: 'sale_made', order_id: createdOrders[0]?.id }
-            );
-          } catch (pushErr) {
-            console.error('[CART] Push to seller failed:', pushErr);
-          }
-        } else {
-          const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
-          const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
-          const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
-          const sellerVerifiedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          await prisma.notifications.create({
-            data: {
-              id: sellerVerifiedNotifId,
-              user_id: seller_id,
-              type: 'sale',
-             title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
-              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. ${cartAutoMsg}`,
-              image_url: sellerFirstImage,
-              related_id: createdOrders[0]?.id,
-            },
-          });
-
-          // PUSH: Notify seller
-          try {
-            await sendPushNotification(
-              seller_id,
-              allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
-              `You sold ${listing_ids.length} item(s) for £${subtotal}. ${cartAutoMsg}`,
-              { notification_id: sellerVerifiedNotifId, type: 'sale_made', order_id: createdOrders[0]?.id }
-            );
-          } catch (pushErr) {
-            console.error('[CART] Push to seller failed:', pushErr);
-          }
+        // PUSH: Notify seller
+        try {
+          await sendPushNotification(
+            seller_id,
+            sellerNotifTitle,
+            sellerNotifBody,
+            { notification_id: sellerNotifId, type: sellerNotifType, order_id: createdOrders[0]?.id }
+          );
+        } catch (pushErr) {
+          console.error('[CART] Push to seller failed:', pushErr);
         }
 
         // Send sale notification EMAIL to seller
@@ -1025,7 +995,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               itemPrice: `£${subtotal.toFixed(2)}`,
               buyerProtectionFee: '0.00',
               sellerEarnings: subtotal.toFixed(2),
-              shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+              shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
               shipUrl: '#',
             });
             console.log('[CART] Sale notification email sent to seller:', sellerEmailRecord.email);

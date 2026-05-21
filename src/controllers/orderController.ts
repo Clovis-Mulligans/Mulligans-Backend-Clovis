@@ -11,10 +11,16 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
+import { Shippo } from 'shippo';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { restoreListingStock } from '../lib/stockUtils';
+import { weekdaysUntil, calculateShippingDeadline } from '../utils/shippingDeadline';
+
+const shippo = new Shippo({
+  apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
+});
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -322,10 +328,7 @@ export class OrderController {
         carrier: order.carrier,
         shipping_address: order.shipping_address,
         is_new: order.status === 'to_ship',
-        // ✅ NEW: Days remaining to ship
-        days_to_ship: order.auto_cancel_at ? 
-          Math.max(0, Math.ceil((order.auto_cancel_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
-          null,
+        days_to_ship: order.auto_cancel_at ? weekdaysUntil(new Date(order.auto_cancel_at)) : null,
         // ✅ NEW: Insurance claim fields for "Investigating" status
         reported_lost_at: order.reported_lost_at?.toISOString() || null,
         insurance_claim_status: order.insurance_claim_status || null,
@@ -1213,13 +1216,42 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot be cancelled' });
       }
 
-      // ✅ Check if shipping label has been created - block cancellation for everyone
-if (order.label_url) {
-  return res.status(400).json({ 
-    error: 'Cannot cancel order',
-    message: 'This order cannot be cancelled because a shipping label has already been purchased. Please contact support if you need assistance.'
-  });
-}
+      // Cancel-after-scan check: if a label exists with tracking, verify parcel hasn't been scanned
+      if (order.shippo_transaction_id && order.tracking_number) {
+        try {
+          const trackingStatus = await shippo.trackingStatus.get(
+            (order.carrier || '').toLowerCase(),
+            order.tracking_number
+          );
+          const status = trackingStatus.trackingStatus?.status;
+
+          if (status === 'TRANSIT' || status === 'DELIVERED' || status === 'RETURNED' || status === 'FAILURE') {
+            return res.status(400).json({
+              error: 'Cannot cancel order',
+              code: 'tracking_check_blocked',
+              message: 'This parcel has been scanned by the carrier. Cancellation is no longer possible — please open a dispute instead.',
+            });
+          }
+
+          // PRE_TRANSIT or UNKNOWN — allow cancellation, log structured event
+          console.log(JSON.stringify({
+            event: 'cancel_pre_transit',
+            order_id: order.id,
+            tracking_number: order.tracking_number,
+            carrier: order.carrier,
+            minutes_since_label_purchase: Math.round((Date.now() - new Date(order.updated_at).getTime()) / 60000),
+            cancelled_by_user_id: userId,
+            timestamp: new Date().toISOString(),
+          }));
+        } catch (trackingErr: any) {
+          console.error(`[ORDER] Tracking check failed for order ${orderId}:`, trackingErr.message);
+          return res.status(503).json({
+            error: 'Cancellation temporarily unavailable',
+            code: 'tracking_check_unavailable',
+            message: 'We could not verify the shipping status. Please try again in a moment.',
+          });
+        }
+      }
 
 // ✅ NEW: Buyer can only cancel within 5 minutes of order creation
 const isBuyerCancelling = order.buyer_id === userId;
@@ -1365,6 +1397,31 @@ if (isBuyerCancelling) {
           }
         }
       });
+
+      // Fire-and-forget Shippo label refund if a label was purchased
+      if (order.shippo_transaction_id) {
+        shippo.refunds.create({ transaction: order.shippo_transaction_id })
+          .then((refund: any) => {
+            console.log(JSON.stringify({
+              event: 'shippo_label_refund',
+              order_id: order.id,
+              transaction_id: order.shippo_transaction_id,
+              success: true,
+              refund_id: refund.objectId,
+              trigger: 'manual_cancel',
+            }));
+          })
+          .catch((error: any) => {
+            console.log(JSON.stringify({
+              event: 'shippo_label_refund',
+              order_id: order.id,
+              transaction_id: order.shippo_transaction_id,
+              success: false,
+              error: error.message,
+              trigger: 'manual_cancel',
+            }));
+          });
+      }
 
       // Notify the other party
       const cancelledBy = isBuyer ? 'The buyer' : 'The seller';
@@ -1797,13 +1854,9 @@ if (isBuyerCancelling) {
       const formattedOrders = orders.map((order) => {
         let daysRemaining = 5;
         if (order.auto_cancel_at) {
-          const msRemaining = order.auto_cancel_at.getTime() - now.getTime();
-          daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+          daysRemaining = weekdaysUntil(new Date(order.auto_cancel_at));
         } else if (order.paid_at) {
-          const deadline = new Date(order.paid_at);
-          deadline.setDate(deadline.getDate() + 5);
-          const msRemaining = deadline.getTime() - now.getTime();
-          daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+          daysRemaining = weekdaysUntil(calculateShippingDeadline(new Date(order.paid_at)));
         }
 
         return {

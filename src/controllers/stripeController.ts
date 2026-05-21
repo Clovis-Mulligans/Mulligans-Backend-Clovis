@@ -49,12 +49,12 @@ import { sendOrderConfirmation, sendSaleNotification } from '../services/emailSe
 import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
+import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 
-// Constants for escrow system
 const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
@@ -692,9 +692,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       const insurancePremium = parseFloat(metadata.insurance_premium || '0');
       const insuredValue = parseFloat(metadata.item_price || '0');
 
-      // ESCROW: Auto-cancel date (5 days)
-      const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
+      // ESCROW: Auto-cancel date (5 weekdays)
+      const autoCancelAt = calculateShippingDeadline(new Date());
 
       // [D-C4] Wrap the transaction in try/catch to issue refund on failure
       let order: any;
@@ -894,14 +893,6 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         console.error('[STRIPE] Auto-label purchase failed (non-fatal):', autoShipErr);
       }
 
-      // Check if seller needs bank verification
-      const sellerUser = await prisma.users.findUnique({
-        where: { id: seller_id },
-        select: { stripe_connect_status: true },
-      });
-
-      const needsVerification = sellerUser?.stripe_connect_status !== 'active';
-
       // Notify buyer - WITH IMAGE, quantity, and size
       const sizeText = selectedSize ? ` (${selectedSize})` : '';
       const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
@@ -918,48 +909,33 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         },
       });
 
-      // Notify seller - WITH IMAGE (different message if needs verification)
+      // Notify seller — split on autoLabelResult.success
       const totalSaleValue = itemPrice.toFixed(2);
-      const autoShipMessage = autoLabelResult.success
-        ? `Your shipping label is ready — print it and ship!`
-        : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
-      const autoShipPush = autoLabelResult.success
-        ? `Your shipping label is ready. Print and ship!`
-        : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
+      const sellerNotifType = autoLabelResult.success ? 'sale_label_ready' : 'sale_action_required';
+      const sellerNotifTitle = autoLabelResult.success ? 'Item sold!' : 'Item sold — action needed';
+      const sellerNotifBody = autoLabelResult.success
+        ? 'Your shipping label is ready. Tap to view your QR code.'
+        : 'Tap to complete shipping details for your sale.';
       const notifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      if (needsVerification) {
-        await prisma.notifications.create({
-          data: {
-            id: notifId,
-            user_id: seller_id,
-            type: 'payout',
-            title: 'Congratulations on your sale!',
-            message: `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Add your bank details to receive payment after delivery.`,
-            image_url: listingImage,
-            related_id: order.id,
-          },
-        });
-      } else {
-        await prisma.notifications.create({
-          data: {
-            id: notifId,
-            user_id: seller_id,
-            type: 'sale',
-            title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
-            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipMessage}`,
-            image_url: listingImage,
-            related_id: order.id,
-          },
-        });
-      }
+      await prisma.notifications.create({
+        data: {
+          id: notifId,
+          user_id: seller_id,
+          type: sellerNotifType,
+          title: sellerNotifTitle,
+          message: sellerNotifBody,
+          image_url: listingImage,
+          related_id: order.id,
+        },
+      });
 
       // PUSH NOTIFICATION - New sale to seller
       try {
         await sendPushNotification(
           seller_id,
-          autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You made a sale!',
-         `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipPush}`,
-          { notification_id: notifId, type: 'sale_made', order_id: order.id }
+          sellerNotifTitle,
+          sellerNotifBody,
+          { notification_id: notifId, type: sellerNotifType, order_id: order.id }
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);
@@ -1022,7 +998,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             itemPrice: `£${itemPrice.toFixed(2)}`,
             buyerProtectionFee: '0.00',
             sellerEarnings: metadata.seller_payout || itemPrice.toFixed(2),
-            shippingDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
+            shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
             shipUrl: '#',
           });
         }

@@ -20,10 +20,15 @@
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
+import { Shippo } from 'shippo';
 import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import crypto from 'crypto';
+
+const shippo = new Shippo({
+  apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
+});
 
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -249,6 +254,31 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
             updated_at: now,
           },
         });
+
+        // 2b. Fire-and-forget Shippo label refund if a label was purchased
+        if (order.shippo_transaction_id) {
+          shippo.refunds.create({ transaction: order.shippo_transaction_id })
+            .then((refund: any) => {
+              console.log(JSON.stringify({
+                event: 'shippo_label_refund',
+                order_id: order.id,
+                transaction_id: order.shippo_transaction_id,
+                success: true,
+                refund_id: refund.objectId,
+                trigger: 'auto_cancel',
+              }));
+            })
+            .catch((error: any) => {
+              console.log(JSON.stringify({
+                event: 'shippo_label_refund',
+                order_id: order.id,
+                transaction_id: order.shippo_transaction_id,
+                success: false,
+                error: error.message,
+                trigger: 'auto_cancel',
+              }));
+            });
+        }
 
         // 3. Relist the item
         if (order.listing_id) {
