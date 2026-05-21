@@ -13,9 +13,9 @@ import { AuthenticatedRequest } from '../middleware/auth';
 const CLUB_BRANDS = [
   'TaylorMade', 'Callaway', 'Titleist', 'Ping', 'Cobra', 'Mizuno', 'Srixon', 'Wilson',
   'Cleveland', 'PXG', 'Honma', 'Tour Edge', 'Adams', 'Ben Hogan', 'Bridgestone',
-  'LA Golf', 'LAB Golf', 'Dunlop', 'MacGregor', 'Lynx', 'Tommy Armour', 'Top Flite',
+  'LA Golf', 'L.A.B. Golf', 'Dunlop', 'MacGregor', 'Lynx', 'Tommy Armour', 'Top Flite',
   'Nickent', 'Pinemeadow', 'Ram', 'Snake Eyes', 'Square Strike', 'Sub 70', 'Teton',
-  'Warrior', 'Yonex', 'Scotty Cameron', 'Odyssey', 'Bettinardi', 'Evnroll'
+  'Warrior', 'Yonex', 'Scotty Cameron', 'Odyssey', 'Bettinardi', 'Evnroll', 'SIK Golf'
 ];
 
 const CLOTHING_BRANDS = [
@@ -70,9 +70,10 @@ const BRAND_CATEGORY_MAP: Record<string, { category: string; subcategories: stri
   'Scotty Cameron': [{ category: 'Clubs', subcategories: ['Putters'] }],
   'Odyssey': [{ category: 'Clubs', subcategories: ['Putters'] }],
   'Bettinardi': [{ category: 'Clubs', subcategories: ['Putters'] }],
-  'LAB Golf': [{ category: 'Clubs', subcategories: ['Putters'] }],
+  'L.A.B. Golf': [{ category: 'Clubs', subcategories: ['Putters'] }],
   'Evnroll': [{ category: 'Clubs', subcategories: ['Putters'] }],
-  
+  'SIK Golf': [{ category: 'Clubs', subcategories: ['Putters'] }],
+
   // Clothing brands - ONLY clothing
   'Malbon Golf': [{ category: 'Clothing', subcategories: ['Jackets', 'Polo Shirts', 'Hoodies'] }],
   'Manors Golf': [{ category: 'Clothing', subcategories: ['Jackets', 'Polo Shirts', 'Trousers', 'Knitwear'] }],
