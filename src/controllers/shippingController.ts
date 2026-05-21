@@ -367,6 +367,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
           currency: 'GBP',
           content: 'Golf equipment',
         },
+        qrCodeRequested: true,
       },
       async: false,
     });
@@ -567,6 +568,22 @@ try {
       });
     }
 
+    // Capture QR code URL and expiry (Evri ParcelShop support — F6.1)
+    const qrCodeUrl = (transaction as any).qrCodeUrl ?? (transaction as any).qr_code_url ?? null;
+
+    let qrCodeExpiresAt: Date | null = null;
+    if (Array.isArray((transaction as any).messages)) {
+      const expiryMessage = ((transaction as any).messages as any[]).find(
+        (m: any) => m.code === 'QrCodeExpirationDate'
+      );
+      if (expiryMessage?.text) {
+        const parsed = new Date(expiryMessage.text);
+        if (!isNaN(parsed.getTime())) {
+          qrCodeExpiresAt = parsed;
+        }
+      }
+    }
+
     // ✅ NEW: Try to get label cost from transaction if we didn't get it from rate
     if (labelCost === 0 && typeof transaction.rate === 'object' && transaction.rate !== null) {
       const rateObj = transaction.rate as any;
@@ -581,16 +598,18 @@ const carrier = carrierName !== 'Unknown'
   : (typeof transaction.rate === 'object' ? (transaction.rate as any)?.provider || 'Unknown' : 'Unknown');
 
     // ✅ UPDATED: Update order with tracking info, label URL, AND label_cost
-    await prisma.orders.update({
+  await prisma.orders.update({
       where: { id: orderId },
       data: {
         tracking_number: transaction.trackingNumber,
         carrier: carrier,
         label_url: transaction.labelUrl,
-        label_cost: labelCost,  // ✅ NEW: Save label cost for escrow deduction
-        shippo_transaction_id: transaction.objectId,  // Save transaction ID
-        status: 'to_ship', // Ensure status is to_ship after label created
+        label_cost: labelCost,
+        shippo_transaction_id: transaction.objectId,
+        status: 'to_ship',
         updated_at: new Date(),
+        qr_code_url: qrCodeUrl,
+        qr_code_expires_at: qrCodeExpiresAt,
       },
     });
 
@@ -601,17 +620,19 @@ const carrier = carrierName !== 'Unknown'
         where: {
           stripe_payment_intent_id: order.stripe_payment_intent_id,
           seller_id: order.seller_id,
-          id: { not: orderId },  // Don't update the primary order again
-          status: { in: ['paid', 'to_ship'] },  // Only update orders that haven't shipped yet
+          id: { not: orderId },
+          status: { in: ['paid', 'to_ship'] },
         },
         data: {
           tracking_number: transaction.trackingNumber,
           carrier: carrier,
           label_url: transaction.labelUrl,
-          label_cost: 0,  // Only primary order gets the label cost
+          label_cost: 0,
           shippo_transaction_id: transaction.objectId,
           status: 'to_ship',
           updated_at: new Date(),
+          qr_code_url: qrCodeUrl,
+          qr_code_expires_at: qrCodeExpiresAt,
         },
       });
       
@@ -625,7 +646,8 @@ const carrier = carrierName !== 'Unknown'
       trackingNumber: transaction.trackingNumber,
       carrier,
       labelUrl: transaction.labelUrl,
-      labelCost: labelCost,  // ✅ Log the label cost
+      labelCost: labelCost,
+      qr: qrCodeUrl ? 'YES' : 'NO',
     });
 
     // Create notification for buyer
@@ -664,7 +686,8 @@ const carrier = carrierName !== 'Unknown'
         labelUrl: transaction.labelUrl,
         carrier: carrier,
         transactionId: transaction.objectId,
-        labelCost: labelCost,  // ✅ Return label cost to frontend
+        labelCost: labelCost,
+        qr_code_url: qrCodeUrl,
       },
     });
   } catch (error: any) {
