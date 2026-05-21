@@ -40,6 +40,8 @@ export class UserController {
           shoe_size: true,
           glove_size: true,
           is_verified_seller: true,
+          is_pro_store: true,
+          pro_store_name: true,
         },
       });
 
@@ -887,6 +889,8 @@ static async getUserListings(req: AuthenticatedRequest, res: Response): Promise<
         bio: true,
         rating: true,
         created_at: true,
+        is_pro_store: true,
+        pro_store_name: true,
       },
     });
 

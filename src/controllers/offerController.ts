@@ -296,6 +296,14 @@ export class OfferController {
               },
             },
           },
+          seller: {
+            select: {
+              id: true,
+              display_name: true,
+              is_pro_store: true,
+              pro_store_name: true,
+            },
+          },
         },
         orderBy: { created_at: 'desc' },
       });
@@ -321,6 +329,12 @@ export class OfferController {
           status: offer.listings.status,
           image: offer.listings.images[0]?.image_url || null,
         },
+        seller: offer.seller ? {
+          id: offer.seller.id,
+          display_name: offer.seller.display_name,
+          is_pro_store: offer.seller.is_pro_store,
+          pro_store_name: offer.seller.pro_store_name,
+        } : undefined,
       }));
 
       res.json({ offers: formattedOffers });
@@ -360,6 +374,8 @@ export class OfferController {
             select: {
               id: true,
               display_name: true,
+              is_pro_store: true,
+              pro_store_name: true,
             },
           },
         },
@@ -390,6 +406,8 @@ export class OfferController {
         buyer: {
           id: offer.buyer.id,
           display_name: offer.buyer.display_name,
+          is_pro_store: offer.buyer.is_pro_store,
+          pro_store_name: offer.buyer.pro_store_name,
         },
       }));
 
@@ -434,12 +452,16 @@ export class OfferController {
             select: {
               id: true,
               display_name: true,
+              is_pro_store: true,
+              pro_store_name: true,
             },
           },
           seller: {
             select: {
               id: true,
               display_name: true,
+              is_pro_store: true,
+              pro_store_name: true,
             },
           },
         },
@@ -485,10 +507,14 @@ export class OfferController {
           buyer: {
             id: offer.buyer.id,
             display_name: offer.buyer.display_name,
+            is_pro_store: offer.buyer.is_pro_store,
+            pro_store_name: offer.buyer.pro_store_name,
           },
           seller: {
             id: offer.seller.id,
             display_name: offer.seller.display_name,
+            is_pro_store: offer.seller.is_pro_store,
+            pro_store_name: offer.seller.pro_store_name,
           },
           is_buyer: isBuyer,
           is_seller: !isBuyer,
