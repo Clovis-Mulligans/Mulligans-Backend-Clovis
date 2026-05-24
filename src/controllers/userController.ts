@@ -118,10 +118,8 @@ export class UserController {
         ...user,
         has_listings: listingCount > 0,
         has_sales: (user.total_sales || 0) > 0,
-        // Needs bank details if has listings/sales but stripe not active
-        needs_bank_details: 
-          (listingCount > 0 || (user.total_sales || 0) > 0) && 
-          user.stripe_connect_status !== 'active',
+        // Needs bank details if Stripe Connect not active (shown to all users to encourage early onboarding)
+        needs_bank_details: user.stripe_connect_status !== 'active',
       };
 
       console.log('✅ Current user data returned with payment status:', {
