@@ -754,7 +754,7 @@ const salesCount = await prisma.orders.count({
       );
 
       // Member since
-      const memberSince = new Date(user.created_at).getFullYear();
+      const memberSince = user.created_at;
 
       const stats = {
         sales: salesCount,
