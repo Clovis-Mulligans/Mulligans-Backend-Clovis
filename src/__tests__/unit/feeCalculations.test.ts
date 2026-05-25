@@ -233,7 +233,7 @@ describe('fee constants — tripwires', () => {
     expect(MAX_OFFER_PERCENT).toBe(1.0);
   });
   test('ESCROW_RELEASE_DAYS is 5', () => {
-    expect(ESCROW_RELEASE_DAYS).toBe(5);
+    expect(ESCROW_RELEASE_DAYS).toBe(3);
   });
   test('AUTO_CANCEL_DAYS is 5', () => {
     expect(AUTO_CANCEL_DAYS).toBe(5);

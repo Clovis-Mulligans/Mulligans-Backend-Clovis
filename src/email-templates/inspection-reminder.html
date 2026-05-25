@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your Order Has Shipped — Mulligans</title>
+  <title>24 Hours Left to Confirm Your Order — Mulligans</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
 
   <!-- Preheader (hidden) -->
-  <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #EAEAE0;">Your order is on its way — track your delivery&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;</div>
+  <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #EAEAE0;">24 hours left — confirm your order or report an issue&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;</div>
 
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
     <tr>
@@ -27,13 +27,13 @@
             <td style="padding: 40px;">
 
               <!-- Headline -->
-              <h1 style="margin: 0 0 16px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Your Order Has Shipped</h1>
+              <h1 style="margin: 0 0 16px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">24 Hours Left</h1>
 
               <!-- Status Badge -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 28px;">
                 <tr>
                   <td align="center">
-                    <span style="display: inline-block; padding: 6px 16px; background-color: #ecfdf5; color: #1DC690; border-radius: 20px; font-size: 13px; font-weight: 600;">Shipped</span>
+                    <span style="display: inline-block; padding: 6px 16px; background-color: #fffbeb; color: #92400e; border-radius: 20px; font-size: 13px; font-weight: 600;">Action Needed</span>
                   </td>
                 </tr>
               </table>
@@ -41,7 +41,7 @@
               <!-- Greeting -->
               <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
 
-              <p style="margin: 0 0 24px 0; color: #374151; font-size: 16px; line-height: 1.6;">Great news! Your item is on its way. Use the tracking details below to follow your delivery.</p>
+              <p style="margin: 0 0 24px 0; color: #374151; font-size: 16px; line-height: 1.6;">Your item was delivered {{daysSinceDelivery}} days ago and you have <strong>24 hours left</strong> to confirm everything's good — or let us know if something's not right.</p>
 
               <!-- Item Detail Card -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
@@ -54,7 +54,6 @@
                         </td>
                         <td valign="top">
                           <p style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #111827;">{{itemName}}</p>
-                          <p style="margin: 0 0 4px 0; font-size: 14px; color: #6B7280;">{{itemBrand}} &middot; {{itemCondition}}</p>
                           <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1C4670;">{{itemPrice}}</p>
                           <p style="margin: 0; font-size: 13px; color: #9CA3AF;">Order #{{orderReference}}</p>
                         </td>
@@ -64,40 +63,15 @@
                 </tr>
               </table>
 
-              <!-- Shipping Details Box -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
+              <!-- Amber Warning Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0;">
                 <tr>
-                  <td style="padding: 20px 24px;">
-                    <p style="margin: 0 0 14px 0; font-size: 15px; font-weight: 600; color: #1C4670;">Shipping Details</p>
+                  <td style="background-color: #fffbeb; border-radius: 8px; border-left: 4px solid #F59E0B; padding: 20px 24px;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                       <tr>
-                        <td style="padding: 5px 0;">
-                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                            <tr>
-                              <td width="140" style="font-size: 14px; color: #6B7280; vertical-align: top;">Carrier</td>
-                              <td style="font-size: 14px; font-weight: 600; color: #111827;">{{carrierName}}</td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 5px 0;">
-                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                            <tr>
-                              <td width="140" style="font-size: 14px; color: #6B7280; vertical-align: top;">Tracking Number</td>
-                              <td style="font-size: 14px; font-weight: 600; color: #111827; word-break: break-all;">{{trackingNumber}}</td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 5px 0;">
-                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                            <tr>
-                              <td width="140" style="font-size: 14px; color: #6B7280; vertical-align: top;">Estimated Delivery</td>
-                              <td style="font-size: 14px; font-weight: 600; color: #111827;">{{estimatedDelivery}}</td>
-                            </tr>
-                          </table>
+                        <td>
+                          <p style="margin: 0 0 8px 0; font-size: 15px; font-weight: 700; color: #92400e;">What happens next</p>
+                          <p style="margin: 0; font-size: 14px; color: #92400e; line-height: 1.6;">After 24 hours, payment will be automatically released to the seller. If there's any issue with your item, please report it before the window closes.</p>
                         </td>
                       </tr>
                     </table>
@@ -105,21 +79,22 @@
                 </tr>
               </table>
 
-              <!-- CTA Button -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 24px 0;">
+              <!-- Two CTAs side by side -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 8px 0;">
                 <tr>
                   <td align="center">
-                    <a href="{{trackingUrl}}" style="display: inline-block; padding: 14px 40px; background-color: #1DC690; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: bold; border-radius: 6px;">Track Your Order</a>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- What Happens Next -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 8px 0 24px 0;">
-                <tr>
-                  <td style="background-color: #f3f4f6; border-radius: 8px; padding: 20px 24px;">
-                    <p style="margin: 0 0 6px 0; font-size: 15px; font-weight: 600; color: #1C4670;">What happens next</p>
-                    <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.6;">Once delivered, you'll have 3 days to inspect your item before payment is released to the seller. We'll send you an email as soon as your delivery is confirmed.</p>
+                    <!--[if mso]>
+                    <table role="presentation" border="0" cellspacing="0" cellpadding="0"><tr>
+                    <td style="padding-right: 12px;">
+                    <![endif]-->
+                    <a href="{{confirmUrl}}" style="display: inline-block; padding: 14px 24px; background-color: #1DC690; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: bold; border-radius: 6px; margin: 0 6px 12px 6px;">Confirm &amp; Release Payment</a>
+                    <!--[if mso]>
+                    </td><td style="padding-left: 12px;">
+                    <![endif]-->
+                    <a href="{{reportIssueUrl}}" style="display: inline-block; padding: 13px 24px; background-color: transparent; color: #EF4444; text-decoration: none; font-size: 14px; font-weight: bold; border-radius: 6px; border: 2px solid #EF4444; margin: 0 6px 12px 6px;">Report an Issue</a>
+                    <!--[if mso]>
+                    </td></tr></table>
+                    <![endif]-->
                   </td>
                 </tr>
               </table>

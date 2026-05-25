@@ -23,7 +23,8 @@ import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
-import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { sendInspectionReminders } from './inspectionReminder';
 import crypto from 'crypto';
 
 const shippo = new Shippo({
@@ -38,8 +39,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ============================================
 // CONSTANTS
 // ============================================
-const SHIPPING_DEADLINE_DAYS = 5;        // Seller must ship within 5 days
-const RETURN_SHIPPING_DEADLINE_DAYS = 5; // Buyer must ship return within 5 days
 const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 days
 
 // Dispute statuses that BLOCK escrow release
@@ -1453,6 +1452,7 @@ export async function runEscrowJobs(): Promise<void> {
 
   await autoCancelUnshippedOrders();
   await autoReleaseEscrow();
+  await sendInspectionReminders();
   await autoProcessReturnRefunds();
   await autoExpireReturns();
   await autoEscalateDisputes();

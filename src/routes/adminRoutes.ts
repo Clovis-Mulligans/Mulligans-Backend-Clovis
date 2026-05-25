@@ -18,6 +18,7 @@ import {
 import { AdminStatsController } from '../controllers/adminStatsController';
 import { logAdminAction, AUDIT_ACTIONS } from '../lib/auditLogger';
 import { restoreListingStock } from '../lib/stockUtils';
+import { INSPECTION_WINDOW_MS } from '../constants/inspection';
 
 import rateLimit from 'express-rate-limit';
 
@@ -476,7 +477,7 @@ router.patch('/returns/:id', adminAuth, async (req, res) => {
     if (status === 'delivered') {
       updateData.delivered_at = now;
       // Set escrow release for 3 days from now
-      updateData.escrow_release_at = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+      updateData.escrow_release_at = new Date(now.getTime() + INSPECTION_WINDOW_MS);
     } else if (status === 'completed') {
       updateData.completed_at = now;
     } else if (status === 'cancelled') {

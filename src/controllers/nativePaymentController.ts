@@ -29,6 +29,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
@@ -45,7 +46,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // Platform fee calculation (same as cart checkout)
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99 per item
-const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {

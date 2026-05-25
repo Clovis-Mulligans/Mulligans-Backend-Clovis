@@ -162,6 +162,7 @@ model orders {
   paid_at                       DateTime?
   shipped_at                    DateTime?
   delivered_at                  DateTime?
+  reminder_sent_at              DateTime?
   completed_at                  DateTime?
   updated_at                    DateTime
   auto_cancel_at                DateTime?

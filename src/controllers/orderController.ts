@@ -14,7 +14,8 @@ import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
-import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { restoreListingStock } from '../lib/stockUtils';
 import { weekdaysUntil, calculateShippingDeadline } from '../utils/shippingDeadline';
 
@@ -29,7 +30,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ============================================
 // CONSTANTS
 // ============================================
-const SHIPPING_DEADLINE_DAYS = 5;
+
 
 // Fee calculation - matches your pricing structure
 const calculateSellerPayout = (totalAmount: number): number => {
@@ -749,7 +750,7 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot be marked delivered' });
       }
 
-      // ✅ Calculate escrow release date (5 days from now)
+      // ✅ Calculate escrow release date (3 days from now)
       const escrowReleaseAt = new Date();
       escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
 
@@ -819,8 +820,8 @@ if (order.disputes) {
             itemBrand: '',
             itemCondition: '',
             itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
-            confirmUrl: '#',
-            reportIssueUrl: '#',
+            confirmUrl: `https://api.mulligans.uk.com/api/email-actions/confirm-receipt?token=${generateEmailActionToken(orderId, order.buyer_id, 'confirm-receipt', escrowReleaseAt)}`,
+            reportIssueUrl: `https://api.mulligans.uk.com/api/email-actions/report-issue?token=${generateEmailActionToken(orderId, order.buyer_id, 'report-issue', escrowReleaseAt)}`,
           });
           console.log('📧 Delivery confirmation email sent to:', buyerEmailRecord.email);
         } catch (emailError) {

@@ -81,7 +81,7 @@ describe('shouldAutoCancelUnshipped', () => {
 describe('shouldReleaseEscrow', () => {
   const CLEAN = { hasBlockingDispute: false, hasBlockingReturn: false };
 
-  test('delivered, 5 days passed → release', () => {
+  test('delivered, 3 days passed → release', () => {
     const order = makeOrder({
       status: 'delivered',
       delivered_at: daysAgo(5, NOW),
@@ -337,7 +337,7 @@ describe('shouldExpireReturn', () => {
 
 describe('escrow timing constants', () => {
   test('ESCROW_RELEASE_DAYS === 5', () => {
-    expect(ESCROW_RELEASE_DAYS).toBe(5);
+    expect(ESCROW_RELEASE_DAYS).toBe(3);
   });
   test('AUTO_CANCEL_DAYS === 5', () => {
     expect(AUTO_CANCEL_DAYS).toBe(5);

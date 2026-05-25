@@ -16,6 +16,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { sendDeliveryConfirmation } from '../services/emailService';
 
 // ✅ FIXED: Initialize Shippo with correct API key format
@@ -953,7 +954,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
           case 'DELIVERED':
             newStatus = 'delivered';
             deliveredAt = new Date();
-            // ✅ Calculate escrow release date (5 days from delivery)
+            // ✅ Calculate escrow release date (3 days from delivery)
             escrowReleaseAt = new Date();
             escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
             break;
@@ -1036,8 +1037,8 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
                 itemBrand: '',
                 itemCondition: '',
                 itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
-                confirmUrl: '#',
-                reportIssueUrl: '#',
+                confirmUrl: `https://api.mulligans.uk.com/api/email-actions/confirm-receipt?token=${generateEmailActionToken(order.id, order.buyer_id, 'confirm-receipt', escrowReleaseAt!)}`,
+                reportIssueUrl: `https://api.mulligans.uk.com/api/email-actions/report-issue?token=${generateEmailActionToken(order.id, order.buyer_id, 'report-issue', escrowReleaseAt!)}`,
               });
             }
           } catch (emailErr) {

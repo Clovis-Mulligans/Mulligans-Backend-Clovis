@@ -12,10 +12,12 @@ export const INSURANCE_RATE = 0.0125;                 // 1.25% of item value
 export const MIN_OFFER_PERCENT = 0.5;                 // offer floor
 export const MAX_OFFER_PERCENT = 1.0;                 // offer ceiling
 
-export const ESCROW_RELEASE_DAYS = 5;
-export const AUTO_CANCEL_DAYS = 5;
-export const SHIPPING_DEADLINE_DAYS = 5;
-export const RETURN_SHIPPING_DEADLINE_DAYS = 5;
+export {
+  ESCROW_RELEASE_DAYS,
+  SHIPPING_DEADLINE_DAYS,
+  AUTO_CANCEL_DAYS,
+  RETURN_SHIPPING_DEADLINE_DAYS,
+} from '../config/constants';
 export const LOST_IN_TRANSIT_DAYS = 14;
 export const SELLER_DISPUTE_RESPONSE_HOURS = 72;
 export const BUYER_CANCEL_WINDOW_MINUTES = 5;

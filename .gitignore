@@ -134,3 +134,8 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Clovis apply artifacts (local-only)
+.clovis-backups/
+apply-clovis-phase*.ps1
+phase2-*.md

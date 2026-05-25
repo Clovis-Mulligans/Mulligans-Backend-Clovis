@@ -40,6 +40,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -54,8 +55,6 @@ import { calculateShippingDeadline, formatShippingDeadline } from '../utils/ship
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
-
-const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
@@ -388,7 +387,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       });
 
       console.log('Checkout session created:', session.id);
-      console.log('Funds will be held in escrow until delivery + 5 days');
+      console.log('Funds will be held in escrow until delivery + 3 days');
 
       // [P-C1] Return only session data -- no standalone PaymentIntent clientSecret
       res.json({
