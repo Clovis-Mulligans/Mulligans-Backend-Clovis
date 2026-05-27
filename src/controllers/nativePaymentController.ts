@@ -515,6 +515,11 @@ export class NativePaymentController {
         country: rawAddress.country || 'GB',
       } : null;
 
+      // [DIAGNOSTIC 2026-05-25] Remove after Apple Pay address bug fixed
+      console.log('[PAY] DIAG req.body keys:', Object.keys(req.body));
+      console.log('[PAY] DIAG req.body.shippingAddress:', JSON.stringify(req.body.shippingAddress));
+      console.log('[PAY] DIAG resolvedAddress:', JSON.stringify(resolvedAddress));
+
       // Validation per Q1 decision (Hybrid: reject critical fields, allow optional)
       try {
         validateShippingAddress(resolvedAddress);
