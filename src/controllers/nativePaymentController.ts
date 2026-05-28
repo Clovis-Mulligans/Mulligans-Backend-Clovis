@@ -492,33 +492,24 @@ export class NativePaymentController {
       // Retrieve the payment intent
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
-      // Fallback: if frontend didn't send address, try to get it from Stripe
-      const rawAddress = shippingAddress || (paymentIntent.shipping?.address ? {
-        name: paymentIntent.shipping.name || '',
-        line1: paymentIntent.shipping.address.line1 || '',
-        line2: paymentIntent.shipping.address.line2 || '',
-        city: paymentIntent.shipping.address.city || '',
-        state: paymentIntent.shipping.address.state || '',
-        postal_code: paymentIntent.shipping.address.postal_code || '',
-        country: paymentIntent.shipping.address.country || 'GB',
-      } : null);
+      // SERVER-SIDE ADDRESS RESOLUTION
+      // Primary: Stripe PaymentIntent.shipping (normalised by Stripe, reliable for all wallets)
+      // Fallback: client-sent address (may have missing fields, e.g. Apple Pay postalCode bug)
+      // This mirrors the card checkout flow (stripeController.ts:640-655) and unifies
+      // card + Apple Pay + Google Pay onto one address path.
+      const stripeAddr = paymentIntent.shipping?.address;
+      const clientAddr = shippingAddress;
 
-      // Normalize address field names to snake_case (consistent with card checkout path)
-      // Apple Pay frontend may send postalCode (camelCase) — convert to postal_code
-      const resolvedAddress = rawAddress ? {
-        name: rawAddress.name || '',
-        line1: rawAddress.line1 || rawAddress.street1 || '',
-        line2: rawAddress.line2 || rawAddress.street2 || '',
-        city: rawAddress.city || '',
-        state: rawAddress.state || rawAddress.county || '',
-        postal_code: rawAddress.postal_code || rawAddress.postalCode || rawAddress.postcode || '',
-        country: rawAddress.country || 'GB',
+      const resolvedAddress = (stripeAddr || clientAddr) ? {
+        name: paymentIntent.shipping?.name || clientAddr?.name || '',
+        line1: stripeAddr?.line1 || clientAddr?.line1 || clientAddr?.street1 || '',
+        line2: stripeAddr?.line2 || clientAddr?.line2 || clientAddr?.street2 || '',
+        city: stripeAddr?.city || clientAddr?.city || '',
+        state: stripeAddr?.state || clientAddr?.state || clientAddr?.county || '',
+        postal_code: stripeAddr?.postal_code
+          || clientAddr?.postal_code || clientAddr?.postalCode || clientAddr?.postcode || '',
+        country: stripeAddr?.country || clientAddr?.country || 'GB',
       } : null;
-
-      // [DIAGNOSTIC 2026-05-25] Remove after Apple Pay address bug fixed
-      console.log('[PAY] DIAG req.body keys:', Object.keys(req.body));
-      console.log('[PAY] DIAG req.body.shippingAddress:', JSON.stringify(req.body.shippingAddress));
-      console.log('[PAY] DIAG resolvedAddress:', JSON.stringify(resolvedAddress));
 
       // Validation per Q1 decision (Hybrid: reject critical fields, allow optional)
       try {
@@ -529,6 +520,8 @@ export class NativePaymentController {
             paymentIntentId,
             userId,
             missingFields: err.missingFields,
+            stripeHadAddress: !!stripeAddr,
+            clientHadAddress: !!clientAddr,
           });
           return res.status(400).json({
             error: 'Shipping address incomplete',
@@ -539,7 +532,8 @@ export class NativePaymentController {
         throw err;
       }
 
-      console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE');
+      console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE',
+        stripeAddr ? '(from Stripe)' : '(from client)');
       if (resolvedAddress) {
         console.log('[PAY] Address postal_code:', resolvedAddress.postal_code || 'MISSING');
       }
