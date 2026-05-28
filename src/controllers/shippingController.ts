@@ -942,10 +942,15 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         // Map Shippo status to our order status
         switch (status) {
           case 'PRE_TRANSIT':
-            // Carrier has accepted parcel, awaiting first scan
-            // Treat same as TRANSIT for buyer-facing status (parcel is out of seller's hands)
-            newStatus = 'in_transit';
-            if (!shippedAt) shippedAt = new Date();
+            // Label created / tracking registered, but the carrier has NOT yet
+            // physically scanned the parcel. The seller may not have dropped it
+            // off yet, so the order must stay 'to_ship' (not 'in_transit').
+            // Do NOT set shipped_at here — it drives the lost-in-transit timer
+            // and the buyer-facing "shipped" state. Only a real TRANSIT scan
+            // means the parcel is genuinely on its way.
+            // (auto_cancel_at is still cleared below on any tracking event,
+            //  which is correct: a label exists, so don't auto-cancel.)
+            newStatus = 'to_ship';
             break;
           case 'TRANSIT':
             newStatus = 'in_transit';
