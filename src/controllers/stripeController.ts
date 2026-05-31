@@ -51,6 +51,7 @@ import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
+import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -515,6 +516,25 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 }
               } else {
                 console.log(`[WEBHOOK] Native payment ${pi.id} confirmed — order ${existingOrder.id} exists`);
+
+                // Meta CAPI Purchase event for native payment (fire-and-forget)
+                try {
+                  const buyerForCapi = await prisma.users.findUnique({
+                    where: { id: existingOrder.buyer_id },
+                    select: { email: true },
+                  });
+                  if (buyerForCapi?.email) {
+                    sendMetaPurchaseEvent({
+                      orderId: existingOrder.id,
+                      amount: parseFloat(existingOrder.buyer_total?.toString() || '0'),
+                      currency: 'GBP',
+                      buyerEmail: buyerForCapi.email,
+                      testEventCode: process.env.META_TEST_EVENT_CODE,
+                    });
+                  }
+                } catch (capiErr) {
+                  console.error('[META_CAPI] Native safety net buyer lookup failed (non-fatal):', (capiErr as any).message);
+                }
               }
             } catch (err) {
               console.error(`[WEBHOOK] Error checking orphaned payment ${pi.id}:`, err);
@@ -1003,6 +1023,27 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         }
       } catch (emailErr) {
         console.error('[STRIPE] Email send failed (non-fatal):', emailErr);
+      }
+
+      // Meta CAPI Purchase event (fire-and-forget)
+      // buyerRecord is scoped inside the email try/catch above, so we fetch fresh
+      // (trivial PK lookup, Prisma cache should still be warm)
+      try {
+        const buyerForCapi = await prisma.users.findUnique({
+          where: { id: buyer_id },
+          select: { email: true },
+        });
+        if (buyerForCapi?.email) {
+          sendMetaPurchaseEvent({
+            orderId: order.id,
+            amount: parseFloat(metadata.total_price),
+            currency: 'GBP',
+            buyerEmail: buyerForCapi.email,
+            testEventCode: process.env.META_TEST_EVENT_CODE,
+          });
+        }
+      } catch (capiErr) {
+        console.error('[META_CAPI] Buyer lookup failed (non-fatal):', (capiErr as any).message);
       }
 
       console.log('Order fulfilled successfully (escrow mode with quantity support)');

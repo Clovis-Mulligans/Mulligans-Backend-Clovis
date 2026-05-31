@@ -38,6 +38,7 @@ import { sendOrderConfirmation, sendSaleNotification } from '../services/emailSe
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
+import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -908,6 +909,25 @@ export class NativePaymentController {
       console.error('[PAY] Email send failed (non-fatal):', emailErr);
     }
 
+    // Meta CAPI Purchase event (fire-and-forget)
+    try {
+      const buyerForCapi = await prisma.users.findUnique({
+        where: { id: buyerId },
+        select: { email: true },
+      });
+      if (buyerForCapi?.email) {
+        sendMetaPurchaseEvent({
+          orderId: createdOrder.id,
+          amount: parseFloat(metadata.grand_total || '0'),
+          currency: 'GBP',
+          buyerEmail: buyerForCapi.email,
+          testEventCode: process.env.META_TEST_EVENT_CODE,
+        });
+      }
+    } catch (capiErr) {
+      console.error('[META_CAPI] Native single-item buyer lookup failed (non-fatal):', (capiErr as any).message);
+    }
+
     console.log('[PAY] Single item order fulfilled:', createdOrder.id);
     if (offerId) {
       console.log(`[PAY] Offer-based purchase: original £${originalListPrice.toFixed(2)} -> paid £${effectiveUnitPrice.toFixed(2)} (saved £${discountAmount.toFixed(2)})`);
@@ -1277,6 +1297,25 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
       }
     } catch (emailErr) {
       console.error('[PAY] Cart email send failed (non-fatal):', emailErr);
+    }
+
+    // Meta CAPI Purchase event for native cart (fire-and-forget)
+    try {
+      const buyerForCapi = await prisma.users.findUnique({
+        where: { id: buyerId },
+        select: { email: true },
+      });
+      if (buyerForCapi?.email && orders.length > 0) {
+        sendMetaPurchaseEvent({
+          orderId: paymentIntent.id,
+          amount: parseFloat(metadata.grand_total || '0'),
+          currency: 'GBP',
+          buyerEmail: buyerForCapi.email,
+          testEventCode: process.env.META_TEST_EVENT_CODE,
+        });
+      }
+    } catch (capiErr) {
+      console.error('[META_CAPI] Native cart buyer lookup failed (non-fatal):', (capiErr as any).message);
     }
 
     console.log('[PAY] Cart orders fulfilled:', orders.length);
