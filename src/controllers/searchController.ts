@@ -2,6 +2,7 @@
 // ✅ FIXED: Strict matching for suggestions - no more false positives
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 
 
@@ -12,9 +13,9 @@ import { AuthenticatedRequest } from '../middleware/auth';
 const CLUB_BRANDS = [
   'TaylorMade', 'Callaway', 'Titleist', 'Ping', 'Cobra', 'Mizuno', 'Srixon', 'Wilson',
   'Cleveland', 'PXG', 'Honma', 'Tour Edge', 'Adams', 'Ben Hogan', 'Bridgestone',
-  'LA Golf', 'LAB Golf', 'Dunlop', 'MacGregor', 'Lynx', 'Tommy Armour', 'Top Flite',
+  'LA Golf', 'L.A.B. Golf', 'Dunlop', 'MacGregor', 'Lynx', 'Tommy Armour', 'Top Flite',
   'Nickent', 'Pinemeadow', 'Ram', 'Snake Eyes', 'Square Strike', 'Sub 70', 'Teton',
-  'Warrior', 'Yonex', 'Scotty Cameron', 'Odyssey', 'Bettinardi', 'Evnroll'
+  'Warrior', 'Yonex', 'Scotty Cameron', 'Odyssey', 'Bettinardi', 'Evnroll', 'SIK Golf'
 ];
 
 const CLOTHING_BRANDS = [
@@ -69,9 +70,10 @@ const BRAND_CATEGORY_MAP: Record<string, { category: string; subcategories: stri
   'Scotty Cameron': [{ category: 'Clubs', subcategories: ['Putters'] }],
   'Odyssey': [{ category: 'Clubs', subcategories: ['Putters'] }],
   'Bettinardi': [{ category: 'Clubs', subcategories: ['Putters'] }],
-  'LAB Golf': [{ category: 'Clubs', subcategories: ['Putters'] }],
+  'L.A.B. Golf': [{ category: 'Clubs', subcategories: ['Putters'] }],
   'Evnroll': [{ category: 'Clubs', subcategories: ['Putters'] }],
-  
+  'SIK Golf': [{ category: 'Clubs', subcategories: ['Putters'] }],
+
   // Clothing brands - ONLY clothing
   'Malbon Golf': [{ category: 'Clothing', subcategories: ['Jackets', 'Polo Shirts', 'Hoodies'] }],
   'Manors Golf': [{ category: 'Clothing', subcategories: ['Jackets', 'Polo Shirts', 'Trousers', 'Knitwear'] }],
@@ -366,7 +368,7 @@ export class SearchController {
           images: {
             select: { image_url: true },
             take: 1,
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
         take: 3,
@@ -639,16 +641,18 @@ if (size) {
           take: Number(limit),
           include: {
             images: {
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
               take: 1,
             },
-           users: {
+          users: {
               select: {
                 id: true,
                 email: true,
                 display_name: true,
                 rating: true,
                 is_verified_seller: true,
+                is_pro_store: true,
+                pro_store_name: true,
               },
             },
             listing_attributes: true,
@@ -766,7 +770,7 @@ if (size) {
           take: Number(limit),
           include: {
             images: {
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
               take: 1,
             },
             orders: {

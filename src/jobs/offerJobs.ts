@@ -58,9 +58,10 @@ export const expirePendingOffers = async (): Promise<number> => {
         const imageUrl = (offer.listings?.images as any)?.[0]?.image_url || null;
 
         // Notify buyer - their offer expired
+        const buyerOfferExpiredNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: buyerOfferExpiredNotifId,
             user_id: offer.buyer_id,
             type: 'offer_expired',
             title: 'Offer Expired',
@@ -74,13 +75,14 @@ export const expirePendingOffers = async (): Promise<number> => {
           offer.buyer_id,
           'Offer Expired',
           `Your offer of ${formatPrice(offer.offer_amount)} on "${listingTitle}" has expired.`,
-          { type: 'offer_expired', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: buyerOfferExpiredNotifId, type: 'offer_expired', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         // Notify seller - offer on their item expired
+        const sellerOfferExpiredNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: sellerOfferExpiredNotifId,
             user_id: offer.seller_id,
             type: 'offer_expired',
             title: 'Offer Expired',
@@ -94,7 +96,7 @@ export const expirePendingOffers = async (): Promise<number> => {
           offer.seller_id,
           'Offer Expired',
           `The offer of ${formatPrice(offer.offer_amount)} from ${offer.buyer?.display_name || 'a buyer'} on "${listingTitle}" has expired.`,
-          { type: 'offer_expired', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: sellerOfferExpiredNotifId, type: 'offer_expired', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         console.log(`[OFFER JOBS] Expired pending offer ${offer.id} for listing "${listingTitle}"`);
@@ -147,9 +149,10 @@ export const expireCounteredOffers = async (): Promise<number> => {
         const imageUrl = (offer.listings?.images as any)?.[0]?.image_url || null;
 
         // Notify buyer - the counter offer they received has expired
+        const buyerCounterExpiredNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: buyerCounterExpiredNotifId,
             user_id: offer.buyer_id,
             type: 'offer_expired',
             title: 'Counter Offer Expired',
@@ -163,13 +166,14 @@ export const expireCounteredOffers = async (): Promise<number> => {
           offer.buyer_id,
           'Counter Offer Expired',
           `The counter offer of ${formatPrice(offer.counter_amount)} on "${listingTitle}" has expired.`,
-          { type: 'offer_expired', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: buyerCounterExpiredNotifId, type: 'offer_expired', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         // Notify seller - their counter offer expired without response
+        const sellerCounterExpiredNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: sellerCounterExpiredNotifId,
             user_id: offer.seller_id,
             type: 'offer_expired',
             title: 'Counter Offer Expired',
@@ -183,7 +187,7 @@ export const expireCounteredOffers = async (): Promise<number> => {
           offer.seller_id,
           'Counter Offer Expired',
           `Your counter offer of ${formatPrice(offer.counter_amount)} on "${listingTitle}" has expired.`,
-          { type: 'offer_expired', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: sellerCounterExpiredNotifId, type: 'offer_expired', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         console.log(`[OFFER JOBS] Expired countered offer ${offer.id} for listing "${listingTitle}"`);
@@ -247,9 +251,10 @@ export const voidUnpurchasedOffers = async (): Promise<number> => {
         const imageUrl = (offer.listings?.images as any)?.[0]?.image_url || null;
 
         // Notify buyer - they didn't complete the purchase in time
+        const buyerOfferVoidNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: buyerOfferVoidNotifId,
             user_id: offer.buyer_id,
             type: 'offer_void',
             title: 'Offer Voided',
@@ -263,13 +268,14 @@ export const voidUnpurchasedOffers = async (): Promise<number> => {
           offer.buyer_id,
           'Offer Voided',
           `Your accepted offer on "${listingTitle}" has been voided - purchase window expired.`,
-          { type: 'offer_void', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: buyerOfferVoidNotifId, type: 'offer_void', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         // Notify seller - the buyer didn't complete the purchase
+        const sellerOfferVoidNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: sellerOfferVoidNotifId,
             user_id: offer.seller_id,
             type: 'offer_void',
             title: 'Offer Voided',
@@ -283,7 +289,7 @@ export const voidUnpurchasedOffers = async (): Promise<number> => {
           offer.seller_id,
           'Offer Voided',
           `The accepted offer on "${listingTitle}" has been voided - buyer didn't purchase in time. Your item is available again.`,
-          { type: 'offer_void', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: sellerOfferVoidNotifId, type: 'offer_void', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         console.log(`[OFFER JOBS] Voided offer ${offer.id} for listing "${listingTitle}"`);
@@ -341,9 +347,10 @@ export const sendExpiryWarnings = async (): Promise<number> => {
         const imageUrl = (offer.listings?.images as any)?.[0]?.image_url || null;
 
         // Notify buyer - time is running out to complete purchase
+        const buyerExpiryWarningNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: buyerExpiryWarningNotifId,
             user_id: offer.buyer_id,
             type: 'offer_expiring',
             title: 'Hurry! Offer Expiring Soon',
@@ -357,7 +364,7 @@ export const sendExpiryWarnings = async (): Promise<number> => {
           offer.buyer_id,
           'Hurry! Offer Expiring Soon',
           `2 hours left to purchase "${listingTitle}" at ${formatPrice(finalPrice)}!`,
-          { type: 'offer_expiring', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: buyerExpiryWarningNotifId, type: 'offer_expiring', offer_id: offer.id, listing_id: offer.listing_id }
         );
 
         console.log(`[OFFER JOBS] Sent expiry warning for offer ${offer.id} on "${listingTitle}"`);
@@ -422,9 +429,10 @@ export const expireOffersForSoldItem = async (listingId: string): Promise<number
         const listingTitle = offer.listings?.title || 'Unknown item';
         const imageUrl = (offer.listings?.images as any)?.[0]?.image_url || null;
 
+        const competingOfferExpiredNotifId = generateNotifId();
         await prisma.notifications.create({
           data: {
-            id: generateNotifId(),
+            id: competingOfferExpiredNotifId,
             user_id: offer.buyer_id,
             type: 'offer_expired',
             title: 'Item Sold',
@@ -438,7 +446,7 @@ export const expireOffersForSoldItem = async (listingId: string): Promise<number
           offer.buyer_id,
           'Item Sold',
           `"${listingTitle}" has been sold. Your offer has been cancelled.`,
-          { type: 'offer_expired', offerId: offer.id, listingId: offer.listing_id }
+          { notification_id: competingOfferExpiredNotifId, type: 'offer_expired', offer_id: offer.id, listing_id: offer.listing_id }
         );
       } catch (err) {
         console.error(`[OFFER JOBS] Error notifying buyer for offer ${offer.id} on sold item:`, err);

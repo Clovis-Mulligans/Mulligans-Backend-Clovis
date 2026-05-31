@@ -3,6 +3,31 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import Stripe from 'stripe';
 
+// In-memory TTL cache for onboarding status (30-second window)
+const statusCache = new Map<string, { data: any; expiresAt: number }>();
+
+function getCachedStatus(userId: string): any | null {
+  const entry = statusCache.get(userId);
+  if (entry && entry.expiresAt > Date.now()) {
+    return entry.data;
+  }
+  statusCache.delete(userId);
+  return null;
+}
+
+function setCachedStatus(userId: string, data: any): void {
+  statusCache.set(userId, {
+    data,
+    expiresAt: Date.now() + 30_000, // 30 seconds
+  });
+  // Prevent unbounded growth: prune expired entries periodically
+  if (statusCache.size > 1000) {
+    for (const [key, val] of statusCache) {
+      if (val.expiresAt < Date.now()) statusCache.delete(key);
+    }
+  }
+}
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
@@ -295,6 +320,177 @@ static async getBalance(req: Request, res: Response) {
     } catch (error: any) {
       console.error('❌ Get balance error:', error);
       res.status(500).json({ error: error.message || 'Failed to get balance' });
+    }
+  }
+
+  /**
+   * Get composite onboarding status with pending balance
+   * GET /api/stripe/connect/onboarding-status
+   *
+   * Returns the seller's Stripe Connect state as one of:
+   *   complete | pending_review | incomplete | restricted
+   * Plus their pending balance (earned-but-not-withdrawable) and
+   * an onboarding URL if action is needed.
+   */
+  static async getOnboardingStatus(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      // Check cache first
+      const cached = getCachedStatus(userId);
+      if (cached) {
+        return res.json(cached);
+      }
+
+      const user = await prisma.users.findUnique({
+        where: { id: userId },
+        select: {
+          stripe_connect_id: true,
+          stripe_connect_status: true,
+        },
+      });
+
+      // Compute pending balance: orders where seller earned but can't withdraw yet
+      const pendingResult = await prisma.orders.aggregate({
+        where: {
+          seller_id: userId,
+          status: { in: ['to_ship', 'in_transit', 'delivered'] },
+        },
+        _sum: { seller_payout: true },
+      });
+      const pendingBalancePence = Math.round(
+        (pendingResult._sum.seller_payout
+          ? parseFloat(pendingResult._sum.seller_payout.toString())
+          : 0) * 100
+      );
+      const pendingBalanceFormatted = `£${(pendingBalancePence / 100).toFixed(2)}`;
+
+      // No Stripe account at all — auto-create one then generate onboarding link
+      if (!user?.stripe_connect_id) {
+        let onboardingUrl: string | null = null;
+        try {
+          const account = await stripe.accounts.create({
+            type: 'express',
+            country: 'GB',
+            capabilities: {
+              card_payments: { requested: true },
+              transfers: { requested: true },
+            },
+            business_type: 'individual',
+            business_profile: {
+              mcc: '5699',
+              product_description: 'Selling golf equipment on Mulligans',
+            },
+            metadata: { user_id: userId, platform: 'mulligans' },
+          });
+
+          await prisma.users.update({
+            where: { id: userId },
+            data: {
+              stripe_connect_id: account.id,
+              stripe_connect_status: 'pending',
+              updated_at: new Date(),
+            },
+          });
+
+          const accountLink = await stripe.accountLinks.create({
+            account: account.id,
+            refresh_url: 'https://api.mulligans.uk.com/connect/refresh',
+            return_url: 'https://api.mulligans.uk.com/connect/return',
+            type: 'account_onboarding',
+          });
+          onboardingUrl = accountLink.url;
+        } catch (err) {
+          console.error('[STRIPE] Failed to auto-create account for onboarding status:', err);
+        }
+
+        const result = {
+          state: 'incomplete' as const,
+          pending_balance_pence: pendingBalancePence,
+          pending_balance_formatted: pendingBalanceFormatted,
+          requirements_currently_due: [],
+          onboarding_url: onboardingUrl,
+          needs_action: true,
+        };
+        setCachedStatus(userId, result);
+        return res.json(result);
+      }
+
+      // Has Stripe account — retrieve current status
+      let account;
+      try {
+        account = await stripe.accounts.retrieve(user.stripe_connect_id);
+      } catch (stripeErr) {
+        console.error('[STRIPE] Failed to retrieve account:', stripeErr);
+        const fallback = {
+          state: 'incomplete' as const,
+          pending_balance_pence: pendingBalancePence,
+          pending_balance_formatted: pendingBalanceFormatted,
+          requirements_currently_due: [],
+          onboarding_url: null,
+          needs_action: true,
+        };
+        return res.json(fallback);
+      }
+
+      // Derive the 4-state model
+      let state: 'complete' | 'pending_review' | 'incomplete' | 'restricted';
+      if (account.charges_enabled && account.payouts_enabled) {
+        state = 'complete';
+      } else if (account.requirements?.disabled_reason) {
+        state = 'restricted';
+      } else if (
+        account.requirements?.currently_due &&
+        account.requirements.currently_due.length > 0
+      ) {
+        state = 'incomplete';
+      } else {
+        state = 'pending_review';
+      }
+
+      // Update local status if changed
+      const newStatus = state === 'complete' ? 'active' : state === 'restricted' ? 'restricted' : 'pending';
+      if (newStatus !== user.stripe_connect_status) {
+        await prisma.users.update({
+          where: { id: userId },
+          data: { stripe_connect_status: newStatus, updated_at: new Date() },
+        });
+      }
+
+      // Generate onboarding URL only for actionable states
+      let onboardingUrl: string | null = null;
+      if (state === 'incomplete' || state === 'restricted') {
+        try {
+          const accountLink = await stripe.accountLinks.create({
+            account: user.stripe_connect_id,
+            refresh_url: 'https://api.mulligans.uk.com/connect/refresh',
+            return_url: 'https://api.mulligans.uk.com/connect/return',
+            type: 'account_onboarding',
+          });
+          onboardingUrl = accountLink.url;
+        } catch (linkErr) {
+          console.error('[STRIPE] Failed to create onboarding link:', linkErr);
+        }
+      }
+
+      const result = {
+        state,
+        pending_balance_pence: pendingBalancePence,
+        pending_balance_formatted: pendingBalanceFormatted,
+        requirements_currently_due: account.requirements?.currently_due || [],
+        onboarding_url: onboardingUrl,
+        needs_action: state !== 'complete',
+      };
+
+      setCachedStatus(userId, result);
+      res.json(result);
+    } catch (error: any) {
+      console.error('[STRIPE] Get onboarding status error:', error);
+      res.status(500).json({ error: 'Failed to get onboarding status' });
     }
   }
 }

@@ -1,6 +1,7 @@
 // src/controllers/listingController.ts
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
 
@@ -53,28 +54,30 @@ export class ListingController {
 
       // Get featured/recent active listings (limit to 20 for home screen)
       const allListings = await prisma.listings.findMany({
-        where: { 
-          status: 'active',
-        },
-        include: {
+  where: {
+    status: 'active',
+    users: {
+      is_pro_store: true,
+    },
+  },
+  include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
             take: 1,
           },
-          users: {
+         users: {
             select: {
               id: true,
               display_name: true,
               rating: true,
               is_verified_seller: true,
+              is_pro_store: true,
+              pro_store_name: true,
             },
           },
         },
         orderBy: { created_at: 'desc' },
-        take: 20,
+        take: 30,
       });
 
       console.log(`📦 Found ${allListings.length} active listings`);
@@ -277,10 +280,7 @@ export class ListingController {
         where: { id: listing.id },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
           }
         },
       });
@@ -770,10 +770,7 @@ if (keyword) {
           where,
           include: {
             images: {
-              orderBy: [
-                { display_order: 'asc' },
-                { id: 'asc' },
-              ],
+              orderBy: PRIMARY_IMAGE_ORDER,
               take: 1,
             },
             users: {
@@ -782,6 +779,8 @@ if (keyword) {
                 display_name: true,
                 rating: true,
                 is_verified_seller: true,
+                is_pro_store: true,
+                pro_store_name: true,
               },
             },
           },
@@ -825,15 +824,12 @@ if (keyword) {
         where: { id },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
       });
 
-      if (!listing) {
+      if (!listing || listing.status === 'deleted') {
         res.status(404).json({ error: 'Listing not found' });
         return;
       }
@@ -841,12 +837,14 @@ if (keyword) {
       // Get seller info
       const seller = await prisma.users.findUnique({
         where: { id: listing.seller_id },
-        select: {
+       select: {
           id: true,
           display_name: true,
           rating: true,
           avatar_url: true,
           is_verified_seller: true,
+          is_pro_store: true,
+          pro_store_name: true,
         },
       });
 
@@ -855,11 +853,51 @@ if (keyword) {
         where: { listing_id: id },
       });
 
+      // Bug 1 (F2): Look up authenticated buyer's accepted offer on this listing
+      let viewer_active_offer: {
+        offer_id: string;
+        offer_amount: string;
+        accepted_at: string;
+        expires_at: string;
+        status: string;
+      } | null = null;
+
+      const viewerId = (req as any).user?.id;
+      if (viewerId && viewerId !== listing.seller_id) {
+        const activeOffer = await prisma.offers.findFirst({
+          where: {
+            listing_id: id,
+            buyer_id: viewerId,
+            status: { in: ['ACCEPTED', 'COUNTER_ACCEPTED'] },
+            acceptance_expires_at: { gt: new Date() },
+          },
+          orderBy: { created_at: 'desc' },
+          select: {
+            id: true,
+            final_amount: true,
+            responded_at: true,
+            acceptance_expires_at: true,
+            status: true,
+          },
+        });
+
+        if (activeOffer && activeOffer.final_amount && activeOffer.acceptance_expires_at) {
+          viewer_active_offer = {
+            offer_id: activeOffer.id,
+            offer_amount: activeOffer.final_amount.toString(),
+            accepted_at: activeOffer.responded_at?.toISOString() || '',
+            expires_at: activeOffer.acceptance_expires_at.toISOString(),
+            status: activeOffer.status,
+          };
+        }
+      }
+
       res.json({ 
         listing: { 
           ...listing, 
           seller,
           favorite_count: favoriteCount,
+          viewer_active_offer,
         } 
       });
     } catch (error) {
@@ -882,11 +920,19 @@ if (keyword) {
         },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
             take: 1,
+          },
+          users: {
+            select: {
+              id: true,
+              display_name: true,
+              rating: true,
+              avatar_url: true,
+              is_verified_seller: true,
+              is_pro_store: true,
+              pro_store_name: true,
+            },
           },
         },
         orderBy: { created_at: 'desc' }
@@ -1038,10 +1084,7 @@ if (keyword) {
         where: { id },
         include: {
           images: {
-            orderBy: [
-              { display_order: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
           listing_attributes: true,
         },
@@ -1078,9 +1121,15 @@ if (keyword) {
         return;
       }
 
+      // Already deleted — idempotent
+      if (listing.status === 'deleted') {
+        res.json({ message: 'Listing deleted successfully' });
+        return;
+      }
+
       // Check for active orders before allowing deletion
       const ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered'];
-      
+
       const activeOrders = await prisma.orders.findFirst({
         where: {
           listing_id: id,
@@ -1094,9 +1143,9 @@ if (keyword) {
 
       if (activeOrders) {
         console.log(`🚫 Cannot delete listing ${id} - has active order ${activeOrders.id} (status: ${activeOrders.status})`);
-        
+
         let message = 'This listing has an active order and cannot be deleted.';
-        
+
         if (['pending', 'paid', 'to_ship'].includes(activeOrders.status)) {
           message = 'This listing has an order waiting to be shipped. Please ship the item first.';
         } else if (['shipped', 'in_transit'].includes(activeOrders.status)) {
@@ -1105,23 +1154,17 @@ if (keyword) {
           message = 'This listing has a recently delivered order. Please wait until transaction completes.';
         }
 
-        res.status(400).json({ 
+        res.status(400).json({
           error: message,
           order_status: activeOrders.status,
         });
         return;
       }
 
-      // Delete images from S3 one by one
-      if (listing.images.length > 0) {
-        for (const img of listing.images) {
-          await S3Service.deleteImage(img.s3_key);
-        }
-      }
-
-      // Delete listing (will cascade delete images in database)
-      await prisma.listings.delete({
+      // Soft delete — preserve data for historical orders/offers
+      await prisma.listings.update({
         where: { id },
+        data: { status: 'deleted', deleted_at: new Date(), updated_at: new Date() },
       });
 
       res.json({ message: 'Listing deleted successfully' });
@@ -1230,6 +1273,111 @@ if (keyword) {
     } catch (error) {
       console.error('❌ Track view error:', error);
       res.status(500).json({ error: 'Failed to track view' });
+    }
+  }
+
+  static async bulkUpdateListings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.id;
+      const { ids, status, price, price_adjustment_percent, original_price } = req.body;
+
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: 'ids must be a non-empty array' });
+        return;
+      }
+
+      // Verify all listings belong to this seller
+      const owned = await prisma.listings.count({
+        where: { id: { in: ids }, seller_id: userId },
+      });
+
+      if (owned !== ids.length) {
+        res.status(403).json({ error: 'You do not own all of these listings' });
+        return;
+      }
+
+      const updateData: Record<string, unknown> = {};
+
+      if (status) {
+        updateData.status = status;
+      }
+
+      if (price !== undefined) {
+        updateData.price = String(price);
+        if (original_price !== undefined) {
+          updateData.original_price = String(original_price);
+        }
+      }
+
+      if (price_adjustment_percent !== undefined) {
+        // Apply percentage adjustment to each listing individually
+        const listings = await prisma.listings.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, price: true },
+        });
+
+        await Promise.all(
+          listings.map((listing) => {
+            const currentPrice = parseFloat(listing.price.toString());
+            const newPrice = currentPrice * (1 + price_adjustment_percent / 100);
+            return prisma.listings.update({
+              where: { id: listing.id },
+              data: { price: String(Math.max(0, newPrice).toFixed(2)) },
+            });
+          })
+        );
+
+        res.json({ updated: ids.length });
+        return;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        res.status(400).json({ error: 'No update data provided' });
+        return;
+      }
+
+      await prisma.listings.updateMany({
+        where: { id: { in: ids }, seller_id: userId },
+        data: updateData,
+      });
+
+      res.json({ updated: ids.length });
+    } catch (error) {
+      console.error('❌ Bulk update listings error:', error);
+      res.status(500).json({ error: 'Failed to bulk update listings' });
+    }
+  }
+
+  static async bulkDeleteListings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.id;
+      const { ids } = req.body;
+
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: 'ids must be a non-empty array' });
+        return;
+      }
+
+      // Verify all listings belong to this seller
+      const owned = await prisma.listings.count({
+        where: { id: { in: ids }, seller_id: userId },
+      });
+
+      if (owned !== ids.length) {
+        res.status(403).json({ error: 'You do not own all of these listings' });
+        return;
+      }
+
+      // Soft delete — set status to deleted
+      await prisma.listings.updateMany({
+        where: { id: { in: ids }, seller_id: userId },
+        data: { status: 'deleted' },
+      });
+
+      res.json({ deleted: ids.length });
+    } catch (error) {
+      console.error('❌ Bulk delete listings error:', error);
+      res.status(500).json({ error: 'Failed to bulk delete listings' });
     }
   }
 } 

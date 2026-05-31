@@ -9,6 +9,8 @@
 
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
 import { AuthenticatedRequest } from '../middleware/auth';
 
 // Cart expiry time: 72 hours in milliseconds
@@ -18,8 +20,6 @@ const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 // Buyer protection fee
 const BUYER_PROTECTION_PERCENTAGE = 0.075; // 7.5%
 const BUYER_PROTECTION_FIXED = 0.99; // £0.99
-const INSURANCE_RATE = 0.0125; // 1.25% shipping insurance
-
 // ============================================
 // HELPER: Get available stock for a specific size
 // ============================================
@@ -88,17 +88,20 @@ export const CartController = {
           listings: {
             include: {
               images: {
-                take: 1
+                take: 1,
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
              users: {
-                select: {
-                  id: true,
-                  display_name: true,
-                  avatar_url: true,
-                  postcode_area: true,
-                  rating: true,
-                  is_verified_seller: true
-                }
+               select: {
+  id: true,
+  display_name: true,
+  avatar_url: true,
+  postcode_area: true,
+  rating: true,
+  is_verified_seller: true,
+  is_pro_store: true,
+  pro_store_name: true
+}
               }
             }
           }
@@ -180,8 +183,10 @@ export const CartController = {
             seller_avatar: seller.avatar_url,
             seller_postcode: seller.postcode_area,
             seller_rating: seller.rating,
-            seller_is_verified_seller_seller: seller.is_verified_seller || false,
-            items: [],
+           seller_is_verified_seller_seller: seller.is_verified_seller || false,
+is_pro_store: seller.is_pro_store ?? false,
+pro_store_name: seller.pro_store_name ?? null,
+items: [],
             subtotal: 0,
             shipping_cost: 0
           };
@@ -220,6 +225,9 @@ export const CartController = {
           offer_id: item.offer_id || null,
           offer_price: item.offer_price ? Number(item.offer_price) : null,
           offer_expires_at: item.offer_id ? (offerExpiryMap[item.offer_id as string] || null) : null,
+          condition_overall: item.listings.condition_overall ?? null,
+          brand: item.listings.brand ?? null,
+          model: item.listings.model ?? null
         });
 
         sellerGroups[sellerId].subtotal += lineTotal;

@@ -1,557 +1,162 @@
-// src/services/emailService.ts
-import { Resend } from 'resend';
-import fs from 'fs';
-import path from 'path';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Issue Reported on Your Sale — Mulligans Golf</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #EAEAE0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+  <!-- Preheader -->
+  <div style="display: none; max-height: 0; overflow: hidden; mso-hide: all; font-size: 1px; color: #EAEAE0; line-height: 1px;">
+    A buyer has reported an issue — please respond by {{deadline}}
+    &nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+  </div>
 
-const FROM_ADDRESS = 'Mulligans <noreply@mail.mulligans.uk.com>';
-const ADMIN_EMAIL = 'info@mulligans.uk.com';
+  <!-- Outer wrapper -->
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
+    <tr>
+      <td align="center" style="padding: 32px 16px;">
 
-function loadTemplate(templateName: string, variables: Record<string, string>): string {
-  // Path goes from dist/services/ up to project root, then into src/email-templates/
-  const templatePath = path.join(__dirname, '../../src/email-templates', `${templateName}.html`);
-  let html = fs.readFileSync(templatePath, 'utf-8');
-  
-  Object.entries(variables).forEach(([key, value]) => {
-    const regex = new RegExp(`{{${key}}}`, 'g');
-    html = html.replace(regex, value || '');
-  });
-  
-  return html;
-}
+        <!-- Email card -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
 
-// ============================================
-// AUTHENTICATION EMAILS
-// ============================================
+          <!-- Header -->
+          <tr>
+            <td align="center" style="background-color: #1C4670; padding: 30px 40px;">
+              <img src="https://images.mulligans.uk.com/email-assets/EmailMainHeaderLogo.png" alt="Mulligans" width="180" style="display: block; border: 0;">
+            </td>
+          </tr>
 
-export async function sendVerificationEmail(userEmail: string, code: string): Promise<void> {
-  const html = loadTemplate('verification-email', { code });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: userEmail,
-    subject: 'Verify Your Email - Mulligans',
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send verification email:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Verification email sent to ${userEmail}`);
-}
+          <!-- Body -->
+          <tr>
+            <td style="padding: 40px 40px 32px 40px;">
 
-export async function sendPasswordResetEmail(userEmail: string, code: string): Promise<void> {
-  const html = loadTemplate('password-reset', { code });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: userEmail,
-    subject: 'Reset Your Password - Mulligans',
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send password reset email:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Password reset email sent to ${userEmail}`);
-}
+              <!-- Headline -->
+              <h1 style="margin: 0 0 16px 0; font-size: 24px; font-weight: 700; color: #1C4670; text-align: center;">Issue Reported on Your Sale</h1>
 
-export async function sendWelcomeEmail(userEmail: string, userName: string): Promise<void> {
-  const html = loadTemplate('welcome-email', { userName });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: userEmail,
-    subject: 'Welcome to Mulligans!',
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send welcome email:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Welcome email sent to ${userEmail}`);
-}
+              <!-- Status badge -->
+              <p style="margin: 0 0 28px 0; text-align: center;">
+                <span style="display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; background-color: #fffbeb; color: #92400e; border: 1px solid #F59E0B;">
+                  Response Needed
+                </span>
+              </p>
 
-// ============================================
-// BUYER EMAILS
-// ============================================
+              <!-- Greeting -->
+              <p style="margin: 0 0 16px 0; font-size: 16px; color: #374151; line-height: 1.6;">Hi {{sellerName}},</p>
 
-export async function sendOrderConfirmation(buyerEmail: string, data: Record<string, string>): Promise<void> {
-  const html = loadTemplate('order-confirmation', data);
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: `Order Confirmed - #${data.orderNumber}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send order confirmation:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Order confirmation sent to ${buyerEmail}`);
-}
+              <!-- Professional message -->
+              <p style="margin: 0 0 28px 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                A buyer has reported an issue with their purchase from you. Please review the details below and provide your response before the deadline. Timely responses help us reach a fair resolution for everyone involved.
+              </p>
 
-export async function sendShippingNotification(buyerEmail: string, data: Record<string, string>): Promise<void> {
-  const html = loadTemplate('shipping-notification', data);
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: `Your Order Has Shipped - #${data.orderNumber}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send shipping notification:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Shipping notification sent to ${buyerEmail}`);
-}
+              <!-- Item detail card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
+                <tr>
+                  <td style="padding: 16px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td width="100" valign="top" style="padding-right: 16px;">
+                          <img src="{{itemImageUrl}}" alt="{{itemName}}" width="100" height="100" style="display: block; border-radius: 6px; object-fit: cover; background-color: #e5e7eb;">
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #111827;">{{itemName}}</p>
+                          <p style="margin: 0 0 4px 0; font-size: 14px; color: #6B7280;">{{itemBrand}} &middot; {{itemCondition}}</p>
+                          <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1C4670;">{{itemPrice}}</p>
+                          <p style="margin: 0; font-size: 13px; color: #9CA3AF;">Order #{{orderReference}}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
 
-export async function sendDeliveryConfirmation(buyerEmail: string, data: Record<string, string>): Promise<void> {
-  const html = loadTemplate('delivery-confirmation', data);
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: `Your Order Has Been Delivered - #${data.orderNumber}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send delivery confirmation:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Delivery confirmation sent to ${buyerEmail}`);
-}
+              <!-- Issue details box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0; background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+                <tr>
+                  <td style="padding: 20px 24px;">
+                    <p style="margin: 0 0 16px 0; font-size: 14px; font-weight: 600; color: #1C4670; text-transform: uppercase; letter-spacing: 0.05em;">Issue Details</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="padding-bottom: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Issue Type</p>
+                          <p style="margin: 0; font-size: 15px; color: #374151;">{{reasonType}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-bottom: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Buyer's Description</p>
+                          <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.5;">{{reasonText}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="border-top: 1px solid #e5e7eb; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Refund Requested</p>
+                          <p style="margin: 0; font-size: 16px; font-weight: 700; color: #1C4670;">{{refundAmount}} <span style="font-size: 14px; font-weight: 400; color: #6B7280;">({{refundPercent}}%)</span></p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
 
-export async function sendReviewReminder(buyerEmail: string, data: Record<string, string>): Promise<void> {
-  const html = loadTemplate('review-reminder', data);
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: `How Was Your Purchase? - Mulligans`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send review reminder:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Review reminder sent to ${buyerEmail}`);
-}
+              <!-- Deadline box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0; background-color: #fffbeb; border-radius: 8px; border: 1px solid #F59E0B; border-left: 4px solid #F59E0B;">
+                <tr>
+                  <td style="padding: 20px 24px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td valign="top" style="padding-right: 12px; width: 24px;">
+                          <div style="width: 20px; height: 20px; border-radius: 50%; background-color: #F59E0B; text-align: center; line-height: 20px; font-size: 12px; font-weight: 700; color: #ffffff; margin-top: 2px;">!</div>
+                        </td>
+                        <td>
+                          <p style="margin: 0 0 6px 0; font-size: 16px; font-weight: 700; color: #92400e;">Respond by {{deadline}}</p>
+                          <p style="margin: 0; font-size: 14px; color: #92400e; line-height: 1.5;">If you don't respond by this date, the buyer's request may be automatically approved. Please log in and submit your response as soon as possible.</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
 
-// ============================================
-// SELLER EMAILS
-// ============================================
+              <!-- CTA -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 8px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="{{respondUrl}}" style="display: inline-block; background-color: #1DC690; color: #ffffff; font-size: 15px; font-weight: 700; text-decoration: none; padding: 14px 40px; border-radius: 6px;">Respond to Issue</a>
+                  </td>
+                </tr>
+              </table>
 
-export async function sendSaleNotification(sellerEmail: string, data: Record<string, string>): Promise<void> {
-  const html = loadTemplate('sale-notification', data);
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: sellerEmail,
-    subject: `🎉 You Made a Sale! - #${data.orderNumber}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send sale notification:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Sale notification sent to ${sellerEmail}`);
-}
+              <!-- Buyer reference -->
+              <p style="margin: 20px 0 0 0; font-size: 14px; color: #6B7280; text-align: center; line-height: 1.5;">
+                This issue was raised by <strong style="color: #374151;">{{buyerName}}</strong>
+              </p>
 
-export async function sendEscrowReleased(sellerEmail: string, data: Record<string, string>): Promise<void> {
-  const html = loadTemplate('escrow-released', data);
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: sellerEmail,
-    subject: `💰 Payment Released - #${data.orderNumber}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send escrow released email:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Escrow released notification sent to ${sellerEmail}`);
-}
+              <!-- Sign-off -->
+              <p style="margin: 32px 0 0 0; font-size: 16px; color: #374151; line-height: 1.6;">Warm regards,<br>
+                <strong style="color: #1DC690;">The Mulligans Team</strong>
+              </p>
 
-// ============================================
-// DISPUTE EMAILS
-// ============================================
+            </td>
+          </tr>
 
-// Helper to format reason type for display
-function formatReasonType(reasonType: string): string {
-  const map: Record<string, string> = {
-    'not_as_described': 'Item not as described',
-    'damaged': 'Item arrived damaged',
-    'wrong_item': 'Wrong item received',
-    'counterfeit': 'Item appears counterfeit',
-    'missing_parts': 'Missing parts or accessories',
-    'other': 'Other issue',
-  };
-  return map[reasonType] || reasonType;
-}
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #1C4670; padding: 30px 40px; text-align: center;">
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #ffffff;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none; font-weight: 600;">info@mulligans.uk.com</a></p>
+              <p style="margin: 0 0 8px 0; font-size: 12px; color: #9CA3AF;">&copy; 2026 Mulligans Golf Limited. All rights reserved.</p>
+              <p style="margin: 0; font-size: 12px;">
+                <a href="https://mulligans.uk.com/privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a>
+              </p>
+            </td>
+          </tr>
 
-// Helper to format date for display
-function formatDate(date: Date): string {
-  return date.toLocaleDateString('en-GB', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+        </table>
+      </td>
+    </tr>
+  </table>
 
-// 1. Notify seller that a dispute has been opened
-export async function sendDisputeOpenedToSeller(
-  sellerEmail: string,
-  data: {
-    sellerName: string;
-    buyerName: string;
-    itemTitle: string;
-    orderNumber: string;
-    reasonType: string;
-    reasonText: string;
-    refundAmount: string;
-    refundPercent: string;
-    deadline: Date;
-  }
-): Promise<void> {
-  const html = loadTemplate('dispute-opened-seller', {
-    sellerName: data.sellerName,
-    buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
-    reasonType: formatReasonType(data.reasonType),
-    reasonText: data.reasonText || 'No additional details provided',
-    refundAmount: data.refundAmount,
-    refundPercent: data.refundPercent,
-    deadline: formatDate(data.deadline),
-  });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: sellerEmail,
-    subject: `⚠️ Dispute Opened - ${data.itemTitle}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send dispute opened email to seller:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Dispute opened email sent to seller ${sellerEmail}`);
-}
-
-// 2. Confirm to buyer that their dispute was submitted
-export async function sendDisputeOpenedToBuyer(
-  buyerEmail: string,
-  data: {
-    buyerName: string;
-    sellerName: string;
-    itemTitle: string;
-    orderNumber: string;
-    reasonType: string;
-    reasonText: string;
-    refundAmount: string;
-    refundPercent: string;
-  }
-): Promise<void> {
-  const html = loadTemplate('dispute-opened-buyer', {
-    buyerName: data.buyerName,
-    sellerName: data.sellerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
-    reasonType: formatReasonType(data.reasonType),
-    reasonText: data.reasonText || 'No additional details provided',
-    refundAmount: data.refundAmount,
-    refundPercent: data.refundPercent,
-  });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: `Dispute Submitted - ${data.itemTitle}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send dispute confirmation to buyer:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Dispute confirmation sent to buyer ${buyerEmail}`);
-}
-
-// 3. Notify buyer of seller's response (counter offer or rejection)
-export async function sendDisputeResponseToBuyer(
-  buyerEmail: string,
-  data: {
-    buyerName: string;
-    itemTitle: string;
-    orderNumber: string;
-    isCounterOffer: boolean;
-    counterOfferAmount?: string;
-    sellerMessage: string;
-  }
-): Promise<void> {
-  // Set colors and text based on response type
-  let responseType: string;
-  let responseBackground: string;
-  let responseBorder: string;
-  let responseColor: string;
-  let counterOfferSection: string;
-  
-  if (data.isCounterOffer && data.counterOfferAmount) {
-    responseType = 'Counter Offer';
-    responseBackground = '#ecfdf5';
-    responseBorder = '#1DC690';
-    responseColor = '#065f46';
-    counterOfferSection = `
-      <p style="margin: 0 0 16px 0; font-size: 14px; color: #374151;"><strong>Offered Amount:</strong></p>
-      <p style="margin: 0 0 16px 0; font-size: 24px; font-weight: 700; color: #1DC690;">£${data.counterOfferAmount}</p>
-    `;
-  } else {
-    responseType = 'Claim Rejected';
-    responseBackground = '#fef2f2';
-    responseBorder = '#fecaca';
-    responseColor = '#991b1b';
-    counterOfferSection = '';
-  }
-  
-  const html = loadTemplate('dispute-response-buyer', {
-    buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
-    responseType: responseType,
-    responseBackground: responseBackground,
-    responseBorder: responseBorder,
-    responseColor: responseColor,
-    counterOfferSection: counterOfferSection,
-    sellerMessage: data.sellerMessage || 'No message provided',
-  });
-  
-  const subject = data.isCounterOffer 
-    ? `💬 Counter Offer Received - ${data.itemTitle}`
-    : `💬 Seller Responded - ${data.itemTitle}`;
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: subject,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send dispute response to buyer:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Dispute response sent to buyer ${buyerEmail}`);
-}
-
-// 4. Notify admin of escalated dispute
-export async function sendDisputeEscalatedToAdmin(
-  data: {
-    disputeId: string;
-    itemTitle: string;
-    refundAmount: string;
-    buyerName: string;
-    buyerEmail: string;
-    sellerName: string;
-    sellerEmail: string;
-    reasonType: string;
-    escalationReason: string;
-  }
-): Promise<void> {
-  const html = loadTemplate('dispute-escalated-admin', {
-    disputeId: data.disputeId,
-    itemTitle: data.itemTitle,
-    refundAmount: data.refundAmount,
-    buyerName: data.buyerName,
-    buyerEmail: data.buyerEmail,
-    sellerName: data.sellerName,
-    sellerEmail: data.sellerEmail,
-    reasonType: formatReasonType(data.reasonType),
-    escalationReason: data.escalationReason,
-  });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: ADMIN_EMAIL,
-    subject: `🚨 Escalated Dispute - Review Required - ${data.disputeId.slice(-8)}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send escalation email to admin:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Escalation email sent to admin`);
-}
-
-// 5. Confirm to buyer that their escalation was received
-export async function sendDisputeEscalatedToBuyer(
-  buyerEmail: string,
-  data: {
-    buyerName: string;
-    itemTitle: string;
-    orderNumber: string;
-    refundAmount: string;
-  }
-): Promise<void> {
-  const html = loadTemplate('dispute-escalated-buyer', {
-    buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
-    refundAmount: data.refundAmount,
-  });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: buyerEmail,
-    subject: `🔍 Dispute Under Review - ${data.itemTitle}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send escalation confirmation to buyer:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Escalation confirmation sent to buyer ${buyerEmail}`);
-}
-
-// 6. Send resolution notification to a party (buyer or seller)
-export async function sendDisputeResolved(
-  email: string,
-  data: {
-    userName: string;
-    itemTitle: string;
-    orderNumber: string;
-    resolutionType: 'full_refund' | 'partial_refund' | 'no_refund';
-    refundAmount?: string;
-    adminNotes: string;
-    isBuyer: boolean;
-  }
-): Promise<void> {
-  // Set colors and content based on resolution type and recipient
-  let decisionTitle: string;
-  let decisionBackground: string;
-  let decisionBorder: string;
-  let decisionColor: string;
-  let refundAmountSection: string;
-  let nextSteps: string;
-  
-  switch (data.resolutionType) {
-    case 'full_refund':
-      decisionTitle = 'Full Refund Approved';
-      decisionBackground = '#ecfdf5';
-      decisionBorder = '#1DC690';
-      decisionColor = '#065f46';
-      refundAmountSection = data.refundAmount 
-        ? `<p style="margin: 0; font-size: 28px; font-weight: 700; color: #1DC690;">£${data.refundAmount}</p>`
-        : '';
-      nextSteps = data.isBuyer
-        ? 'The full purchase amount will be refunded to your original payment method within 5-10 business days.'
-        : 'The full purchase amount has been refunded to the buyer. No further action is required from you.';
-      break;
-      
-    case 'partial_refund':
-      decisionTitle = 'Partial Refund Approved';
-      decisionBackground = '#eff6ff';
-      decisionBorder = '#3b82f6';
-      decisionColor = '#1e40af';
-      refundAmountSection = data.refundAmount 
-        ? `<p style="margin: 0; font-size: 28px; font-weight: 700; color: #3b82f6;">£${data.refundAmount}</p>`
-        : '';
-      nextSteps = data.isBuyer
-        ? `A partial refund of £${data.refundAmount} will be processed to your original payment method within 5-10 business days.`
-        : `A partial refund of £${data.refundAmount} has been issued to the buyer. This amount has been deducted from your payout.`;
-      break;
-      
-    case 'no_refund':
-    default:
-      decisionTitle = 'No Refund Warranted';
-      decisionBackground = '#f9fafb';
-      decisionBorder = '#d1d5db';
-      decisionColor = '#374151';
-      refundAmountSection = '';
-      nextSteps = data.isBuyer
-        ? 'After reviewing all evidence, we determined that a refund is not warranted in this case. The order is now considered complete.'
-        : 'After reviewing all evidence, we determined that the buyer\'s claim was not valid. Your full payout will be released as normal.';
-      break;
-  }
-  
-  const html = loadTemplate('dispute-resolved', {
-    userName: data.userName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
-    decisionTitle: decisionTitle,
-    decisionBackground: decisionBackground,
-    decisionBorder: decisionBorder,
-    decisionColor: decisionColor,
-    refundAmountSection: refundAmountSection,
-    adminNotes: data.adminNotes,
-    nextSteps: nextSteps,
-  });
-  
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: email,
-    subject: `⚖️ Dispute Resolved - ${data.itemTitle}`,
-    html: html,
-  });
-  
-  if (error) {
-    console.error('❌ Failed to send dispute resolution email:', error);
-    throw new Error(error.message);
-  }
-  
-  console.log(`✅ Dispute resolution sent to ${email}`);
-}
-
-// Legacy function for backwards compatibility (can be removed later)
-export async function sendDisputeEmail(
-  to: string,
-  subject: string,
-  html: string
-): Promise<void> {
-  const { error } = await resend.emails.send({
-    from: FROM_ADDRESS,
-    to: to,
-    subject: subject,
-    html: html,
-  });
-
-  if (error) {
-    console.error('❌ Failed to send dispute email:', error);
-    throw new Error(error.message);
-  }
-
-  console.log(`✅ Dispute email sent to ${to}`);
-}
+</body>
+</html>

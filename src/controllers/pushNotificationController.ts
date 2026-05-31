@@ -107,6 +107,7 @@ export const sendPushNotification = async (
       title,
       body,
       data: data || {},
+      channelId: data?.type === 'message' ? 'messages' : 'orders',
     };
 
     console.log('[PUSH] Sending to Expo API:', { to: user.push_token, title, body });

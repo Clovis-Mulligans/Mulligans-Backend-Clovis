@@ -6,6 +6,7 @@ import { adminAuth, verifyAdminPassword, adminLogout } from '../middleware/admin
 import { DisputeController } from '../controllers/disputeController';
 import { AdminReportsController } from '../controllers/adminReportsController';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { 
@@ -16,6 +17,8 @@ import {
 } from '../services/emailService';
 import { AdminStatsController } from '../controllers/adminStatsController';
 import { logAdminAction, AUDIT_ACTIONS } from '../lib/auditLogger';
+import { restoreListingStock } from '../lib/stockUtils';
+import { INSPECTION_WINDOW_MS } from '../constants/inspection';
 
 import rateLimit from 'express-rate-limit';
 
@@ -173,7 +176,7 @@ router.get('/disputes/:id', adminAuth, async (req, res) => {
           condition_overall: true,
           images: {
             select: { image_url: true },
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
       });
@@ -474,7 +477,7 @@ router.patch('/returns/:id', adminAuth, async (req, res) => {
     if (status === 'delivered') {
       updateData.delivered_at = now;
       // Set escrow release for 3 days from now
-      updateData.escrow_release_at = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+      updateData.escrow_release_at = new Date(now.getTime() + INSPECTION_WINDOW_MS);
     } else if (status === 'completed') {
       updateData.completed_at = now;
     } else if (status === 'cancelled') {
@@ -515,6 +518,7 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
           select: {
             id: true,
             amount: true,
+            quantity: true,
             stripe_payment_intent_id: true,
             listing_id: true,
           },
@@ -575,15 +579,14 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
       },
     });
 
-    // Relist the item if listing exists
+    // Return refund: item came back to seller, restore listing stock
     if (returnRequest.orders.listing_id) {
-      await prisma.listings.update({
-        where: { id: returnRequest.orders.listing_id },
-        data: {
-          status: 'active',
-          updated_at: now,
-        },
-      });
+      await restoreListingStock(
+        prisma,
+        returnRequest.orders.listing_id,
+        returnRequest.orders.quantity || 1,
+        'return_refund',
+      );
     }
 
     console.log(`✅ Admin processed refund for return ${req.params.id}: £${refundAmount.toFixed(2)}`);
@@ -725,7 +728,7 @@ router.get('/claims/:id', adminAuth, async (req, res) => {
             images: {
               select: { image_url: true },
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -946,6 +949,10 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
         itemTitle: order.listing_title || 'your item',
         refundAmount: amount.toFixed(2),
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -955,6 +962,10 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
         itemTitle: order.listing_title || 'the item',
         buyerName: buyer?.display_name || 'The buyer',
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -1061,6 +1072,10 @@ router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res) 
         itemTitle: order.listing_title || 'your item',
         reason: reason,
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -1069,6 +1084,10 @@ router.post('/claims/:id/deny', adminAuth, adminActionLimiter, async (req, res) 
         sellerName: sellerFull.display_name || 'there',
         itemTitle: order.listing_title || 'the item',
         orderNumber: order.id,
+        itemImageUrl: order.listing_image || '',
+        itemBrand: '',
+        itemCondition: '',
+        itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
       }).catch(err => console.error('Email error:', err));
     }
 
@@ -1501,6 +1520,167 @@ router.patch('/listings/:id/moderate', adminAuth, adminActionLimiter, async (req
   } catch (error: any) {
     console.error('❌ Moderate listing error:', error);
     res.status(500).json({ error: error.message || 'Failed to moderate listing' });
+  }
+});
+
+
+// Get all pro store applications (paginated, filterable)
+router.get('/pro-store/applications', adminAuth, async (req, res) => {
+  try {
+    const { status, page = '1', limit = '20' } = req.query as Record<string, string>;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+    if (status && ['pending', 'approved', 'rejected', 'info_requested'].includes(status)) {
+      where.status = status;
+    }
+
+    const [applications, total] = await Promise.all([
+      prisma.pro_store_applications.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              email: true,
+              display_name: true,
+              avatar_url: true,
+              created_at: true,
+              total_sales: true,
+              is_verified_seller: true,
+            },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+        take: limitNum,
+        skip,
+      }),
+      prisma.pro_store_applications.count({ where }),
+    ]);
+
+    res.json({
+      applications,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    });
+  } catch (error: any) {
+    console.error('❌ Get pro store applications error:', error);
+    res.status(500).json({ error: 'Failed to fetch pro store applications' });
+  }
+});
+
+
+// Get single pro store application detail (includes review_notes)
+router.get('/pro-store/applications/:id', adminAuth, async (req, res) => {
+  try {
+    const application = await prisma.pro_store_applications.findUnique({
+      where: { id: req.params.id },
+      include: {
+        user: {
+          select: {
+            email: true,
+            display_name: true,
+            avatar_url: true,
+            total_sales: true,
+            is_verified_seller: true,
+            created_at: true,
+            is_banned: true,
+          },
+        },
+      },
+    });
+
+    if (!application) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+
+    res.json({ application });
+  } catch (error: any) {
+    console.error('❌ Get pro store application detail error:', error);
+    res.status(500).json({ error: 'Failed to fetch application details' });
+  }
+});
+
+
+// Review a pro store application (approve / reject / info_requested)
+router.patch('/pro-store/applications/:id/review', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    const { action, review_notes } = req.body;
+
+    if (!action || !['approve', 'reject', 'info_requested'].includes(action)) {
+      res.status(400).json({ error: 'action must be one of: approve, reject, info_requested' });
+      return;
+    }
+
+    const application = await prisma.pro_store_applications.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!application) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+
+    // Status mapping — action values map to correct status strings
+const STATUS_MAP: Record<string, string> = {
+  approve: 'approved',
+  reject: 'rejected',
+  info_requested: 'info_requested',
+};
+
+// Run as a single transaction
+const updatedApplication = await prisma.$transaction(async (tx) => {
+  // a. Update the application
+  const updated = await tx.pro_store_applications.update({
+    where: { id: req.params.id },
+    data: {
+      status: STATUS_MAP[action],
+      review_notes: review_notes || null,
+      reviewed_by: 'admin',
+      reviewed_at: new Date(),
+    },
+  });
+
+  // b. If approved, update the user
+  if (action === 'approve') {
+    await tx.users.update({
+      where: { id: application.user_id },
+      data: {
+        is_pro_store: true,
+        pro_store_approved_at: new Date(),
+      },
+    });
+  } 
+
+      // c. Write to audit log
+      await tx.admin_audit_log.create({
+        data: {
+          action: `pro_store_${action}`,
+          target_type: 'user',
+          target_id: application.user_id,
+          details: {
+            application_id: application.id,
+            business_name: application.business_name,
+            review_notes: review_notes || null,
+          },
+          admin_ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+            || req.socket.remoteAddress
+            || 'unknown',
+        },
+      });
+
+      return updated;
+    });
+
+    res.json({ application: updatedApplication });
+  } catch (error: any) {
+    console.error('❌ Review pro store application error:', error);
+    res.status(500).json({ error: 'Failed to review application' });
   }
 });
 

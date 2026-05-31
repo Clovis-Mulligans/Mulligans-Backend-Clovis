@@ -129,7 +129,14 @@ async function sendFeedbackNotification(feedback: any) {
     general: '💬'
   };
 
-  const subject = `${severityEmoji[feedback.severity]} ${typeEmoji[feedback.feedbackType]} New Feedback: ${feedback.screenFeature}`;
+  const severityLabel: Record<string, string> = {
+    blocking: 'BLOCKING',
+    high: 'HIGH',
+    medium: 'MEDIUM',
+    low: 'LOW'
+  };
+
+  const subject = `[${severityLabel[feedback.severity] || feedback.severity}] Feedback: ${feedback.screenFeature}`;
 
   const htmlBody = `
     <!DOCTYPE html>

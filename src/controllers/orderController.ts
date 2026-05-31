@@ -9,10 +9,19 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
+import { Shippo } from 'shippo';
 import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
-import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { generateEmailActionToken } from '../routes/emailActionRoutes';
+import { restoreListingStock } from '../lib/stockUtils';
+import { weekdaysUntil, calculateShippingDeadline } from '../utils/shippingDeadline';
+
+const shippo = new Shippo({
+  apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
+});
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -21,7 +30,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ============================================
 // CONSTANTS
 // ============================================
-const SHIPPING_DEADLINE_DAYS = 5;
+
 
 // Fee calculation - matches your pricing structure
 const calculateSellerPayout = (totalAmount: number): number => {
@@ -156,7 +165,7 @@ export class OrderController {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -271,7 +280,7 @@ export class OrderController {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -320,10 +329,7 @@ export class OrderController {
         carrier: order.carrier,
         shipping_address: order.shipping_address,
         is_new: order.status === 'to_ship',
-        // ✅ NEW: Days remaining to ship
-        days_to_ship: order.auto_cancel_at ? 
-          Math.max(0, Math.ceil((order.auto_cancel_at.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))) : 
-          null,
+        days_to_ship: order.auto_cancel_at ? weekdaysUntil(new Date(order.auto_cancel_at)) : null,
         // ✅ NEW: Insurance claim fields for "Investigating" status
         reported_lost_at: order.reported_lost_at?.toISOString() || null,
         insurance_claim_status: order.insurance_claim_status || null,
@@ -368,7 +374,7 @@ export class OrderController {
               shipping_cost: true,
               images: {
                 select: { image_url: true },
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -494,7 +500,12 @@ if (order.disputes) {
         quantity: order.quantity || 1,  // ✅ SIZE VARIANT
         selected_size: order.selected_size || null,  // ✅ SIZE VARIANT
         shipping_cost: order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0,
+        shipping_total: parseFloat(
+          ((order.shipping_cost ? parseFloat(order.shipping_cost.toString()) : 0) +
+           (order.insurance_premium ? parseFloat(order.insurance_premium.toString()) : 0)).toFixed(2)
+        ),
         seller_payout: order.seller_payout ? parseFloat(order.seller_payout.toString()) : null,
+        buyer_total: isBuyer && order.buyer_total ? parseFloat(order.buyer_total.toString()) : undefined,
         currency: order.currency,
         status: order.status,
         created_at: order.created_at.toISOString(),
@@ -508,6 +519,8 @@ if (order.disputes) {
         tracking_number: order.tracking_number,
         carrier: order.carrier,
         label_url: order.label_url,
+        qr_code_url: isSeller ? (order.qr_code_url || null) : null,
+        qr_code_expires_at: isSeller ? (order.qr_code_expires_at?.toISOString() || null) : null,
         shipping_address: isSeller ? order.shipping_address : null,
         buyer: {
           id: order.users_orders_buyer_idTousers?.id,
@@ -610,7 +623,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -643,9 +656,10 @@ if (order.disputes) {
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
+      const shippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: shippedNotifId,
           user_id: order.buyer_id,
           type: 'shipped',
           title: 'Your item has shipped! 📦',
@@ -663,7 +677,7 @@ if (order.disputes) {
           order.buyer_id,
           '📦 Your item has shipped!',
           `"${listingTitle}" is on its way! Tracking: ${tracking_number}`,
-          { type: 'order_update', order_id: orderId, is_buyer: true }
+          { notification_id: shippedNotifId, type: 'purchase_shipped', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);
@@ -679,6 +693,14 @@ if (order.disputes) {
             trackingNumber: tracking_number,
             carrier: carrier,
             orderId: orderId,
+            orderReference: orderId,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+            carrierName: carrier,
+            estimatedDelivery: '3-5 business days',
+            trackingUrl: '#',
           });
           console.log('📧 Shipping notification email sent to:', buyerEmail);
         } catch (emailError) {
@@ -717,7 +739,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -728,7 +750,7 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot be marked delivered' });
       }
 
-      // ✅ Calculate escrow release date (5 days from now)
+      // ✅ Calculate escrow release date (3 days from now)
       const escrowReleaseAt = new Date();
       escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
 
@@ -746,9 +768,10 @@ if (order.disputes) {
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
+      const deliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: deliveredNotifId,
           user_id: order.buyer_id,
           type: 'delivered',
           title: 'Item delivered! 🎉',
@@ -764,7 +787,7 @@ if (order.disputes) {
           order.buyer_id,
           'Item Delivered!',
           `"${listingTitle}" has been delivered. You have ${ESCROW_RELEASE_DAYS} days to confirm.`,
-          { type: 'delivered', order_id: orderId }
+          { notification_id: deliveredNotifId, type: 'purchase_delivered', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -784,12 +807,21 @@ if (order.disputes) {
           await sendDeliveryConfirmation(buyerEmailRecord.email, {
             itemTitle: listingTitle,
             orderNumber: orderId,
-            deliveryDate: new Date().toLocaleDateString('en-GB', { 
-              weekday: 'long', 
-              year: 'numeric', 
-              month: 'long', 
-              day: 'numeric' 
+            deliveryDate: new Date().toLocaleDateString('en-GB', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
             }),
+            buyerName: buyerEmailRecord?.display_name || 'there',
+            orderReference: orderId,
+            itemName: listingTitle,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+            confirmUrl: `https://api.mulligans.uk.com/api/email-actions/confirm-receipt?token=${generateEmailActionToken(orderId, order.buyer_id, 'confirm-receipt', escrowReleaseAt)}`,
+            reportIssueUrl: `https://api.mulligans.uk.com/api/email-actions/report-issue?token=${generateEmailActionToken(orderId, order.buyer_id, 'report-issue', escrowReleaseAt)}`,
           });
           console.log('📧 Delivery confirmation email sent to:', buyerEmailRecord.email);
         } catch (emailError) {
@@ -827,7 +859,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -896,9 +928,10 @@ if (order.disputes) {
       // Notify seller
       const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
+      const payoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: payoutNotifId,
           user_id: seller.id,
           type: 'payout',
           title: 'Payment Released! 💰',
@@ -914,7 +947,7 @@ if (order.disputes) {
           seller.id,
           'Payment Released!',
           `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
-          { type: 'payout', order_id: orderId }
+          { notification_id: payoutNotifId, type: 'payout_released', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -961,7 +994,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1012,9 +1045,10 @@ if (order.disputes) {
       });
 
       // Notify buyer - claim is being processed
+      const lostBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: lostBuyerNotifId,
           user_id: order.buyer_id,
           type: 'order_update',
           title: 'Lost Item Report Received',
@@ -1030,16 +1064,17 @@ if (order.disputes) {
           order.buyer_id,
           'Lost Item Report Received',
           `We're investigating your lost item report for "${listingTitle}".`,
-          { type: 'order_update', order_id: orderId }
+          { notification_id: lostBuyerNotifId, type: 'order_update', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
       }
 
       // Notify seller
+      const lostSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: lostSellerNotifId,
           user_id: order.seller_id,
           type: 'order_issue',
           title: 'Item Reported Lost in Transit',
@@ -1055,7 +1090,7 @@ if (order.disputes) {
           order.seller_id,
           'Item Reported Lost',
           `"${listingTitle}" was reported as lost by the buyer. Investigation in progress.`,
-          { type: 'order_issue', order_id: orderId }
+          { notification_id: lostSellerNotifId, type: 'order_issue', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1081,6 +1116,10 @@ if (order.disputes) {
             itemTitle: listingTitle,
             orderNumber: orderId,
             sellerName: sellerUser?.display_name || 'the seller',
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           }).catch(err => console.error('[ORDER] Email error:', err));
         }
 
@@ -1090,6 +1129,10 @@ if (order.disputes) {
             itemTitle: listingTitle,
             orderNumber: orderId,
             buyerName: buyerUser?.display_name || 'The buyer',
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           }).catch(err => console.error('[ORDER] Email error:', err));
         }
       } catch (emailErr) {
@@ -1151,7 +1194,7 @@ if (order.disputes) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1176,13 +1219,42 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot be cancelled' });
       }
 
-      // ✅ Check if shipping label has been created - block cancellation for everyone
-if (order.label_url) {
-  return res.status(400).json({ 
-    error: 'Cannot cancel order',
-    message: 'This order cannot be cancelled because a shipping label has already been purchased. Please contact support if you need assistance.'
-  });
-}
+      // Cancel-after-scan check: if a label exists with tracking, verify parcel hasn't been scanned
+      if (order.shippo_transaction_id && order.tracking_number) {
+        try {
+          const trackingStatus = await shippo.trackingStatus.get(
+            (order.carrier || '').toLowerCase(),
+            order.tracking_number
+          );
+          const status = trackingStatus.trackingStatus?.status;
+
+          if (status === 'TRANSIT' || status === 'DELIVERED' || status === 'RETURNED' || status === 'FAILURE') {
+            return res.status(400).json({
+              error: 'Cannot cancel order',
+              code: 'tracking_check_blocked',
+              message: 'This parcel has been scanned by the carrier. Cancellation is no longer possible — please open a dispute instead.',
+            });
+          }
+
+          // PRE_TRANSIT or UNKNOWN — allow cancellation, log structured event
+          console.log(JSON.stringify({
+            event: 'cancel_pre_transit',
+            order_id: order.id,
+            tracking_number: order.tracking_number,
+            carrier: order.carrier,
+            minutes_since_label_purchase: Math.round((Date.now() - new Date(order.updated_at).getTime()) / 60000),
+            cancelled_by_user_id: userId,
+            timestamp: new Date().toISOString(),
+          }));
+        } catch (trackingErr: any) {
+          console.error(`[ORDER] Tracking check failed for order ${orderId}:`, trackingErr.message);
+          return res.status(503).json({
+            error: 'Cancellation temporarily unavailable',
+            code: 'tracking_check_unavailable',
+            message: 'We could not verify the shipping status. Please try again in a moment.',
+          });
+        }
+      }
 
 // ✅ NEW: Buyer can only cancel within 5 minutes of order creation
 const isBuyerCancelling = order.buyer_id === userId;
@@ -1263,16 +1335,14 @@ if (isBuyerCancelling) {
           },
         });
 
-        // Relist the item
+        // Restore stock and relist the item
         if (order.listing_id) {
-          await tx.listings.update({
-            where: { id: order.listing_id },
-            data: {
-              status: 'active',
-              updated_at: now,
-            },
-          });
-          console.log('📋 Item relisted:', order.listing_id);
+          await restoreListingStock(
+            tx,
+            order.listing_id,
+            order.quantity || 1,
+            'order_cancelled',
+          );
         }
 
         // Increment user's cancellation count
@@ -1331,15 +1401,41 @@ if (isBuyerCancelling) {
         }
       });
 
+      // Fire-and-forget Shippo label refund if a label was purchased
+      if (order.shippo_transaction_id) {
+        shippo.refunds.create({ transaction: order.shippo_transaction_id })
+          .then((refund: any) => {
+            console.log(JSON.stringify({
+              event: 'shippo_label_refund',
+              order_id: order.id,
+              transaction_id: order.shippo_transaction_id,
+              success: true,
+              refund_id: refund.objectId,
+              trigger: 'manual_cancel',
+            }));
+          })
+          .catch((error: any) => {
+            console.log(JSON.stringify({
+              event: 'shippo_label_refund',
+              order_id: order.id,
+              transaction_id: order.shippo_transaction_id,
+              success: false,
+              error: error.message,
+              trigger: 'manual_cancel',
+            }));
+          });
+      }
+
       // Notify the other party
       const cancelledBy = isBuyer ? 'The buyer' : 'The seller';
       const notificationMessage = isBuyer
         ? `${cancelledBy} cancelled the order for "${listingTitle}". Your item has been relisted. Reason: ${fullCancelReason}`
         : `${cancelledBy} cancelled the order for "${listingTitle}". A refund has been processed. Reason: ${fullCancelReason}`;
 
+      const cancelledNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: cancelledNotifId,
           user_id: otherUser?.id || '',
           type: 'order_cancelled',
           title: 'Order Cancelled',
@@ -1355,7 +1451,7 @@ if (isBuyerCancelling) {
           otherUser?.id || '',
           'Order Cancelled',
           notificationMessage.substring(0, 100),
-          { type: 'order_cancelled', order_id: orderId }
+          { notification_id: cancelledNotifId, type: 'order_cancelled', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1385,6 +1481,10 @@ if (isBuyerCancelling) {
               ? 'Your order has been cancelled as requested.'
               : `The seller has cancelled your order for "${listingTitle}".`,
             refundMessage: isBuyer ? refundMsg : `${refundMsg} The item has been relisted and is available for other buyers.`,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           });
         }
 
@@ -1398,6 +1498,10 @@ if (isBuyerCancelling) {
               ? `The buyer has cancelled their order for "${listingTitle}". Your item has been relisted.`
               : 'Your cancellation has been processed.',
             refundMessage: isBuyer ? '' : 'A refund has been issued to the buyer.',
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
           });
         }
       } catch (emailErr) {
@@ -1478,7 +1582,7 @@ if (isBuyerCancelling) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1515,9 +1619,10 @@ if (isBuyerCancelling) {
       });
 
       // Notify seller
+      const disputeSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: disputeSellerNotifId,
           user_id: order.seller_id,
           type: 'dispute',
           title: 'Dispute Opened',
@@ -1533,7 +1638,7 @@ if (isBuyerCancelling) {
           order.seller_id,
           'Dispute Opened',
           `A dispute has been opened for "${listingTitle}". Payment is on hold.`,
-          { type: 'dispute', order_id: orderId }
+          { notification_id: disputeSellerNotifId, type: 'dispute_opened', order_id: orderId, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1569,7 +1674,7 @@ if (isBuyerCancelling) {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1638,9 +1743,10 @@ if (isBuyerCancelling) {
       // Notify seller
       const payoutAmount = parseFloat(sellerPayout.toString()).toFixed(2);
 
+      const escrowPayoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: escrowPayoutNotifId,
           user_id: seller.id,
           type: 'payout',
           title: 'Payment Released! 💰',
@@ -1656,7 +1762,7 @@ if (isBuyerCancelling) {
           seller.id,
           'Payment Released!',
           `£${payoutAmount} for "${listingTitle}" has been transferred.`,
-          { type: 'payout', order_id: orderId }
+          { notification_id: escrowPayoutNotifId, type: 'payout_released', order_id: orderId }
         );
       } catch (pushErr) {
         console.error('[ORDER] Push notification failed:', pushErr);
@@ -1679,6 +1785,14 @@ if (isBuyerCancelling) {
             salePrice: salePrice,
             fees: fees,
             payoutAmount: payoutAmount,
+            sellerName: seller?.display_name || 'Seller',
+            itemName: listingTitle,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+            paymentAmount: payoutAmount,
+            earningsUrl: '#',
           });
           console.log('📧 Escrow released email sent to seller:', sellerEmailRecord.email);
         } catch (emailError) {
@@ -1721,7 +1835,7 @@ if (isBuyerCancelling) {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -1743,13 +1857,9 @@ if (isBuyerCancelling) {
       const formattedOrders = orders.map((order) => {
         let daysRemaining = 5;
         if (order.auto_cancel_at) {
-          const msRemaining = order.auto_cancel_at.getTime() - now.getTime();
-          daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+          daysRemaining = weekdaysUntil(new Date(order.auto_cancel_at));
         } else if (order.paid_at) {
-          const deadline = new Date(order.paid_at);
-          deadline.setDate(deadline.getDate() + 5);
-          const msRemaining = deadline.getTime() - now.getTime();
-          daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+          daysRemaining = weekdaysUntil(calculateShippingDeadline(new Date(order.paid_at)));
         }
 
         return {
@@ -1812,7 +1922,7 @@ if (isBuyerCancelling) {
               images: {
                 select: { image_url: true },
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },

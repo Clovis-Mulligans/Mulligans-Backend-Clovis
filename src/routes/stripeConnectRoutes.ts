@@ -11,5 +11,6 @@ router.post('/onboarding-link', authenticateToken, StripeConnectController.creat
 router.get('/account-status', authenticateToken, StripeConnectController.getAccountStatus);
 router.get('/dashboard-link', authenticateToken, StripeConnectController.getDashboardLink);
 router.get('/balance', authenticateToken, StripeConnectController.getBalance);
+router.get('/onboarding-status', authenticateToken, StripeConnectController.getOnboardingStatus);
 
 export default router;

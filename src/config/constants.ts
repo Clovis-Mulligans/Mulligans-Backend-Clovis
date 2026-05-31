@@ -1,5 +1,16 @@
-// Shared business constants — single source of truth
-export const ESCROW_RELEASE_DAYS = 5;       // Days after delivery before auto-release
-export const DISPUTE_WINDOW_DAYS = 5;       // Must match ESCROW_RELEASE_DAYS
-export const SHIPPING_DEADLINE_DAYS = 5;    // Seller must ship within this many days
-export const AUTO_CANCEL_DAYS = 5;          // Auto-cancel if not shipped within this many days
+import { INSPECTION_WINDOW_DAYS } from '../constants/inspection';
+
+// Buyer inspection window (3 days) — payment auto-releases after this
+export const ESCROW_RELEASE_DAYS = INSPECTION_WINDOW_DAYS;
+
+// Dispute window matches inspection window (buyer can dispute during this period)
+export const DISPUTE_WINDOW_DAYS = INSPECTION_WINDOW_DAYS;
+
+// Seller shipping deadline (separate from inspection window)
+export const SHIPPING_DEADLINE_DAYS = 5;
+
+// Auto-cancel deadline for unshipped orders
+export const AUTO_CANCEL_DAYS = 5;
+
+// Return shipping deadline
+export const RETURN_SHIPPING_DEADLINE_DAYS = 5;

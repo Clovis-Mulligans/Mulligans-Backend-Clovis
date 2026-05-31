@@ -38,19 +38,23 @@ import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
+import { sendEmail } from '../utils/email';
+import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
+import { logStockDecrement } from '../lib/stockUtils';
+import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
-
-// Constants for escrow system
-const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
@@ -275,11 +279,8 @@ export class StripeController {
       // [Issue #24] Calculate shipping cost
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
-      const shippingInsuranceRate = 0.0125;
-      const insurancePremium = itemPrice * shippingInsuranceRate;
-      const shippingTotal = baseShipping > 0
-        ? parseFloat((baseShipping + insurancePremium).toFixed(2))
-        : 0;
+      const insurancePremium = itemPrice * INSURANCE_RATE;
+      const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
 
       // [Issue #24] Grand total now includes shipping
       const totalPrice = itemPrice + platformFee + shippingTotal;
@@ -288,8 +289,8 @@ export class StripeController {
       const platformFeePence = Math.round(platformFee * 100);
       const shippingTotalPence = Math.round(shippingTotal * 100);
 
-      // Calculate seller payout (what they'll receive after escrow)
-      const sellerPayout = itemPrice + baseShipping;
+      // Calculate seller payout (what they'll receive after escrow) — item only, shipping is platform's
+      const sellerPayout = itemPrice;
 
       console.log('Price breakdown:', {
         unitPrice: unitPrice.toFixed(2),
@@ -373,8 +374,11 @@ export class StripeController {
           item_price: itemPrice.toFixed(2),
           shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
+          buyer_protection_fee: platformFee.toFixed(2),
+          service_fee: '0.00',
           seller_payout: sellerPayout.toFixed(2),
           total_price: totalPrice.toFixed(2),
+          insurance_premium: insurancePremium.toFixed(2),
           escrow: 'true',
           offer_id: validatedOfferId || '',  // OFFER SYSTEM
         },
@@ -383,7 +387,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       });
 
       console.log('Checkout session created:', session.id);
-      console.log('Funds will be held in escrow until delivery + 5 days');
+      console.log('Funds will be held in escrow until delivery + 3 days');
 
       // [P-C1] Return only session data -- no standalone PaymentIntent clientSecret
       res.json({
@@ -448,8 +452,27 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           // Immediately payout platform fee to bank account
           await StripeController.payoutPlatformFee(fullSession);
         } catch (fulfillmentError: any) {
-          // Log the full error for investigation
-          console.error('[WEBHOOK] Order fulfillment failed for session:', webhookSession.id, fulfillmentError);
+          // Specific handling for address validation failures (Q1/Q2 decision)
+          if (fulfillmentError instanceof AddressValidationError) {
+            console.error('[WEBHOOK_VALIDATION_FAILURE]', {
+              sessionId: webhookSession.id,
+              missingFields: fulfillmentError.missingFields,
+            });
+
+            // Email ops (fire-and-forget — prevent email failure from cascading)
+            sendEmail({
+              to: 'info@mulligans.uk.com',
+              subject: '[Mulligans Alert] Checkout webhook address validation failed',
+              text: `A Stripe Checkout webhook arrived with an invalid shipping address.\n\n` +
+                    `Session: ${webhookSession.id}\n` +
+                    `Missing fields: ${fulfillmentError.missingFields.join(', ')}\n\n` +
+                    `Manual reconciliation required - buyer's payment is in Stripe but no order was created. ` +
+                    `Either refund the buyer or contact them for address correction.`,
+            }).catch(emailErr => console.error('[OPS_EMAIL_FAILED]', emailErr));
+          } else {
+            // Generic fallback — existing behaviour preserved
+            console.error('[WEBHOOK] Order fulfillment failed for session:', webhookSession.id, fulfillmentError);
+          }
           // Still return 200 to prevent Stripe retries that could cause duplicates.
           // The idempotency checks in fulfillOrder/fulfillCartOrder provide some protection,
           // but uncontrolled retries are still dangerous.
@@ -599,7 +622,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         include: {
           images: {
             take: 1,
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
         },
       });
@@ -632,6 +655,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
       console.log('Shipping address JSON:', shippingAddressJson);
 
+      // Validation per Q1/Q2 decision — throw propagates up to webhook handler at line 449
+      // which logs, emails info@mulligans.uk.com, and returns 200 to Stripe
+      validateShippingAddress(shippingAddressJson);
+
       // Get payment method
       let paymentMethodId: string | null = null;
       if (session.payment_intent) {
@@ -660,9 +687,12 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         ? (originalListPrice - effectiveUnitPrice) * orderQuantity
         : 0;
 
-      // ESCROW: Auto-cancel date (5 days)
-      const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
+        // Insurance — read from metadata for storage on order (FIX 3 / FINDING G-7)
+      const insurancePremium = parseFloat(metadata.insurance_premium || '0');
+      const insuredValue = parseFloat(metadata.item_price || '0');
+
+      // ESCROW: Auto-cancel date (5 weekdays)
+      const autoCancelAt = calculateShippingDeadline(new Date());
 
       // [D-C4] Wrap the transaction in try/catch to issue refund on failure
       let order: any;
@@ -717,6 +747,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               quantity: orderQuantity,
               selected_size: selectedSize,  // SIZE VARIANT
               seller_payout: sellerPayout,
+              buyer_total: parseFloat(metadata.total_price),
               currency: 'GBP',
               stripe_payment_intent_id: session.payment_intent as string,
               stripe_payment_method_id: paymentMethodId,
@@ -725,6 +756,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               auto_cancel_at: autoCancelAt,
               shipping_address: shippingAddressJson ?? Prisma.JsonNull,
               updated_at: new Date(),
+              insurance_premium: insurancePremium,
+              insured_value: insuredValue,
               // OFFER SYSTEM: Store offer details on the order
               offer_id: offerId || null,
               original_list_price: offerId ? originalListPrice : null,
@@ -750,8 +783,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             });
 
             if (stockResult.count === 0) {
-              throw new Error(`Stock race condition detected for listing ${listing_id}`);
+              console.log(`[STOCK] GUARD_FAILED listing=${listing_id} requested=${orderQuantity} cause=single_checkout`);
+              throw new Error(`Insufficient stock for listing ${listing_id}`);
             }
+            logStockDecrement(listing_id, freshListing.quantity, orderQuantity, 'single_checkout');
           } else {
             // Size-variant: update with computed values (race window minimised by being inside tx)
             await tx.listings.update({
@@ -763,6 +798,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 updated_at: new Date(),
               },
             });
+            logStockDecrement(listing_id, freshListing.quantity, orderQuantity, 'single_checkout');
           }
 
           // Remove from buyer's cart (if was in cart)
@@ -856,14 +892,6 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         console.error('[STRIPE] Auto-label purchase failed (non-fatal):', autoShipErr);
       }
 
-      // Check if seller needs bank verification
-      const sellerUser = await prisma.users.findUnique({
-        where: { id: seller_id },
-        select: { stripe_connect_status: true },
-      });
-
-      const needsVerification = sellerUser?.stripe_connect_status !== 'active';
-
       // Notify buyer - WITH IMAGE, quantity, and size
       const sizeText = selectedSize ? ` (${selectedSize})` : '';
       const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
@@ -880,47 +908,33 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         },
       });
 
-      // Notify seller - WITH IMAGE (different message if needs verification)
+      // Notify seller — split on autoLabelResult.success
       const totalSaleValue = itemPrice.toFixed(2);
-      const autoShipMessage = autoLabelResult.success
-        ? `Your shipping label is ready — print it and ship!`
-        : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
-      const autoShipPush = autoLabelResult.success
-        ? `Your shipping label is ready. Print and ship!`
-        : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
-      if (needsVerification) {
-        await prisma.notifications.create({
-          data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            user_id: seller_id,
-            type: 'payout',
-            title: 'Congratulations on your sale!',
-            message: `"${listingTitle}"${qtyText} sold for \u00a3${totalSaleValue}. Add your bank details to receive payment after delivery.`,
-            image_url: listingImage,
-            related_id: order.id,
-          },
-        });
-      } else {
-        await prisma.notifications.create({
-          data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            user_id: seller_id,
-            type: 'sale',
-            title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
-            message: `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipMessage}`,
-            image_url: listingImage,
-            related_id: order.id,
-          },
-        });
-      }
+      const sellerNotifType = autoLabelResult.success ? 'sale_label_ready' : 'sale_action_required';
+      const sellerNotifTitle = autoLabelResult.success ? 'Item sold!' : 'Item sold — action needed';
+      const sellerNotifBody = autoLabelResult.success
+        ? 'Your shipping label is ready. Tap to view your QR code.'
+        : 'Tap to complete shipping details for your sale.';
+      const notifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await prisma.notifications.create({
+        data: {
+          id: notifId,
+          user_id: seller_id,
+          type: sellerNotifType,
+          title: sellerNotifTitle,
+          message: sellerNotifBody,
+          image_url: listingImage,
+          related_id: order.id,
+        },
+      });
 
       // PUSH NOTIFICATION - New sale to seller
       try {
         await sendPushNotification(
           seller_id,
-          autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You made a sale!',
-         `"${listingTitle}"${qtyText} sold for £${totalSaleValue}. ${autoShipPush}`,
-          { type: 'sale', order_id: order.id }
+          sellerNotifTitle,
+          sellerNotifBody,
+          { notification_id: notifId, type: sellerNotifType, order_id: order.id }
         );
       } catch (pushErr) {
         console.error('Push notification failed:', pushErr);
@@ -948,6 +962,19 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listingTitle}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${itemPrice.toFixed(2)}</td></tr>`,
             totalAmount: `£${parseFloat(metadata.total_price).toFixed(2)}`,
             shippingAddress: shippingAddr,
+            orderReference: order.id,
+            itemName: listingTitle,
+            itemImageUrl: order.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${itemPrice.toFixed(2)}`,
+            itemSubtotal: itemPrice.toFixed(2),
+            buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
+            serviceFee: metadata.service_fee || '0.00',
+            shippingCost: metadata.shipping_total || '0.00',
+            orderTotal: parseFloat(metadata.total_price).toFixed(2),
+            paymentMethod: 'Card payment',
+            orderUrl: '#',
           });
         }
 
@@ -962,6 +989,16 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             orderNumber: order.id,
             buyerName: buyerRecord?.display_name || 'A buyer',
             shippingAddress: shippingAddr,
+            sellerName: sellerRecord?.display_name || 'Seller',
+            itemName: listingTitle,
+            itemImageUrl: order.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${itemPrice.toFixed(2)}`,
+            buyerProtectionFee: '0.00',
+            sellerEarnings: metadata.seller_payout || itemPrice.toFixed(2),
+            shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
+            shipUrl: '#',
           });
         }
       } catch (emailErr) {

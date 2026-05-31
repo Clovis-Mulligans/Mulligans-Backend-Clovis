@@ -6,14 +6,17 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
 import Stripe from 'stripe';
+import { normalizeCarrierName } from '../utils/carrierName';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { sendDeliveryConfirmation } from '../services/emailService';
 
 // ✅ FIXED: Initialize Shippo with correct API key format
@@ -71,35 +74,83 @@ const shippo = new Shippo({
     };
 
 /**
- * Get seller's real address from Stripe Connect, with postcode fallback
+ * Typed result from getSellerAddress.
+ * isReal: true when Stripe returned a usable address, false otherwise.
  */
-async function getSellerAddress(sellerId: string): Promise<{ street: string; city: string; postcode: string }> {
+export type SellerAddress = {
+  street1: string;
+  city: string;
+  postcode: string;
+  country: string;
+  isReal: boolean;
+  failureReason?: 'no_stripe_connect' | 'stripe_api_error' | 'no_address_on_account' | 'no_postcode';
+};
+
+/**
+ * Get seller's real address from Stripe Connect.
+ * Returns isReal: false with a failureReason when no valid address is available.
+ */
+export async function getSellerAddress(sellerId: string): Promise<SellerAddress> {
   const seller = await prisma.users.findUnique({
     where: { id: sellerId },
     select: { stripe_connect_id: true, postcode_area: true },
   });
 
-  if (seller?.stripe_connect_id) {
-    try {
-      const account = await stripe.accounts.retrieve(seller.stripe_connect_id);
-      const addr = (account as any).individual?.address || (account as any).company?.address;
-      if (addr?.line1) {
-        return {
-          street: addr.line1,
-          city: addr.city || getEstimatedCity(seller.postcode_area || ''),
-          postcode: addr.postal_code || seller.postcode_area || 'SW1A 1AA',
-        };
-      }
-    } catch (err) {
-      console.warn('[SHIPPING] Could not retrieve seller Stripe address, using fallback');
-    }
+  if (!seller?.stripe_connect_id) {
+    return {
+      street1: '',
+      city: getEstimatedCity(seller?.postcode_area || ''),
+      postcode: seller?.postcode_area || '',
+      country: 'GB',
+      isReal: false,
+      failureReason: 'no_stripe_connect',
+    };
   }
 
-  return {
-    street: '1 High Street',
-    city: getEstimatedCity(seller?.postcode_area || ''),
-    postcode: seller?.postcode_area || 'SW1A 1AA',
-  };
+  try {
+    const account = await stripe.accounts.retrieve(seller.stripe_connect_id);
+    const addr = (account as any).individual?.address || (account as any).company?.address;
+
+    if (!addr?.line1) {
+      return {
+        street1: '',
+        city: getEstimatedCity(seller.postcode_area || ''),
+        postcode: seller.postcode_area || '',
+        country: 'GB',
+        isReal: false,
+        failureReason: 'no_address_on_account',
+      };
+    }
+
+    if (!addr.postal_code && !seller.postcode_area) {
+      return {
+        street1: addr.line1,
+        city: addr.city || getEstimatedCity(''),
+        postcode: '',
+        country: 'GB',
+        isReal: false,
+        failureReason: 'no_postcode',
+      };
+    }
+
+    return {
+      street1: addr.line1,
+      city: addr.city || getEstimatedCity(seller.postcode_area || ''),
+      postcode: addr.postal_code || seller.postcode_area || '',
+      country: 'GB',
+      isReal: true,
+    };
+  } catch (err) {
+    console.warn('[SHIPPING] Could not retrieve seller Stripe address:', err);
+    return {
+      street1: '',
+      city: getEstimatedCity(seller.postcode_area || ''),
+      postcode: seller.postcode_area || '',
+      country: 'GB',
+      isReal: false,
+      failureReason: 'stripe_api_error',
+    };
+  }
 }
 
 // ============================================
@@ -113,43 +164,43 @@ export const PARCEL_SIZES = {
     length: '30',
     width: '20',
     height: '10',
-    weight: '1',
+    weight: '0.5',
   },
   medium: {
     name: 'Medium',
     description: 'Shoes, clothing, accessories',
     price: 5.99,
-    length: '45',
-    width: '35',
-    height: '20',
-    weight: '5',
+    length: '40',
+    width: '30',
+    height: '15',
+    weight: '1.8',
   },
   large: {
     name: 'Large',
     description: 'Single club, putter',
     price: 9.99,
-    length: '130',
+    length: '119',
     width: '15',
     height: '15',
-    weight: '3',
+    weight: '2',
   },
   extra_large: {
     name: 'Extra Large',
     description: 'Iron set, stand bag (empty)',
     price: 14.99,
-    length: '130',
-    width: '40',
-    height: '40',
-    weight: '15',
+    length: '119',
+    width: '30',
+    height: '20',
+    weight: '8',
   },
   oversized: {
     name: 'Oversized',
     description: 'Full bag with clubs, travel bag',
     price: 24.99,
     length: '140',
-    width: '50',
-    height: '50',
-    weight: '25',
+    width: '40',
+    height: '40',
+    weight: '15',
   },
 };
 
@@ -173,6 +224,12 @@ export const getParcelSizes = async (req: Request, res: Response) => {
       name: value.name,
       description: value.description,
       price: value.price,
+      length: value.length,
+      width: value.width,
+      height: value.height,
+      weight: value.weight,
+      dimensions: `${value.length}×${value.width}×${value.height}cm`,
+      max_weight: `${value.weight}kg`,
     }));
 
     res.json({
@@ -195,7 +252,7 @@ export const getParcelSizes = async (req: Request, res: Response) => {
 // ============================================
 export const getShippingRates = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { orderId } = req.body;
+    const { orderId, senderAddress } = req.body;
 
     if (!orderId) {
       return res.status(400).json({
@@ -238,11 +295,10 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
 
     // Get seller's address info
     const seller = order.users_orders_seller_idTousers;
-    const sellerPostcode = seller?.postcode_area || 'SW1A 1AA'; // Default if not set
 
     // Get buyer's shipping address
     const shippingAddress = order.shipping_address as any;
-    
+
     if (!shippingAddress) {
       return res.status(400).json({
         success: false,
@@ -250,26 +306,42 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       });
     }
 
-    // ✅ Enhanced logging for debugging
+    // Determine origin address: use senderAddress if provided, else Stripe Connect
+    let originStreet1: string;
+    let originCity: string;
+    let originPostcode: string;
+
+    if (senderAddress?.street1 && senderAddress?.postcode) {
+      originStreet1 = senderAddress.street1;
+      originCity = senderAddress.city || getEstimatedCity(senderAddress.postcode);
+      originPostcode = senderAddress.postcode;
+      console.log('[SHIPPING] Using manual senderAddress for rates');
+    } else {
+      const sellerAddr = await getSellerAddress(order.seller_id);
+      if (!sellerAddr.isReal) {
+        return res.status(400).json({
+          success: false,
+          error: 'No valid origin address available. Please provide your address or complete Stripe verification.',
+          addressRequired: true,
+          reason: sellerAddr.failureReason,
+        });
+      }
+      originStreet1 = sellerAddr.street1;
+      originCity = sellerAddr.city;
+      originPostcode = sellerAddr.postcode;
+    }
+
     console.log('📦 Getting Shippo rates for order:', orderId);
-    console.log('📍 Seller postcode:', sellerPostcode);
+    console.log('📍 Origin:', originPostcode);
     console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
     console.log('🛡️ Insurance value:', order.insured_value?.toString() || order.amount.toString());
 
-    
-
-    const estimatedCity = getEstimatedCity(sellerPostcode);
-    console.log('📍 Estimated city for seller:', estimatedCity);
-
-    // Create shipment to get rates using new SDK
-    // Note: For rate calculation, we use a placeholder street address
-    // The actual seller address will be collected when creating the label
     const shipment = await shippo.shipments.create({
       addressFrom: {
         name: seller?.display_name || 'Seller',
-        street1: (await getSellerAddress(order.seller_id)).street,
-        city: estimatedCity,
-        zip: sellerPostcode,
+        street1: originStreet1,
+        city: originCity,
+        zip: originPostcode,
         country: 'GB',
       },
       addressTo: {
@@ -296,6 +368,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
           currency: 'GBP',
           content: 'Golf equipment',
         },
+        qrCodeRequested: true,
       },
       async: false,
     });
@@ -360,7 +433,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     // Format rates for response
     const rates = trackedRates.map((rate: any) => ({
       id: rate.objectId,
-      carrier: rate.provider,
+      carrier: normalizeCarrierName(rate.provider),
       service: rate.servicelevel?.name || rate.servicelevelName,
       price: parseFloat(rate.amount),
       currency: rate.currency,
@@ -421,7 +494,7 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
           include: {
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -496,6 +569,22 @@ try {
       });
     }
 
+    // Capture QR code URL and expiry (Evri ParcelShop support — F6.1)
+    const qrCodeUrl = (transaction as any).qrCodeUrl ?? (transaction as any).qr_code_url ?? null;
+
+    let qrCodeExpiresAt: Date | null = null;
+    if (Array.isArray((transaction as any).messages)) {
+      const expiryMessage = ((transaction as any).messages as any[]).find(
+        (m: any) => m.code === 'QrCodeExpirationDate'
+      );
+      if (expiryMessage?.text) {
+        const parsed = new Date(expiryMessage.text);
+        if (!isNaN(parsed.getTime())) {
+          qrCodeExpiresAt = parsed;
+        }
+      }
+    }
+
     // ✅ NEW: Try to get label cost from transaction if we didn't get it from rate
     if (labelCost === 0 && typeof transaction.rate === 'object' && transaction.rate !== null) {
       const rateObj = transaction.rate as any;
@@ -510,16 +599,18 @@ const carrier = carrierName !== 'Unknown'
   : (typeof transaction.rate === 'object' ? (transaction.rate as any)?.provider || 'Unknown' : 'Unknown');
 
     // ✅ UPDATED: Update order with tracking info, label URL, AND label_cost
-    await prisma.orders.update({
+  await prisma.orders.update({
       where: { id: orderId },
       data: {
         tracking_number: transaction.trackingNumber,
         carrier: carrier,
         label_url: transaction.labelUrl,
-        label_cost: labelCost,  // ✅ NEW: Save label cost for escrow deduction
-        shippo_transaction_id: transaction.objectId,  // Save transaction ID
-        status: 'to_ship', // Ensure status is to_ship after label created
+        label_cost: labelCost,
+        shippo_transaction_id: transaction.objectId,
+        status: 'to_ship',
         updated_at: new Date(),
+        qr_code_url: qrCodeUrl,
+        qr_code_expires_at: qrCodeExpiresAt,
       },
     });
 
@@ -530,17 +621,19 @@ const carrier = carrierName !== 'Unknown'
         where: {
           stripe_payment_intent_id: order.stripe_payment_intent_id,
           seller_id: order.seller_id,
-          id: { not: orderId },  // Don't update the primary order again
-          status: { in: ['paid', 'to_ship'] },  // Only update orders that haven't shipped yet
+          id: { not: orderId },
+          status: { in: ['paid', 'to_ship'] },
         },
         data: {
           tracking_number: transaction.trackingNumber,
           carrier: carrier,
           label_url: transaction.labelUrl,
-          label_cost: 0,  // Only primary order gets the label cost
+          label_cost: 0,
           shippo_transaction_id: transaction.objectId,
           status: 'to_ship',
           updated_at: new Date(),
+          qr_code_url: qrCodeUrl,
+          qr_code_expires_at: qrCodeExpiresAt,
         },
       });
       
@@ -554,15 +647,17 @@ const carrier = carrierName !== 'Unknown'
       trackingNumber: transaction.trackingNumber,
       carrier,
       labelUrl: transaction.labelUrl,
-      labelCost: labelCost,  // ✅ Log the label cost
+      labelCost: labelCost,
+      qr: qrCodeUrl ? 'YES' : 'NO',
     });
 
     // Create notification for buyer
     const listingImage = order.listings?.images?.[0]?.image_url || null;
     
+    const labelCreatedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: labelCreatedNotifId,
         user_id: order.buyer_id,
         type: 'shipping_label_created',
         title: 'Shipping Label Created',
@@ -578,7 +673,7 @@ const carrier = carrierName !== 'Unknown'
         order.buyer_id,
         'Shipping Label Created',
         `The seller is preparing to ship your order. Tracking: ${transaction.trackingNumber}`,
-        { type: 'shipping', order_id: orderId }
+        { notification_id: labelCreatedNotifId, type: 'purchase_shipped', order_id: orderId }
       );
     } catch (pushErr) {
       console.error('[SHIP] Push notification failed:', pushErr);
@@ -592,7 +687,8 @@ const carrier = carrierName !== 'Unknown'
         labelUrl: transaction.labelUrl,
         carrier: carrier,
         transactionId: transaction.objectId,
-        labelCost: labelCost,  // ✅ Return label cost to frontend
+        labelCost: labelCost,
+        qr_code_url: qrCodeUrl,
       },
     });
   } catch (error: any) {
@@ -700,7 +796,7 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
           include: {
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -765,9 +861,10 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
     // ✅ FIX: Add image_url and use consistent type
     const listingImage = order.listings?.images?.[0]?.image_url || null;
     
+    const shippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: shippedNotifId,
         user_id: order.buyer_id,
         type: 'shipped',  // ✅ FIX: Use 'shipped' to match frontend
         title: 'Your Order Has Shipped! 📦',
@@ -783,7 +880,7 @@ export const markAsShipped = async (req: AuthenticatedRequest, res: Response) =>
         order.buyer_id,
         'Your Order Has Shipped!',
         `"${order.listings?.title || 'Your item'}" is on its way! Tracking: ${order.tracking_number}`,
-        { type: 'shipped', order_id: orderId }
+        { notification_id: shippedNotifId, type: 'purchase_shipped', order_id: orderId }
       );
     } catch (pushErr) {
       console.error('[SHIP] Push notification failed:', pushErr);
@@ -841,16 +938,28 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         let newStatus = order.status;
         let deliveredAt = order.delivered_at;
         let escrowReleaseAt: Date | null = null;
-
+        let shippedAt = order.shipped_at;
         // Map Shippo status to our order status
         switch (status) {
+          case 'PRE_TRANSIT':
+            // Label created / tracking registered, but the carrier has NOT yet
+            // physically scanned the parcel. The seller may not have dropped it
+            // off yet, so the order must stay 'to_ship' (not 'in_transit').
+            // Do NOT set shipped_at here — it drives the lost-in-transit timer
+            // and the buyer-facing "shipped" state. Only a real TRANSIT scan
+            // means the parcel is genuinely on its way.
+            // (auto_cancel_at is still cleared below on any tracking event,
+            //  which is correct: a label exists, so don't auto-cancel.)
+            newStatus = 'to_ship';
+            break;
           case 'TRANSIT':
             newStatus = 'in_transit';
+            if (!shippedAt) shippedAt = new Date();
             break;
           case 'DELIVERED':
             newStatus = 'delivered';
             deliveredAt = new Date();
-            // ✅ Calculate escrow release date (5 days from delivery)
+            // ✅ Calculate escrow release date (3 days from delivery)
             escrowReleaseAt = new Date();
             escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
             break;
@@ -863,12 +972,16 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         }
 
         // Update ALL orders with this tracking number (multi-item shipments)
+        // Per Brief 2 fix: clear auto_cancel_at on ANY tracking event (parcel is with carrier)
+        // and persist shipped_at so dashboards reflect carrier-acceptance time
         await prisma.orders.updateMany({
           where: { tracking_number: trackingNumber },
           data: {
             status: newStatus,
             delivered_at: deliveredAt,
-            escrow_release_at: escrowReleaseAt, // ✅ NEW: Set escrow release date
+            escrow_release_at: escrowReleaseAt,
+            shipped_at: shippedAt,
+            auto_cancel_at: null,
             updated_at: new Date(),
           },
         });
@@ -883,7 +996,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
                 include: {
                   images: {
                     take: 1,
-                    orderBy: { display_order: 'asc' },
+                    orderBy: PRIMARY_IMAGE_ORDER,
                   },
                 },
               },
@@ -892,9 +1005,10 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
           const listingImage = orderWithListing?.listings?.images?.[0]?.image_url || null;
           const listingTitle = orderWithListing?.listings?.title || 'Your item';
           
+          const webhookDeliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
           await prisma.notifications.create({
             data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: webhookDeliveredNotifId,
               user_id: order.buyer_id,
               type: 'delivered',  // ✅ FIX: Use 'delivered' to match frontend
               title: 'Your Order Has Been Delivered! 🎉',
@@ -921,6 +1035,15 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
                   month: 'long',
                   day: 'numeric',
                 }),
+                buyerName: buyerEmailRecord?.display_name || 'there',
+                orderReference: order.id,
+                itemName: listingTitle,
+                itemImageUrl: listingImage || '',
+                itemBrand: '',
+                itemCondition: '',
+                itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
+                confirmUrl: `https://api.mulligans.uk.com/api/email-actions/confirm-receipt?token=${generateEmailActionToken(order.id, order.buyer_id, 'confirm-receipt', escrowReleaseAt!)}`,
+                reportIssueUrl: `https://api.mulligans.uk.com/api/email-actions/report-issue?token=${generateEmailActionToken(order.id, order.buyer_id, 'report-issue', escrowReleaseAt!)}`,
               });
             }
           } catch (emailErr) {
@@ -933,7 +1056,7 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
               order.buyer_id,
               'Your Order Has Been Delivered!',
               `"${listingTitle}" has arrived. Confirm receipt or report any issues.`,
-              { type: 'delivered', order_id: order.id }
+              { notification_id: webhookDeliveredNotifId, type: 'purchase_delivered', order_id: order.id }
             );
           } catch (pushErr) {
             console.error('[SHIP] Push notification failed:', pushErr);

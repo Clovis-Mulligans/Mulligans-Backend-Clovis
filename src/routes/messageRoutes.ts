@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { authenticateToken } from '../middleware/auth';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import rateLimit from 'express-rate-limit';
@@ -90,23 +91,22 @@ router.patch('/read-all', authenticateToken, async (req: any, res) => {
 // Create or get conversation
 router.post('/conversations', authenticateToken, async (req: any, res) => {
   try {
-    const { listing_id, seller_id } = req.body;
+   const { listing_id, seller_id, buyer_id: requestBuyerId } = req.body;
     const userId = req.user.sub || req.user.id;
-
     console.log('[MSG] Create conversation request:');
     console.log('   listing_id:', listing_id);
     console.log('   seller_id:', seller_id);
+    console.log('   buyer_id from request:', requestBuyerId);
     console.log('   authenticated userId:', userId);
-
-    const buyer = await prisma.users.findUnique({
+    const currentUser = await prisma.users.findUnique({
       where: { id: userId }
     });
-
-    if (!buyer) {
+    if (!currentUser) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    const buyer_id = buyer.id;
+    // If authenticated user is the seller, use the buyer_id from request
+    // This handles "Message Buyer" from the sold order screen
+    const buyer_id = userId === seller_id && requestBuyerId ? requestBuyerId : currentUser.id;
 
     let conversation = await prisma.conversations.findFirst({
       where: {
@@ -172,7 +172,7 @@ router.get('/conversations/:id', authenticateToken, async (req: any, res) => {
       other_user_name: other_user?.display_name,
       other_user_id: other_user?.id,
       other_user_avatar: other_user?.avatar_url,
-      other_user_is_verified_seller_seller: other_user?.is_verified_seller || false
+      other_user_is_verified: other_user?.is_verified_seller || false
     });
   } catch (error) {
     console.error('Failed to get conversation:', error);
@@ -233,7 +233,7 @@ router.post('/', authenticateToken, messageLimiter, async (req: any, res) => {
           include: {
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' }
+              orderBy: PRIMARY_IMAGE_ORDER
             }
           }
         }
@@ -391,7 +391,7 @@ router.get('/conversations', authenticateToken, async (req: any, res) => {
           other_user_id: other_user?.id || null,
           other_user_name: other_user?.display_name || 'Unknown User',
           other_user_avatar: other_user?.avatar_url || null,
-          other_user_is_verified_seller_seller: other_user?.is_verified_seller || false,
+          other_user_is_verified: other_user?.is_verified_seller || false,
           last_message: lastMessage?.content || 'No messages yet',
           last_message_time: lastMessage?.created_at?.toISOString() || conv.created_at.toISOString(),
           last_message_timestamp: lastMessage?.created_at || conv.created_at,

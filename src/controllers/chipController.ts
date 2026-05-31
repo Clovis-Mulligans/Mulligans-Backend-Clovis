@@ -7,6 +7,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import {
   sendMessage,
   checkRateLimit,
@@ -171,7 +172,7 @@ export class ChipController {
               brand: true,
               model: true,
               status: true,
-              images: { take: 1, orderBy: { display_order: 'asc' } },
+              images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
             },
           },
           messages: {

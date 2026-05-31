@@ -3,6 +3,7 @@
 
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { sendPushNotification } from './pushNotificationController';
 
@@ -52,7 +53,7 @@ export class MessageController {
               price: true,
               status: true,
               images: {
-                where: { is_primary: true },
+                orderBy: PRIMARY_IMAGE_ORDER,
                 take: 1,
               },
             },
@@ -92,7 +93,7 @@ export class MessageController {
                 price: true,
                 status: true,
                 images: {
-                  where: { is_primary: true },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                   take: 1,
                 },
               },
@@ -156,7 +157,7 @@ export class MessageController {
                 price: true,
                 status: true,
                 images: {
-                  where: { is_primary: true },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                   take: 1,
                 },
               },
@@ -322,7 +323,7 @@ export class MessageController {
               title: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -376,15 +377,15 @@ export class MessageController {
       const senderName = sender?.display_name || 'Someone';
       const listingTitle = conversation.listings?.title || 'an item';
 
-      // SAFETY CHECK: Never notify the sender themselves
+     // SAFETY CHECK: Never notify the sender themselves
       if (receiverId && receiverId !== senderId) {
         // CREATE NOTIFICATION FOR RECIPIENT
+        const notifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         try {
           const listingImage = conversation.listings?.images?.[0]?.image_url || null;
-
           await prisma.notifications.create({
             data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: notifId,
               user_id: receiverId,
               type: 'message',
               title: 'New Message',
@@ -410,7 +411,7 @@ export class MessageController {
             receiverId,
             `New message from ${senderName}`,
             content.length > 50 ? content.substring(0, 50) + '...' : content,
-            { type: 'message', conversation_id: conversationId }
+            { notification_id: notifId, type: 'message', conversation_id: conversationId }
           );
         } catch (pushErr) {
           console.error('[MSG] Push notification failed:', pushErr);

@@ -46,9 +46,9 @@ import { runEscrowJobs } from './services/escrowService';
 import { updateVerificationStatus } from './services/verificationService';
 import disputeRoutes from './routes/disputeRoutes';
 import adminRoutes from './routes/adminRoutes';
+import emailActionRoutes from './routes/emailActionRoutes';
 import connectRedirectRoutes from './routes/connectRedirectRoutes';
 import returnRoutes from './routes/returnRoutes';
-import testRoutes from './routes/testRoutes';
 // OFFER SYSTEM IMPORTS
 import offerRoutes from './routes/offerRoutes';
 import listingOfferRoutes from './routes/listingOfferRoutes';
@@ -135,7 +135,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // Test routes disabled in production — re-enable locally by setting NODE_ENV=development
 if (process.env.NODE_ENV === 'development') {
-  app.use('/api/test', testRoutes);
   console.log('⚠️ Test routes enabled (development mode)');
 }
 
@@ -174,6 +173,7 @@ app.use('/api/listing-offers', listingOfferRoutes);
 // CHIP AI CADDY ROUTES
 app.use('/api/chip', chipRoutes);
 app.use('/api/fitting', fittingRoutes);
+app.use('/api/email-actions', emailActionRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -203,7 +203,7 @@ app.use((req, res) => {
 // ESCROW CRON JOB
 // Runs daily at 2:00 AM UK time to:
 // - Auto-cancel orders not shipped within 5 days
-// - Auto-release escrow 5 days after delivery
+// - Auto-release escrow 3 days after delivery
 // - Check for lost-in-transit items (14+ days)
 // ============================================
 cron.schedule('0 2 * * *', async () => {

@@ -27,11 +27,17 @@ import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
+import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
+import { logStockDecrement } from '../lib/stockUtils';
+import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -40,8 +46,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // Platform fee calculation (same as cart checkout)
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99 per item
-const SHIPPING_INSURANCE_RATE = 0.0125; // 1.25% shipping insurance premium
-const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
@@ -106,7 +110,7 @@ export class NativePaymentController {
       const listing = await prisma.listings.findUnique({
         where: { id: listing_id },
         include: {
-          images: { take: 1, orderBy: { created_at: 'asc' } },
+          images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
           users: {
             select: {
               id: true,
@@ -241,11 +245,9 @@ export class NativePaymentController {
       const unitPrice = effectiveUnitPrice;
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
       const itemTotal = unitPrice * orderQuantity;
-      const baseShipping = Math.ceil(orderQuantity / 5) * shippingCost;
-      const insurancePremium = itemTotal * SHIPPING_INSURANCE_RATE;
-      const shippingTotal = baseShipping > 0
-        ? parseFloat((baseShipping + insurancePremium).toFixed(2))
-        : 0;
+      const baseShipping = shippingCost;
+      const insurancePremium = itemTotal * INSURANCE_RATE;
+      const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
       const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
       // [Issue #24] Grand total now includes shipping
       const grandTotal = itemTotal + shippingTotal + platformFee;
@@ -289,9 +291,12 @@ export class NativePaymentController {
           item_total: itemTotal.toFixed(2),
           shipping_cost: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
-          seller_payout: (itemTotal + baseShipping).toFixed(2),
+          buyer_protection_fee: platformFee.toFixed(2),
+          service_fee: '0.00',
+          seller_payout: itemTotal.toFixed(2),
           grand_total: grandTotal.toFixed(2),
           offer_id: validatedOfferId || '',
+          insurance_premium: insurancePremium.toFixed(2),
           discount_amount: discountAmount.toFixed(2),
         },
       });
@@ -340,7 +345,7 @@ export class NativePaymentController {
         include: {
           listings: {
             include: {
-              images: { take: 1, orderBy: { created_at: 'asc' } },
+              images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
               users: {
                 select: {
                   id: true,
@@ -411,10 +416,8 @@ export class NativePaymentController {
       // H1: Sum the max shipping cost across all sellers
       const baseShippingTotal = Object.values(sellerMaxShipping).reduce((sum, cost) => sum + cost, 0);
 
-      const insurancePremium = itemsTotal * SHIPPING_INSURANCE_RATE;
-      const shippingTotal = baseShippingTotal > 0
-        ? parseFloat((baseShippingTotal + insurancePremium).toFixed(2))
-        : 0;
+      const insurancePremium = itemsTotal * INSURANCE_RATE;
+      const shippingTotal = parseFloat((baseShippingTotal + insurancePremium).toFixed(2));
 
       const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
       const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * totalQuantity);
@@ -444,6 +447,7 @@ export class NativePaymentController {
           shipping_total: shippingTotal.toFixed(2),
           platform_fee: platformFee.toFixed(2),
           grand_total: grandTotal.toFixed(2),
+          insurance_premium: insurancePremium.toFixed(2),
           has_offers: Object.keys(offerMetadata).length > 0 ? 'true' : 'false',
           ...offerMetadata,
         },
@@ -488,30 +492,48 @@ export class NativePaymentController {
       // Retrieve the payment intent
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
-      // Fallback: if frontend didn't send address, try to get it from Stripe
-      const rawAddress = shippingAddress || (paymentIntent.shipping?.address ? {
-        name: paymentIntent.shipping.name || '',
-        line1: paymentIntent.shipping.address.line1 || '',
-        line2: paymentIntent.shipping.address.line2 || '',
-        city: paymentIntent.shipping.address.city || '',
-        state: paymentIntent.shipping.address.state || '',
-        postal_code: paymentIntent.shipping.address.postal_code || '',
-        country: paymentIntent.shipping.address.country || 'GB',
-      } : null);
+      // SERVER-SIDE ADDRESS RESOLUTION
+      // Primary: Stripe PaymentIntent.shipping (normalised by Stripe, reliable for all wallets)
+      // Fallback: client-sent address (may have missing fields, e.g. Apple Pay postalCode bug)
+      // This mirrors the card checkout flow (stripeController.ts:640-655) and unifies
+      // card + Apple Pay + Google Pay onto one address path.
+      const stripeAddr = paymentIntent.shipping?.address;
+      const clientAddr = shippingAddress;
 
-      // Normalize address field names to snake_case (consistent with card checkout path)
-      // Apple Pay frontend may send postalCode (camelCase) — convert to postal_code
-      const resolvedAddress = rawAddress ? {
-        name: rawAddress.name || '',
-        line1: rawAddress.line1 || rawAddress.street1 || '',
-        line2: rawAddress.line2 || rawAddress.street2 || '',
-        city: rawAddress.city || '',
-        state: rawAddress.state || rawAddress.county || '',
-        postal_code: rawAddress.postal_code || rawAddress.postalCode || rawAddress.postcode || '',
-        country: rawAddress.country || 'GB',
+      const resolvedAddress = (stripeAddr || clientAddr) ? {
+        name: paymentIntent.shipping?.name || clientAddr?.name || '',
+        line1: stripeAddr?.line1 || clientAddr?.line1 || clientAddr?.street1 || '',
+        line2: stripeAddr?.line2 || clientAddr?.line2 || clientAddr?.street2 || '',
+        city: stripeAddr?.city || clientAddr?.city || '',
+        state: stripeAddr?.state || clientAddr?.state || clientAddr?.county || '',
+        postal_code: stripeAddr?.postal_code
+          || clientAddr?.postal_code || clientAddr?.postalCode || clientAddr?.postcode || '',
+        country: stripeAddr?.country || clientAddr?.country || 'GB',
       } : null;
 
-      console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE');
+      // Validation per Q1 decision (Hybrid: reject critical fields, allow optional)
+      try {
+        validateShippingAddress(resolvedAddress);
+      } catch (err) {
+        if (err instanceof AddressValidationError) {
+          console.error('[PAY] Address validation failed:', {
+            paymentIntentId,
+            userId,
+            missingFields: err.missingFields,
+            stripeHadAddress: !!stripeAddr,
+            clientHadAddress: !!clientAddr,
+          });
+          return res.status(400).json({
+            error: 'Shipping address incomplete',
+            missing_fields: err.missingFields,
+            message: 'Please ensure your shipping address includes a valid street, city, and postcode.',
+          });
+        }
+        throw err;
+      }
+
+      console.log('[PAY] Shipping address:', resolvedAddress ? 'YES' : 'NONE',
+        stripeAddr ? '(from Stripe)' : '(from client)');
       if (resolvedAddress) {
         console.log('[PAY] Address postal_code:', resolvedAddress.postal_code || 'MISSING');
       }
@@ -541,9 +563,8 @@ export class NativePaymentController {
         });
       }
 
-      // Calculate auto-cancel date
-      const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
+      // Calculate auto-cancel date (5 weekday deadline)
+      const autoCancelAt = calculateShippingDeadline(new Date());
 
       // Create order based on type
       const metadata = paymentIntent.metadata;
@@ -572,7 +593,10 @@ export class NativePaymentController {
       });
     } catch (error: any) {
       console.error('[PAY] Error confirming payment:', error);
-      res.status(500).json({ error: error.message || 'Failed to confirm payment' });
+      const userMessage = error.message?.includes('Insufficient stock')
+        ? 'This item is no longer available. Your payment has been refunded.'
+        : (error.message || 'Failed to confirm payment');
+      res.status(500).json({ error: userMessage });
     }
   }
 
@@ -595,11 +619,13 @@ export class NativePaymentController {
     const orderQuantity = parseInt(metadata.quantity) || 1;
     const selectedSize = metadata.selected_size || null;
     const offerId = metadata.offer_id || null;
+    const insurancePremium = parseFloat(metadata.insurance_premium || '0');
+    const insuredValue = parseFloat(metadata.item_total || '0');
 
     // Initial listing read for metadata only (image, title, price) — NOT for stock decisions
     const listing = await prisma.listings.findUnique({
       where: { id: listingId },
-      include: { images: { take: 1 } },
+      include: { images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER } },
     });
 
     if (!listing) {
@@ -661,6 +687,7 @@ export class NativePaymentController {
           selected_size: selectedSize,
           shipping_cost: parseFloat(metadata.shipping_cost || '0'),
           seller_payout: parseFloat(metadata.seller_payout),
+          buyer_total: parseFloat(metadata.grand_total),
           listing_title: listing.title,
           listing_image: listingImage,
           listing_price: effectiveUnitPrice,
@@ -671,6 +698,8 @@ export class NativePaymentController {
           auto_cancel_at: autoCancelAt,
           shipping_address: shippingAddress ?? Prisma.JsonNull,
           updated_at: new Date(),
+          insurance_premium: insurancePremium,
+          insured_value: insuredValue,
           // OFFER SYSTEM: Store offer details on the order
           offer_id: offerId || null,
           original_list_price: offerId ? originalListPrice : null,
@@ -696,8 +725,10 @@ export class NativePaymentController {
         });
 
         if (stockResult.count === 0) {
-          throw new Error(`Stock race condition detected for listing ${listingId}`);
+          console.log(`[STOCK] GUARD_FAILED listing=${listingId} requested=${orderQuantity} cause=native_checkout`);
+          throw new Error(`Insufficient stock for listing ${listingId}`);
         }
+        logStockDecrement(listingId, freshListing.quantity, orderQuantity, 'native_checkout');
       } else {
         // Size-variant: update with computed values (race window minimised by being inside tx)
         await tx.listings.update({
@@ -709,6 +740,7 @@ export class NativePaymentController {
             updated_at: new Date(),
           },
         });
+        logStockDecrement(listingId, freshListing.quantity, orderQuantity, 'native_checkout');
       }
 
       // Remove from cart if present
@@ -756,9 +788,10 @@ export class NativePaymentController {
     const qtyText = orderQuantity > 1 ? ` (x${orderQuantity})` : '';
     const offerText = offerId ? ` at your offer price of £${effectiveUnitPrice.toFixed(2)}` : '';
 
+    const nativeSingleBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: nativeSingleBuyerNotifId,
         user_id: buyerId,
         type: 'order',
         title: 'Payment Successful!',
@@ -774,19 +807,25 @@ export class NativePaymentController {
         buyerId,
         'Payment Successful!',
         `Your order for "${listing.title}" is confirmed. Shipping within ${SHIPPING_DEADLINE_DAYS} days.`,
-        { type: 'order', order_id: createdOrder.id }
+        { notification_id: nativeSingleBuyerNotifId, type: 'purchase_paid', order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to buyer failed:', pushErr);
     }
 
+    const sellerNotifType = autoLabelResult.success ? 'sale_label_ready' : 'sale_action_required';
+    const sellerNotifTitle = autoLabelResult.success ? 'Item sold!' : 'Item sold — action needed';
+    const sellerNotifBody = autoLabelResult.success
+      ? 'Your shipping label is ready. Tap to view your QR code.'
+      : 'Tap to complete shipping details for your sale.';
+    const nativeSingleSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: nativeSingleSellerNotifId,
         user_id: sellerId,
-        type: 'sale',
-        title: autoLabelResult.success ? 'Item Sold — Label Ready!' : 'Item Sold!',
-        message: `"${listing.title}"${qtyText} sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready — print it and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
+        type: sellerNotifType,
+        title: sellerNotifTitle,
+        message: sellerNotifBody,
         image_url: listingImage,
         related_id: createdOrder.id,
       },
@@ -796,9 +835,9 @@ export class NativePaymentController {
     try {
       await sendPushNotification(
         sellerId,
-        autoLabelResult.success ? 'Item Sold — Label Ready!' : 'You Made a Sale!',
-        `"${listing.title}" sold for £${metadata.item_total}. ${autoLabelResult.success ? 'Your shipping label is ready. Print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`}`,
-        { type: 'sale', order_id: createdOrder.id }
+        sellerNotifTitle,
+        sellerNotifBody,
+        { notification_id: nativeSingleSellerNotifId, type: sellerNotifType, order_id: createdOrder.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to seller failed:', pushErr);
@@ -826,6 +865,19 @@ export class NativePaymentController {
           itemsList: `<tr><td style="padding: 8px; border-bottom: 1px solid #E5E7EB;">${listing.title}${orderQuantity > 1 ? ` (x${orderQuantity})` : ''}</td><td style="padding: 8px; border-bottom: 1px solid #E5E7EB; text-align: right;">£${metadata.item_total}</td></tr>`,
           totalAmount: `£${metadata.grand_total}`,
           shippingAddress: addr,
+          orderReference: createdOrder.id,
+          itemName: listing.title,
+          itemImageUrl: listing.images?.[0]?.image_url || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
+          itemSubtotal: metadata.item_total,
+          buyerProtectionFee: metadata.buyer_protection_fee || '0.00',
+          serviceFee: metadata.service_fee || '0.00',
+          shippingCost: metadata.shipping_cost || '0.00',
+          orderTotal: metadata.grand_total,
+          paymentMethod: 'Apple Pay',
+          orderUrl: '#',
         });
       }
 
@@ -840,6 +892,16 @@ export class NativePaymentController {
           orderNumber: createdOrder.id,
           buyerName: buyerRecord?.display_name || 'A buyer',
           shippingAddress: addr,
+          sellerName: sellerRecord?.display_name || 'Seller',
+          itemName: listing.title,
+          itemImageUrl: listing.images?.[0]?.image_url || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(listing.price?.toString() || '0').toFixed(2)}`,
+          buyerProtectionFee: '0.00',
+          sellerEarnings: metadata.seller_payout || metadata.item_total,
+          shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
+          shipUrl: '#',
         });
       }
     } catch (emailErr) {
@@ -867,6 +929,8 @@ export class NativePaymentController {
   ) {
     const metadata = paymentIntent.metadata;
     const buyerId = metadata.buyer_id;
+    const totalInsurancePremium = parseFloat(metadata.insurance_premium || '0');
+    const totalItemsValue = parseFloat(metadata.items_total || '0');
 
     // Parse items from metadata (format: "listing_id:qty,listing_id:qty")
     const itemsData = metadata.items.split(',').map((item: string) => {
@@ -916,7 +980,7 @@ export class NativePaymentController {
       for (const itemData of itemsData) {
         const listing = await tx.listings.findUnique({
           where: { id: itemData.listing_id },
-          include: { images: { take: 1 } },
+          include: { images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER } },
         });
 
         if (!listing) {
@@ -937,8 +1001,8 @@ export class NativePaymentController {
         const itemTotal = effectiveUnitPrice * itemData.quantity;
         // H1 cosmetic fix: only the max-shipping listing per seller carries shipping
         const isShippingWinner = sellerShippingWinner[listing.seller_id] === itemData.listing_id;
-        const orderShipping = isShippingWinner ? Math.ceil(itemData.quantity / 5) * shippingCost : 0;
-        const sellerPayout = itemTotal + orderShipping;
+        const orderShipping = isShippingWinner ? shippingCost : 0;
+        const sellerPayout = itemTotal;
         const listingImage = listing.images?.[0]?.image_url || null;
 
         // [D-C1] STOCK VALIDATION: Check before decrementing
@@ -961,6 +1025,7 @@ export class NativePaymentController {
             quantity: itemData.quantity,
             shipping_cost: orderShipping,
             seller_payout: sellerPayout,
+            buyer_total: parseFloat(((itemTotal / parseFloat(metadata.items_total)) * parseFloat(metadata.grand_total)).toFixed(2)),
             listing_title: listing.title,
             listing_image: listingImage,
             listing_price: effectiveUnitPrice,
@@ -971,6 +1036,8 @@ export class NativePaymentController {
             auto_cancel_at: autoCancelAt,
             shipping_address: shippingAddress ?? Prisma.JsonNull,
             updated_at: new Date(),
+            insurance_premium: totalItemsValue > 0 ? (itemTotal / totalItemsValue) * totalInsurancePremium : 0,
+            insured_value: itemTotal,
             // OFFER SYSTEM: Store offer details on order
             offer_id: offerInfo?.offer_id || null,
             original_list_price: offerInfo ? originalListPrice : null,
@@ -995,8 +1062,10 @@ export class NativePaymentController {
         });
 
         if (stockResult.count === 0) {
-          throw new Error(`Stock race condition detected for listing ${itemData.listing_id}`);
+          console.log(`[STOCK] GUARD_FAILED listing=${itemData.listing_id} requested=${itemData.quantity} cause=native_checkout`);
+          throw new Error(`Insufficient stock for listing ${itemData.listing_id}`);
         }
+        logStockDecrement(itemData.listing_id, listing.quantity, itemData.quantity, 'native_checkout');
 
         // Track sold listings for offer expiry
         if (shouldMarkSold) {
@@ -1057,9 +1126,10 @@ export class NativePaymentController {
     const firstImage = orders[0]?.listing?.images?.[0]?.image_url || null;
     const totalItems = orders.reduce((sum, o) => sum + o.quantity, 0);
 
+    const nativeCartBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: nativeCartBuyerNotifId,
         user_id: buyerId,
         type: 'order',
         title: 'Payment Successful!',
@@ -1075,7 +1145,7 @@ export class NativePaymentController {
         buyerId,
         'Payment Successful!',
         `Your order of ${totalItems} item${totalItems > 1 ? 's' : ''} is confirmed.`,
-        { type: 'order', order_id: orders[0]?.id }
+        { notification_id: nativeCartBuyerNotifId, type: 'purchase_paid', order_id: orders[0]?.id }
       );
     } catch (pushErr) {
       console.error('[PAY] Push to buyer failed:', pushErr);
@@ -1098,14 +1168,19 @@ export class NativePaymentController {
 
 
 const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
-      const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days.`;
+      const sellerNotifType = allLabelsReady ? 'sale_label_ready' : 'sale_action_required';
+      const sellerNotifTitle = allLabelsReady ? 'Items sold!' : 'Items sold — action needed';
+      const sellerNotifBody = allLabelsReady
+        ? 'Your shipping labels are ready. Tap to view your QR codes.'
+        : 'Tap to complete shipping details for your sales.';
+      const nativeCartSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: nativeCartSellerNotifId,
           user_id: sellerId,
-          type: 'sale',
-          title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Items Sold!',
-          message: `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
+          type: sellerNotifType,
+          title: sellerNotifTitle,
+          message: sellerNotifBody,
           image_url: sellerImage,
           related_id: sellerOrderList[0]?.id,
         },
@@ -1115,9 +1190,9 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
       try {
         await sendPushNotification(
           sellerId,
-          allLabelsReady ? 'Items Sold — Labels Ready!' : 'You Made a Sale!',
-          `You sold ${sellerQty} item${sellerQty > 1 ? 's' : ''} for £${sellerTotal.toFixed(2)}. ${cartAutoMsg}`,
-          { type: 'sale', order_id: sellerOrderList[0]?.id }
+          sellerNotifTitle,
+          sellerNotifBody,
+          { notification_id: nativeCartSellerNotifId, type: sellerNotifType, order_id: sellerOrderList[0]?.id }
         );
       } catch (pushErr) {
         console.error('[PAY] Push to seller failed:', pushErr);
@@ -1141,12 +1216,28 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
           ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
           : 'See app for details';
 
+        const shipping_total = parseFloat(paymentIntent.metadata?.shipping_total || '0');
+        const platform_fee = parseFloat(paymentIntent.metadata?.platform_fee || '0');
+
         await sendOrderConfirmation(buyerRecord.email, {
           buyerName: buyerRecord.display_name || 'there',
           orderId: orders[0]?.id || 'N/A',
           itemsList: itemsListHtml,
-          totalAmount: `£${(totalAmount + parseFloat(paymentIntent.metadata?.shipping_total || '0') + parseFloat(paymentIntent.metadata?.platform_fee || '0')).toFixed(2)}`,
+          totalAmount: `£${(totalAmount + shipping_total + platform_fee).toFixed(2)}`,
           shippingAddress: shippingAddr,
+          orderReference: orders[0]?.id || 'N/A',
+          itemName: orders.length === 1 ? (orders[0]?.listing_title || 'Your item') : `${orders.length} items`,
+          itemImageUrl: orders[0]?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(orders[0]?.amount?.toString() || '0').toFixed(2)}`,
+          itemSubtotal: totalAmount.toFixed(2),
+          buyerProtectionFee: platform_fee.toFixed(2),
+          serviceFee: '0.00',
+          shippingCost: shipping_total.toFixed(2),
+          orderTotal: (totalAmount + shipping_total + platform_fee).toFixed(2),
+          paymentMethod: 'Apple Pay',
+          orderUrl: '#',
         });
       }
 
@@ -1171,6 +1262,16 @@ const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
             shippingAddress: paymentIntent.shipping?.address
               ? `${paymentIntent.shipping.name || ''}<br>${paymentIntent.shipping.address.line1 || ''}<br>${paymentIntent.shipping.address.city || ''}<br>${paymentIntent.shipping.address.postal_code || ''}`
               : 'See app for details',
+            sellerName: sellerRecord?.display_name || 'Seller',
+            itemName: sellerOrderList.length === 1 ? (sellerOrderList[0].listing_title || 'Item') : `${sellerOrderList.length} items`,
+            itemImageUrl: sellerOrderList[0]?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${sellerTotal.toFixed(2)}`,
+            buyerProtectionFee: '0.00',
+            sellerEarnings: sellerTotal.toFixed(2),
+            shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
+            shipUrl: '#',
           });
         }
       }

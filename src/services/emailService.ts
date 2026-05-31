@@ -7,6 +7,12 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const FROM_ADDRESS = 'Mulligans <hello@mail.mulligans.uk.com>';
 const ADMIN_EMAIL = 'info@mulligans.uk.com';
+const REPLY_TO_CUSTOMER = 'info@mulligans.uk.com';
+
+function shortId(orderId: string): string {
+  const cleaned = orderId.replace(/^order_/, '');
+  return cleaned.substring(0, 8);
+}
 
 function loadTemplate(templateName: string, variables: Record<string, string>): string {
   // Path goes from dist/services/ up to project root, then into src/email-templates/
@@ -84,15 +90,24 @@ export async function sendWelcomeEmail(userEmail: string, userName: string): Pro
 // ============================================
 
 export async function sendOrderConfirmation(buyerEmail: string, data: Record<string, string>): Promise<void> {
+  if (data.serviceFee && data.serviceFee !== '0.00') {
+    data.serviceFeeRow = `<tr>
+                        <td style="font-size: 15px; color: #374151; padding: 6px 0;">Service Fee</td>
+                        <td align="right" style="font-size: 15px; color: #374151; padding: 6px 0;">${data.serviceFee}</td>
+                      </tr>`;
+  } else {
+    data.serviceFeeRow = '';
+  }
   const html = loadTemplate('order-confirmation', data);
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Order Confirmed - #${data.orderId}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Order Confirmed - #${shortId(data.orderReference || data.orderId)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send order confirmation:', error);
     throw new Error(error.message);
@@ -107,10 +122,11 @@ export async function sendShippingNotification(buyerEmail: string, data: Record<
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Your Order Has Shipped - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Your Order Has Shipped - #${shortId(data.orderReference || data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send shipping notification:', error);
     throw new Error(error.message);
@@ -125,10 +141,11 @@ export async function sendDeliveryConfirmation(buyerEmail: string, data: Record<
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `Your Order Has Been Delivered - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Your Order Has Been Delivered - #${shortId(data.orderReference || data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send delivery confirmation:', error);
     throw new Error(error.message);
@@ -143,10 +160,11 @@ export async function sendReviewReminder(buyerEmail: string, data: Record<string
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: `How Was Your Purchase? - Mulligans`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send review reminder:', error);
     throw new Error(error.message);
@@ -165,10 +183,11 @@ export async function sendSaleNotification(sellerEmail: string, data: Record<str
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `🎉 You Made a Sale! - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `You Made a Sale! - #${shortId(data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send sale notification:', error);
     throw new Error(error.message);
@@ -183,10 +202,11 @@ export async function sendEscrowReleased(sellerEmail: string, data: Record<strin
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `💰 Payment Released - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Payment Released - #${shortId(data.orderNumber)}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send escrow released email:', error);
     throw new Error(error.message);
@@ -201,7 +221,8 @@ export async function sendOrderCancellation(recipientEmail: string, data: Record
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: recipientEmail,
-    subject: `Order Cancelled - #${data.orderNumber}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Order Cancelled - #${shortId(data.orderNumber)}`,
     html: html,
   });
 
@@ -224,6 +245,10 @@ export async function sendReturnAddressNeeded(
     itemTitle: string;
     orderNumber: string;
     buyerName: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('return-address-needed', {
@@ -231,15 +256,22 @@ export async function sendReturnAddressNeeded(
     itemTitle: data.itemTitle,
     orderNumber: data.orderNumber,
     buyerName: data.buyerName,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    deadline: '48 hours',
+    addressUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `⚠️ Action Required: Complete Stripe Setup for Return - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Action needed: return address required`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send return address needed email:', error);
     throw new Error(error.message);
@@ -290,27 +322,37 @@ export async function sendDisputeOpenedToSeller(
     refundAmount: string;
     refundPercent: string;
     deadline: Date;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-opened-seller', {
     sellerName: data.sellerName,
     buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     reasonType: formatReasonType(data.reasonType),
     reasonText: data.reasonText || 'No additional details provided',
     refundAmount: data.refundAmount,
     refundPercent: data.refundPercent,
     deadline: formatDate(data.deadline),
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    respondUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `⚠️ Dispute Opened - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Dispute Opened - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute opened email to seller:', error);
     throw new Error(error.message);
@@ -331,26 +373,36 @@ export async function sendDisputeOpenedToBuyer(
     reasonText: string;
     refundAmount: string;
     refundPercent: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-opened-buyer', {
     buyerName: data.buyerName,
     sellerName: data.sellerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     reasonType: formatReasonType(data.reasonType),
     reasonText: data.reasonText || 'No additional details provided',
     refundAmount: data.refundAmount,
     refundPercent: data.refundPercent,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    disputeUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: `Dispute Submitted - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute confirmation to buyer:', error);
     throw new Error(error.message);
@@ -369,6 +421,10 @@ export async function sendDisputeResponseToBuyer(
     isCounterOffer: boolean;
     counterOfferAmount?: string;
     sellerMessage: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   // Set colors and text based on response type
@@ -397,27 +453,33 @@ export async function sendDisputeResponseToBuyer(
   
   const html = loadTemplate('dispute-response-buyer', {
     buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     responseType: responseType,
     responseBackground: responseBackground,
     responseBorder: responseBorder,
     responseColor: responseColor,
     counterOfferSection: counterOfferSection,
     sellerMessage: data.sellerMessage || 'No message provided',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    reviewUrl: '#',
   });
   
-  const subject = data.isCounterOffer 
-    ? `💬 Counter Offer Received - ${data.itemTitle}`
-    : `💬 Seller Responded - ${data.itemTitle}`;
-  
+  const subject = data.isCounterOffer
+    ? `Counter Offer Received - ${data.itemTitle}`
+    : `Seller Responded - ${data.itemTitle}`;
+
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: subject,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute response to buyer:', error);
     throw new Error(error.message);
@@ -438,11 +500,16 @@ export async function sendDisputeEscalatedToAdmin(
     sellerEmail: string;
     reasonType: string;
     escalationReason: string;
+    orderNumber?: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-escalated-admin', {
     disputeId: data.disputeId,
-    itemTitle: data.itemTitle,
+    itemName: data.itemTitle,
     refundAmount: data.refundAmount,
     buyerName: data.buyerName,
     buyerEmail: data.buyerEmail,
@@ -450,12 +517,18 @@ export async function sendDisputeEscalatedToAdmin(
     sellerEmail: data.sellerEmail,
     reasonType: formatReasonType(data.reasonType),
     escalationReason: data.escalationReason,
+    orderReference: data.orderNumber || '',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    adminUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: ADMIN_EMAIL,
-    subject: `🚨 Escalated Dispute - Review Required - ${data.disputeId.slice(-8)}`,
+    subject: `Escalated Dispute - Review Required - ${data.disputeId.slice(-8)}`,
     html: html,
   });
   
@@ -475,22 +548,32 @@ export async function sendDisputeEscalatedToBuyer(
     itemTitle: string;
     orderNumber: string;
     refundAmount: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('dispute-escalated-buyer', {
     buyerName: data.buyerName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     refundAmount: data.refundAmount,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    disputeUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `🔍 Dispute Under Review - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Dispute Under Review - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send escalation confirmation to buyer:', error);
     throw new Error(error.message);
@@ -510,6 +593,10 @@ export async function sendDisputeResolved(
     refundAmount?: string;
     adminNotes: string;
     isBuyer: boolean;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   // Set colors and content based on resolution type and recipient
@@ -562,8 +649,8 @@ export async function sendDisputeResolved(
   
   const html = loadTemplate('dispute-resolved', {
     userName: data.userName,
-    itemTitle: data.itemTitle,
-    orderNumber: data.orderNumber,
+    itemName: data.itemTitle,
+    orderReference: data.orderNumber,
     decisionTitle: decisionTitle,
     decisionBackground: decisionBackground,
     decisionBorder: decisionBorder,
@@ -571,15 +658,21 @@ export async function sendDisputeResolved(
     refundAmountSection: refundAmountSection,
     adminNotes: data.adminNotes,
     nextSteps: nextSteps,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    orderUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: email,
-    subject: `⚖️ Dispute Resolved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Dispute Resolved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send dispute resolution email:', error);
     throw new Error(error.message);
@@ -621,6 +714,11 @@ export async function sendReturnLabelCreated(
     carrier: string;
     trackingNumber: string;
     message: string;
+    orderNumber?: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('return-label-created', {
@@ -629,15 +727,22 @@ export async function sendReturnLabelCreated(
     carrier: data.carrier,
     trackingNumber: data.trackingNumber,
     message: data.message,
+    orderReference: data.orderNumber || '',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    labelUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: recipientEmail,
-    subject: `🏷️ Return Label Created - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Return Label Created - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send return label created email:', error);
     throw new Error(error.message);
@@ -653,6 +758,11 @@ export async function sendReturnShipped(
     itemTitle: string;
     carrier: string;
     trackingNumber: string;
+    orderNumber?: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   const html = loadTemplate('return-shipped', {
@@ -660,15 +770,22 @@ export async function sendReturnShipped(
     itemTitle: data.itemTitle,
     carrier: data.carrier,
     trackingNumber: data.trackingNumber,
+    orderReference: data.orderNumber || '',
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    trackingUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `📦 Return Item Shipped - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Return Item Shipped - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send return shipped email:', error);
     throw new Error(error.message);
@@ -685,6 +802,10 @@ export async function sendReturnRefundProcessed(
     refundAmount: string;
     shippingDeducted?: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
   // Build shipping note if there was a deduction
@@ -699,15 +820,21 @@ export async function sendReturnRefundProcessed(
     refundAmount: data.refundAmount,
     shippingNote: shippingNote,
     orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    refundUrl: '#',
   });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `✅ Refund Processed - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Refund Processed - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send refund processed email:', error);
     throw new Error(error.message);
@@ -726,17 +853,32 @@ export async function sendInsuranceClaimApprovedToBuyer(
     itemTitle: string;
     refundAmount: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-approved-buyer', data);
+  const html = loadTemplate('insurance-claim-approved-buyer', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    refundAmount: data.refundAmount,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    refundUrl: '#',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `✅ Lost Item Claim Approved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Claim Approved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim approved email to buyer:', error);
     throw new Error(error.message);
@@ -752,17 +894,31 @@ export async function sendInsuranceClaimApprovedToSeller(
     itemTitle: string;
     buyerName: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-approved-seller', data);
+  const html = loadTemplate('insurance-claim-approved-seller', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    buyerName: data.buyerName,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `📦 Lost Item Claim Resolved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Claim Resolved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim approved email to seller:', error);
     throw new Error(error.message);
@@ -778,17 +934,32 @@ export async function sendInsuranceClaimDeniedToBuyer(
     itemTitle: string;
     reason: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-denied-buyer', data);
+  const html = loadTemplate('insurance-claim-denied-buyer', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    reason: data.reason,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    supportUrl: 'mailto:info@mulligans.uk.com',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: `Lost Item Claim Update - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim denied email to buyer:', error);
     throw new Error(error.message);
@@ -803,17 +974,30 @@ export async function sendInsuranceClaimDeniedToSeller(
     sellerName: string;
     itemTitle: string;
     orderNumber: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-claim-denied-seller', data);
+  const html = loadTemplate('insurance-claim-denied-seller', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `✅ Lost Item Claim Resolved - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Claim Resolved - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send claim denied email to seller:', error);
     throw new Error(error.message);
@@ -833,17 +1017,32 @@ export async function sendInsuranceReportReceivedToBuyer(
     itemTitle: string;
     orderNumber: string;
     sellerName: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-report-received-buyer', data);
+  const html = loadTemplate('insurance-report-received-buyer', {
+    buyerName: data.buyerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    sellerName: data.sellerName,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+    claimUrl: '#',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: buyerEmail,
-    subject: `📦 Lost Item Report Received - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Lost Item Report Received - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send report received email to buyer:', error);
     throw new Error(error.message);
@@ -859,17 +1058,31 @@ export async function sendInsuranceReportReceivedToSeller(
     itemTitle: string;
     orderNumber: string;
     buyerName: string;
+    itemImageUrl?: string;
+    itemBrand?: string;
+    itemCondition?: string;
+    itemPrice?: string;
   }
 ): Promise<void> {
-  const html = loadTemplate('insurance-report-received-seller', data);
+  const html = loadTemplate('insurance-report-received-seller', {
+    sellerName: data.sellerName,
+    itemTitle: data.itemTitle,
+    orderNumber: data.orderNumber,
+    buyerName: data.buyerName,
+    itemImageUrl: data.itemImageUrl || '',
+    itemBrand: data.itemBrand || '',
+    itemCondition: data.itemCondition || '',
+    itemPrice: data.itemPrice || '',
+  });
   
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sellerEmail,
-    subject: `📦 Item Reported Lost - ${data.itemTitle}`,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Item Reported Lost - ${data.itemTitle}`,
     html: html,
   });
-  
+
   if (error) {
     console.error('❌ Failed to send report received email to seller:', error);
     throw new Error(error.message);
@@ -900,6 +1113,7 @@ export async function sendDeletionRequested(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: userEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: 'Account Deletion Requested - Mulligans',
     html: html,
   });
@@ -927,6 +1141,7 @@ export async function sendDeletionCancelled(
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: userEmail,
+    replyTo: REPLY_TO_CUSTOMER,
     subject: 'Account Deletion Cancelled - Mulligans',
     html: html,
   });

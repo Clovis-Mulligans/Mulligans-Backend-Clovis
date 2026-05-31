@@ -11,6 +11,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
@@ -173,9 +174,10 @@ async function transferSellerPayout(
       console.error('❌ Seller has no Stripe Connect account:', seller.id);
       
       // Notify seller they need to set up payments
+      const noConnectNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: noConnectNotifId,
           user_id: seller.id,
           type: 'payout_pending',
           title: '💰 Payment Pending - Action Required',
@@ -190,7 +192,7 @@ async function transferSellerPayout(
           seller.id,
           'Payment Pending - Action Required',
           `You have £${sellerReceives.toFixed(2)} waiting. Add bank details to receive payment.`,
-          { type: 'payout_pending', order_id: orderId }
+          { notification_id: noConnectNotifId, type: 'payout_pending', order_id: orderId, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -208,9 +210,10 @@ async function transferSellerPayout(
       console.warn('⚠️ Seller Connect account not fully verified:', seller.stripe_connect_status);
       
       // Still attempt transfer - Stripe will hold if not verified
+      const notVerifiedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: notVerifiedNotifId,
           user_id: seller.id,
           type: 'payout_pending',
           title: '💰 Payment Processing',
@@ -225,7 +228,7 @@ async function transferSellerPayout(
           seller.id,
           'Payment Processing',
           `£${sellerReceives.toFixed(2)} is being processed. Complete verification to receive funds.`,
-          { type: 'payout_pending', order_id: orderId }
+          { notification_id: notVerifiedNotifId, type: 'payout_pending', order_id: orderId, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -252,9 +255,10 @@ async function transferSellerPayout(
     console.log(`✅ Transfer created: ${transfer.id} for £${sellerReceives.toFixed(2)}`);
 
     // Notify seller of payment
+    const disputePayoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: disputePayoutNotifId,
         user_id: seller.id,
         type: 'payout',
         title: '💰 Payment Released',
@@ -269,7 +273,7 @@ async function transferSellerPayout(
         seller.id,
         'Payment Released',
         `£${sellerReceives.toFixed(2)} from dispute resolution has been transferred.`,
-        { type: 'payout', order_id: orderId }
+        { notification_id: disputePayoutNotifId, type: 'payout_released', order_id: orderId, is_buyer: false }
       );
     } catch (pushErr) {
       console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -347,7 +351,7 @@ export class DisputeController {
               price: true,
               images: {
                 take: 1,
-                orderBy: { display_order: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
             },
           },
@@ -462,9 +466,10 @@ export class DisputeController {
       const buyer = order.users_orders_buyer_idTousers;
 
       // Create notification for seller
+      const disputeOpenedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: disputeOpenedSellerNotifId,
           user_id: order.seller_id,
           type: 'dispute',
           title: '⚠️ Dispute Opened',
@@ -480,7 +485,7 @@ export class DisputeController {
           seller.id,
           'Dispute Opened - Action Required',
           `A dispute has been opened for "${listingTitle}". You have 72 hours to respond.`,
-          { type: 'dispute', dispute_id: disputeId, order_id: orderId }
+          { notification_id: disputeOpenedSellerNotifId, type: 'dispute_opened', dispute_id: disputeId, order_id: orderId, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -499,6 +504,10 @@ export class DisputeController {
             refundAmount: requestedRefundAmount.toFixed(2),
             refundPercent: requestedRefundPercent.toString(),
             deadline: sellerDeadline,
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send dispute email to seller:', emailError);
@@ -517,6 +526,10 @@ export class DisputeController {
             reasonText: reasonText,
             refundAmount: requestedRefundAmount.toFixed(2),
             refundPercent: requestedRefundPercent.toString(),
+            itemImageUrl: listingImage || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(order.listings?.price?.toString() || order.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send dispute confirmation to buyer:', emailError);
@@ -944,9 +957,10 @@ export class DisputeController {
         notificationMessage = `The seller has rejected your claim for "${listingTitle}". Mulligans will now review and make a decision.`;
       }
 
+      const sellerRespondedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: sellerRespondedNotifId,
           user_id: buyer.id,
           type: 'dispute_update',
           title: notificationTitle,
@@ -962,7 +976,7 @@ export class DisputeController {
           buyer.id,
           notificationTitle,
           notificationMessage,
-          { type: 'dispute_update', dispute_id: disputeId }
+          { notification_id: sellerRespondedNotifId, type: 'dispute_opened', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: true }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -978,6 +992,10 @@ export class DisputeController {
             isCounterOffer: responseType === 'counter',
             counterOfferAmount: counterOfferAmount?.toFixed(2),
             sellerMessage: responseText || 'No message provided',
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send dispute response email to buyer:', emailError);
@@ -995,6 +1013,10 @@ export class DisputeController {
             refundAmount: resolutionAmount?.toFixed(2),
             adminNotes: 'The seller accepted your refund request.',
             isBuyer: true,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send resolution email to buyer:', emailError);
@@ -1006,6 +1028,7 @@ export class DisputeController {
         try {
           await sendDisputeEscalatedToAdmin({
             disputeId: disputeId,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             itemTitle: listingTitle,
             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
             buyerName: buyer.display_name || 'Buyer',
@@ -1014,6 +1037,10 @@ export class DisputeController {
             sellerEmail: seller.email || '',
             reasonType: dispute.reason_type,
             escalationReason: 'Seller rejected the buyer\'s claim',
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send escalation email to admin:', emailError);
@@ -1152,9 +1179,10 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
 
       // Notify seller
+      const counterAcceptedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: counterAcceptedNotifId,
           user_id: seller.id,
           type: 'dispute_resolved',
           title: '✅ Dispute Resolved',
@@ -1170,7 +1198,7 @@ export class DisputeController {
           seller.id,
           'Dispute Resolved',
           `The buyer accepted your counter proposal for "${listingTitle}".`,
-          { type: 'dispute_resolved', dispute_id: disputeId }
+          { notification_id: counterAcceptedNotifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -1187,6 +1215,10 @@ export class DisputeController {
             refundAmount: counterOfferAmount.toFixed(2),
             adminNotes: 'You accepted the seller\'s counter proposal.',
             isBuyer: true,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send resolution email to buyer:', emailError);
@@ -1203,6 +1235,10 @@ export class DisputeController {
             refundAmount: counterOfferAmount.toFixed(2),
             adminNotes: `The buyer accepted your counter proposal.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ' Your payout is being processed.'}`,
             isBuyer: false,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send resolution email to seller:', emailError);
@@ -1285,9 +1321,10 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
 
       // Notify seller
+      const escalatedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: escalatedSellerNotifId,
           user_id: seller.id,
           type: 'dispute_escalated',
           title: '⚠️ Dispute Escalated',
@@ -1303,7 +1340,7 @@ export class DisputeController {
           seller.id,
           'Dispute Escalated',
           `The dispute for "${listingTitle}" has been escalated to Mulligans.`,
-          { type: 'dispute_escalated', dispute_id: disputeId }
+          { notification_id: escalatedSellerNotifId, type: 'dispute_escalated', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -1313,6 +1350,7 @@ export class DisputeController {
       try {
         await sendDisputeEscalatedToAdmin({
           disputeId: disputeId,
+          orderNumber: dispute.order_id.slice(-8).toUpperCase(),
           itemTitle: listingTitle,
           refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
           buyerName: buyer.display_name || 'Buyer',
@@ -1320,9 +1358,13 @@ export class DisputeController {
           sellerName: seller.display_name || 'Seller',
           sellerEmail: seller.email || '',
           reasonType: dispute.reason_type,
-          escalationReason: additionalNotes 
+          escalationReason: additionalNotes
             ? `Buyer rejected counter proposal: ${additionalNotes}`
             : 'Buyer rejected the seller\'s counter proposal',
+          itemImageUrl: dispute.orders?.listing_image || '',
+          itemBrand: '',
+          itemCondition: '',
+          itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
         });
       } catch (emailError) {
         console.error('⚠️ Failed to send escalation email to admin:', emailError);
@@ -1336,6 +1378,10 @@ export class DisputeController {
             itemTitle: listingTitle,
             orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send escalation confirmation to buyer:', emailError);
@@ -1520,9 +1566,10 @@ export class DisputeController {
       }
 
       // Buyer notification
+      const adminResolvedBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: adminResolvedBuyerNotifId,
           user_id: buyer.id,
           type: 'dispute_resolved',
           title: '⚖️ Dispute Resolved',
@@ -1533,9 +1580,10 @@ export class DisputeController {
       });
 
       // Seller notification
+      const adminResolvedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: adminResolvedSellerNotifId,
           user_id: seller.id,
           type: 'dispute_resolved',
           title: '⚖️ Dispute Resolved',
@@ -1551,7 +1599,7 @@ export class DisputeController {
           buyer.id,
           'Dispute Resolved',
           buyerMessage,
-          { type: 'dispute_resolved', dispute_id: disputeId }
+          { notification_id: adminResolvedBuyerNotifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: true }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -1563,7 +1611,7 @@ export class DisputeController {
           seller.id,
           'Dispute Resolved',
           sellerMessage,
-          { type: 'dispute_resolved', dispute_id: disputeId }
+          { notification_id: adminResolvedSellerNotifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -1580,6 +1628,10 @@ export class DisputeController {
             refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
             adminNotes: resolutionNotes,
             isBuyer: true,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
           console.log(`✅ Dispute resolution email sent to buyer: ${buyer.email}`);
         } catch (emailError) {
@@ -1597,6 +1649,10 @@ export class DisputeController {
             refundAmount: finalRefundAmount > 0 ? finalRefundAmount.toFixed(2) : undefined,
             adminNotes: `${resolutionNotes}${transferResult.success && transferResult.amount && transferResult.amount > 0 ? ` £${transferResult.amount.toFixed(2)} has been transferred to your account.` : ''}`,
             isBuyer: false,
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
           console.log(`✅ Dispute resolution email sent to seller: ${seller.email}`);
         } catch (emailError) {
@@ -1743,7 +1799,7 @@ export class DisputeController {
                   price: true,
                   images: {
                     select: { image_url: true },
-                    orderBy: { display_order: 'asc' },
+                    orderBy: PRIMARY_IMAGE_ORDER,
                   },
                 },
               },
@@ -1892,6 +1948,7 @@ export class DisputeController {
             select: {
               listing_title: true,
               listing_image: true,
+              amount: true,
             },
           },
           users_disputes_buyer: {
@@ -1931,9 +1988,10 @@ export class DisputeController {
         const listingTitle = dispute.orders.listing_title || 'Your item';
 
         // Notify buyer
+        const autoEscalatedBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: autoEscalatedBuyerNotifId,
             user_id: buyer.id,
             type: 'dispute_escalated',
             title: '⚠️ Dispute Auto-Escalated',
@@ -1949,16 +2007,17 @@ export class DisputeController {
             buyer.id,
             'Dispute Auto-Escalated',
             `Your dispute for "${listingTitle}" has been escalated for review.`,
-            { type: 'dispute_escalated', dispute_id: dispute.id }
+            { notification_id: autoEscalatedBuyerNotifId, type: 'dispute_escalated', dispute_id: dispute.id, order_id: dispute.order_id, is_buyer: true }
           );
         } catch (pushErr) {
           console.error('[DISPUTE] Push notification failed:', pushErr);
         }
 
         // Notify seller
+        const autoEscalatedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: autoEscalatedSellerNotifId,
             user_id: seller.id,
             type: 'dispute_escalated',
             title: '⚠️ Dispute Auto-Escalated',
@@ -1974,7 +2033,7 @@ export class DisputeController {
             seller.id,
             'Dispute Auto-Escalated',
             `Your dispute for "${listingTitle}" has been escalated. Respond promptly.`,
-            { type: 'dispute_escalated', dispute_id: dispute.id }
+            { notification_id: autoEscalatedSellerNotifId, type: 'dispute_escalated', dispute_id: dispute.id, order_id: dispute.order_id, is_buyer: false }
           );
         } catch (pushErr) {
           console.error('[DISPUTE] Push notification failed:', pushErr);
@@ -1984,6 +2043,7 @@ export class DisputeController {
         try {
           await sendDisputeEscalatedToAdmin({
             disputeId: dispute.id,
+            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
             itemTitle: listingTitle,
             refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
             buyerName: buyer.display_name || 'Buyer',
@@ -1992,6 +2052,10 @@ export class DisputeController {
             sellerEmail: seller.email || '',
             reasonType: dispute.reason_type,
             escalationReason: 'Auto-escalated: Seller failed to respond within 72 hours',
+            itemImageUrl: dispute.orders?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
           });
         } catch (emailError) {
           console.error('⚠️ Failed to send auto-escalation email to admin:', emailError);
@@ -2005,6 +2069,10 @@ export class DisputeController {
               itemTitle: listingTitle,
               orderNumber: dispute.order_id.slice(-8).toUpperCase(),
               refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
+              itemImageUrl: dispute.orders?.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
             });
           } catch (emailError) {
             console.error('⚠️ Failed to send auto-escalation confirmation to buyer:', emailError);

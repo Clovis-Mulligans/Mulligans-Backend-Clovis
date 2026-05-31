@@ -3,80 +3,170 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Seller Has Responded - Mulligans</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Seller Has Responded — Mulligans Golf</title>
 </head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+<body style="margin: 0; padding: 0; background-color: #EAEAE0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+
+  <!-- Preheader -->
+  <div style="display: none; max-height: 0; overflow: hidden; mso-hide: all; font-size: 1px; color: #EAEAE0; line-height: 1px;">
+    The seller has responded to your issue report
+    &nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+  </div>
+
+  <!-- Outer wrapper -->
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
     <tr>
-      <td align="center" style="padding: 40px 20px;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-          <!-- Blue Header with Logo -->
+      <td align="center" style="padding: 32px 16px;">
+
+        <!-- Email card -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
+
+          <!-- Header -->
           <tr>
-            <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
-              <img src="https://images.mulligans.uk.com/email-assets/EmailMainHeaderLogo.png" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
+            <td align="center" style="background-color: #1C4670; padding: 30px 40px;">
+              <img src="https://images.mulligans.uk.com/email-assets/EmailMainHeaderLogo.png" alt="Mulligans" width="180" style="display: block; border: 0;">
             </td>
           </tr>
-          <!-- Content -->
+
+          <!-- Body -->
           <tr>
-            <td style="padding: 40px;">
-              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">💬 Seller Has Responded</h1>
-              
-              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
-              
-              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">The seller has responded to your dispute. Please review their response and decide how to proceed.</p>
-              
-              <!-- Order Details -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+            <td style="padding: 40px 40px 32px 40px;">
+
+              <!-- Headline -->
+              <h1 style="margin: 0 0 16px 0; font-size: 24px; font-weight: 700; color: #1C4670; text-align: center;">Seller Has Responded</h1>
+
+              <!-- Dynamic status badge -->
+              <p style="margin: 0 0 28px 0; text-align: center;">
+                <span style="display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; background-color: {{responseBackground}}; color: {{responseColor}}; border: 1px solid {{responseBorder}};">
+                  {{responseType}}
+                </span>
+              </p>
+
+              <!-- Greeting -->
+              <p style="margin: 0 0 16px 0; font-size: 16px; color: #374151; line-height: 1.6;">Hi {{buyerName}},</p>
+
+              <!-- Message -->
+              <p style="margin: 0 0 28px 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                The seller has reviewed your issue report and provided a response. Please take a moment to read through their reply and decide how you'd like to proceed.
+              </p>
+
+              <!-- Item detail card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
                 <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Item</p>
-                    <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #111827;">{{itemTitle}}</p>
-                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Order Number</p>
-                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">#{{orderNumber}}</p>
+                  <td style="padding: 16px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td width="100" valign="top" style="padding-right: 16px;">
+                          <img src="{{itemImageUrl}}" alt="{{itemName}}" width="100" height="100" style="display: block; border-radius: 6px; object-fit: cover; background-color: #e5e7eb;">
+                        </td>
+                        <td valign="top">
+                          <p style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #111827;">{{itemName}}</p>
+                          <p style="margin: 0 0 4px 0; font-size: 14px; color: #6B7280;">{{itemBrand}} &middot; {{itemCondition}}</p>
+                          <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1C4670;">{{itemPrice}}</p>
+                          <p style="margin: 0; font-size: 13px; color: #9CA3AF;">Order #{{orderReference}}</p>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
-              
-              <!-- Seller's Response -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: {{responseBackground}}; border-radius: 8px; border: 1px solid {{responseBorder}}; margin-bottom: 30px;">
+
+              <!-- Seller's response box (dynamic colours) -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0; background-color: {{responseBackground}}; border-radius: 8px; border: 1px solid {{responseBorder}};">
                 <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: {{responseColor}};">Seller's Response</p>
-                    <p style="margin: 0 0 16px 0; font-size: 20px; font-weight: 700; color: {{responseColor}};">{{responseType}}</p>
-                    {{counterOfferSection}}
-                    <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #374151;">Seller's Message</p>
-                    <p style="margin: 0; font-size: 14px; color: #374151; font-style: italic;">"{{sellerMessage}}"</p>
+                  <td style="padding: 20px 24px;">
+                    <p style="margin: 0 0 16px 0; font-size: 14px; font-weight: 600; color: {{responseColor}}; text-transform: uppercase; letter-spacing: 0.05em;">Seller's Response</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="padding-bottom: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Response Type</p>
+                          <p style="margin: 0; font-size: 15px; font-weight: 600; color: #374151;">{{responseType}}</p>
+                        </td>
+                      </tr>
+                      {{counterOfferSection}}
+                      <tr>
+                        <td style="border-top: 1px solid {{responseBorder}}; padding-top: 12px;">
+                          <p style="margin: 0 0 2px 0; font-size: 12px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.05em;">Seller's Message</p>
+                          <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.5; font-style: italic;">"{{sellerMessage}}"</p>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
-              
-              <!-- Your Options -->
-              <p style="margin: 0 0 15px 0; color: #374151; font-size: 16px; line-height: 1.6;"><strong>Your options:</strong></p>
-              <ul style="margin: 0 0 30px 0; padding-left: 20px; color: #374151; font-size: 14px; line-height: 1.8;">
-                <li>Accept the seller's offer</li>
-                <li>Escalate to Mulligans for review</li>
-              </ul>
-              
-              <!-- CTA Button -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+
+              <!-- Your options -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0; background-color: #eff6ff; border-radius: 8px; border: 1px solid #bfdbfe;">
+                <tr>
+                  <td style="padding: 20px 24px;">
+                    <p style="margin: 0 0 12px 0; font-size: 15px; font-weight: 600; color: #1e40af;">Your Options</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td valign="top" style="padding-bottom: 10px;">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td valign="top" style="padding-right: 10px; padding-top: 3px;">
+                                <div style="width: 6px; height: 6px; border-radius: 50%; background-color: #3b82f6; margin-top: 5px;"></div>
+                              </td>
+                              <td>
+                                <p style="margin: 0; font-size: 14px; color: #1e40af; line-height: 1.5;"><strong>Accept</strong> the seller's response to close this issue.</p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td valign="top">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td valign="top" style="padding-right: 10px; padding-top: 3px;">
+                                <div style="width: 6px; height: 6px; border-radius: 50%; background-color: #3b82f6; margin-top: 5px;"></div>
+                              </td>
+                              <td>
+                                <p style="margin: 0; font-size: 14px; color: #1e40af; line-height: 1.5;"><strong>Escalate</strong> to our support team if you're not satisfied with the response.</p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 8px 0;">
                 <tr>
                   <td align="center">
-                    <a href="https://mulligansgolf.carrd.co" style="display: inline-block; padding: 14px 32px; background-color: #1DC690; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">Review Response</a>
+                    <a href="{{reviewUrl}}" style="display: inline-block; background-color: #1DC690; color: #ffffff; font-size: 15px; font-weight: 700; text-decoration: none; padding: 14px 40px; border-radius: 6px;">Review Response</a>
                   </td>
                 </tr>
               </table>
+
+              <!-- Sign-off -->
+              <p style="margin: 32px 0 0 0; font-size: 16px; color: #374151; line-height: 1.6;">Warm regards,<br>
+                <strong style="color: #1DC690;">The Mulligans Team</strong>
+              </p>
+
             </td>
           </tr>
-          <!-- Blue Footer -->
+
+          <!-- Footer -->
           <tr>
-            <td style="padding: 30px 40px; background-color: #1C4670;">
-              <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
-              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">© 2025 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligansgolf.carrd.co/#privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
+            <td style="background-color: #1C4670; padding: 30px 40px; text-align: center;">
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #ffffff;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none; font-weight: 600;">info@mulligans.uk.com</a></p>
+              <p style="margin: 0 0 8px 0; font-size: 12px; color: #9CA3AF;">&copy; 2026 Mulligans Golf Limited. All rights reserved.</p>
+              <p style="margin: 0; font-size: 12px;">
+                <a href="https://mulligans.uk.com/privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a>
+              </p>
             </td>
           </tr>
+
         </table>
       </td>
     </tr>
   </table>
+
 </body>
 </html>

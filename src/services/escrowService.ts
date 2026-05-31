@@ -18,11 +18,18 @@
 // ✅ Comprehensive logging for audit trail
 
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
+import { Shippo } from 'shippo';
 import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
-import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { sendInspectionReminders } from './inspectionReminder';
 import crypto from 'crypto';
+
+const shippo = new Shippo({
+  apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
+});
 
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -32,8 +39,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ============================================
 // CONSTANTS
 // ============================================
-const SHIPPING_DEADLINE_DAYS = 5;        // Seller must ship within 5 days
-const RETURN_SHIPPING_DEADLINE_DAYS = 5; // Buyer must ship return within 5 days
 const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 days
 
 // Dispute statuses that BLOCK escrow release
@@ -159,7 +164,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
             title: true,
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -248,6 +253,31 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
             updated_at: now,
           },
         });
+
+        // 2b. Fire-and-forget Shippo label refund if a label was purchased
+        if (order.shippo_transaction_id) {
+          shippo.refunds.create({ transaction: order.shippo_transaction_id })
+            .then((refund: any) => {
+              console.log(JSON.stringify({
+                event: 'shippo_label_refund',
+                order_id: order.id,
+                transaction_id: order.shippo_transaction_id,
+                success: true,
+                refund_id: refund.objectId,
+                trigger: 'auto_cancel',
+              }));
+            })
+            .catch((error: any) => {
+              console.log(JSON.stringify({
+                event: 'shippo_label_refund',
+                order_id: order.id,
+                transaction_id: order.shippo_transaction_id,
+                success: false,
+                error: error.message,
+                trigger: 'auto_cancel',
+              }));
+            });
+        }
 
         // 3. Relist the item
         if (order.listing_id) {
@@ -361,6 +391,10 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
               cancelReason: 'Seller did not ship within the required timeframe',
               cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because the seller didn't ship it within ${SHIPPING_DEADLINE_DAYS} days.`,
               refundMessage: 'A full refund has been issued to your original payment method. Please allow 5-10 business days for it to appear.',
+              itemImageUrl: listingImage || order.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
             });
             console.log(`[ESCROW] ✅ Cancellation email sent to buyer: ${buyer.email}`);
           }
@@ -373,6 +407,10 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
               cancelReason: 'Shipping deadline missed',
               cancellationMessage: `Your order for "${listingTitle}" was automatically cancelled because it wasn't shipped within ${SHIPPING_DEADLINE_DAYS} days.`,
               refundMessage: 'A refund has been issued to the buyer.',
+              itemImageUrl: listingImage || order.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
             });
             console.log(`[ESCROW] ✅ Cancellation email sent to seller: ${seller.email}`);
           }
@@ -421,7 +459,7 @@ export async function autoReleaseEscrow(): Promise<void> {
             title: true,
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -724,6 +762,13 @@ export async function autoReleaseEscrow(): Promise<void> {
               salePrice: itemsTotal.toFixed(2),
               fees: labelCostTotal.toFixed(2),
               payoutAmount: payoutAmount,
+              sellerName: seller.display_name || 'Seller',
+              itemName: itemDescription,
+              itemImageUrl: firstOrder.listings?.images?.[0]?.image_url || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${itemsTotal.toFixed(2)}`,
+              earningsUrl: '#',
             });
             console.log('[ESCROW] Escrow released email sent to seller:', seller.email);
           } catch (emailError) {
@@ -775,7 +820,7 @@ export async function autoProcessReturnRefunds(): Promise<void> {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             },
@@ -953,6 +998,10 @@ export async function autoProcessReturnRefunds(): Promise<void> {
               refundAmount: refundAmount.toFixed(2),
               shippingDeducted: shippingDeducted > 0 ? shippingDeducted.toFixed(2) : undefined,
               orderNumber: order.id.slice(-8).toUpperCase(),
+              itemImageUrl: listingImage || order.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
             });
             console.log(`[ESCROW] Refund email sent to buyer: ${buyer.email}`);
           }
@@ -1025,7 +1074,7 @@ export async function autoExpireReturns(): Promise<void> {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             },
@@ -1182,7 +1231,7 @@ export async function checkLostInTransit(): Promise<void> {
             title: true,
             images: {
               take: 1,
-              orderBy: { display_order: 'asc' },
+              orderBy: PRIMARY_IMAGE_ORDER,
             },
           },
         },
@@ -1275,7 +1324,7 @@ export async function autoEscalateDisputes(): Promise<void> {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             },
@@ -1403,6 +1452,7 @@ export async function runEscrowJobs(): Promise<void> {
 
   await autoCancelUnshippedOrders();
   await autoReleaseEscrow();
+  await sendInspectionReminders();
   await autoProcessReturnRefunds();
   await autoExpireReturns();
   await autoEscalateDisputes();

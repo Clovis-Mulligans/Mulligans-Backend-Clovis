@@ -3,84 +3,145 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your Order Has Shipped - Mulligans</title>
+  <title>Your Order Has Shipped — Mulligans</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #EAEAE0;">
+
+  <!-- Preheader (hidden) -->
+  <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #EAEAE0;">Your order is on its way — track your delivery&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;</div>
+
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #EAEAE0;">
     <tr>
       <td align="center" style="padding: 40px 20px;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+
           <!-- Blue Header with Logo -->
           <tr>
             <td align="center" style="padding: 30px 40px; background-color: #1C4670;">
               <img src="https://images.mulligans.uk.com/email-assets/EmailMainHeaderLogo.png" alt="Mulligans" width="180" style="display: block; max-width: 180px; height: auto;">
             </td>
           </tr>
+
           <!-- Content -->
           <tr>
             <td style="padding: 40px;">
-              <h1 style="margin: 0 0 20px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Your Order is On Its Way!</h1>
-              
-              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
-              
-              <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">Great news! Your item has been shipped and is on its way to you.</p>
-              
-              <!-- Tracking Box -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #1DC690; border-radius: 8px; margin-bottom: 30px;">
+
+              <!-- Headline -->
+              <h1 style="margin: 0 0 16px 0; color: #1C4670; font-size: 24px; font-weight: bold; text-align: center;">Your Order Has Shipped</h1>
+
+              <!-- Status Badge -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 28px;">
                 <tr>
-                  <td style="padding: 25px; text-align: center;">
-                    <p style="margin: 0 0 5px 0; color: #ffffff; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Tracking Number</p>
-                    <p style="margin: 0; color: #ffffff; font-size: 22px; font-weight: bold; letter-spacing: 1px;">{{trackingNumber}}</p>
-                    <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 14px;">Carrier: {{carrier}}</p>
+                  <td align="center">
+                    <span style="display: inline-block; padding: 6px 16px; background-color: #ecfdf5; color: #1DC690; border-radius: 20px; font-size: 13px; font-weight: 600;">Shipped</span>
                   </td>
                 </tr>
               </table>
-              
-              <!-- Order Details -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+
+              <!-- Greeting -->
+              <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">Hi {{buyerName}},</p>
+
+              <p style="margin: 0 0 24px 0; color: #374151; font-size: 16px; line-height: 1.6;">Great news! Your item is on its way. Use the tracking details below to follow your delivery.</p>
+
+              <!-- Item Detail Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
                 <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 15px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Order #{{orderNumber}}</p>
+                  <td style="padding: 16px;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                       <tr>
-                        <td width="80" style="padding-right: 15px; vertical-align: top;">
-                          <img src="{{itemImage}}" alt="{{itemTitle}}" width="80" height="80" style="display: block; border-radius: 6px; object-fit: cover;">
+                        <td width="100" valign="top" style="padding-right: 16px;">
+                          <img src="{{itemImageUrl}}" alt="{{itemName}}" width="100" height="100" style="display: block; border-radius: 6px; object-fit: cover; background-color: #e5e7eb;">
                         </td>
-                        <td style="vertical-align: top;">
-                          <p style="margin: 0 0 5px 0; color: #111827; font-size: 16px; font-weight: bold;">{{itemTitle}}</p>
-                          <p style="margin: 0; color: #6B7280; font-size: 14px;">Sold by: {{sellerName}}</p>
+                        <td valign="top">
+                          <p style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #111827;">{{itemName}}</p>
+                          <p style="margin: 0 0 4px 0; font-size: 14px; color: #6B7280;">{{itemBrand}} &middot; {{itemCondition}}</p>
+                          <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1C4670;">{{itemPrice}}</p>
+                          <p style="margin: 0; font-size: 13px; color: #9CA3AF;">Order #{{orderReference}}</p>
                         </td>
                       </tr>
                     </table>
                   </td>
                 </tr>
               </table>
-              
-              <!-- Delivery Address -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; border-radius: 8px; margin-bottom: 30px;">
+
+              <!-- Shipping Details Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 24px 0; background-color: #f3f4f6; border-radius: 8px; overflow: hidden;">
                 <tr>
-                  <td style="padding: 20px;">
-                    <p style="margin: 0 0 10px 0; color: #6B7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Delivering To</p>
-                    <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.6;">{{shippingName}}<br>{{shippingAddress}}<br>{{shippingCity}}, {{shippingPostcode}}<br>{{shippingCountry}}</p>
+                  <td style="padding: 20px 24px;">
+                    <p style="margin: 0 0 14px 0; font-size: 15px; font-weight: 600; color: #1C4670;">Shipping Details</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="padding: 5px 0;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td width="140" style="font-size: 14px; color: #6B7280; vertical-align: top;">Carrier</td>
+                              <td style="font-size: 14px; font-weight: 600; color: #111827;">{{carrierName}}</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 5px 0;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td width="140" style="font-size: 14px; color: #6B7280; vertical-align: top;">Tracking Number</td>
+                              <td style="font-size: 14px; font-weight: 600; color: #111827; word-break: break-all;">{{trackingNumber}}</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 5px 0;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td width="140" style="font-size: 14px; color: #6B7280; vertical-align: top;">Estimated Delivery</td>
+                              <td style="font-size: 14px; font-weight: 600; color: #111827;">{{estimatedDelivery}}</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
-              
-              <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;"><strong>Estimated delivery:</strong> {{estimatedDelivery}}</p>
-              
-              <p style="margin: 0; color: #374151; font-size: 16px; line-height: 1.6;">Happy golfing!<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
+
+              <!-- CTA Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0 24px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="{{trackingUrl}}" style="display: inline-block; padding: 14px 40px; background-color: #1DC690; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: bold; border-radius: 6px;">Track Your Order</a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- What Happens Next -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 8px 0 24px 0;">
+                <tr>
+                  <td style="background-color: #f3f4f6; border-radius: 8px; padding: 20px 24px;">
+                    <p style="margin: 0 0 6px 0; font-size: 15px; font-weight: 600; color: #1C4670;">What happens next</p>
+                    <p style="margin: 0; font-size: 15px; color: #374151; line-height: 1.6;">Once delivered, you'll have 3 days to inspect your item before payment is released to the seller. We'll send you an email as soon as your delivery is confirmed.</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Sign-off -->
+              <p style="margin: 32px 0 0 0; color: #374151; font-size: 16px; line-height: 1.6;">Happy golfing,<br><strong style="color: #1DC690;">The Mulligans Team</strong></p>
+
             </td>
           </tr>
+
           <!-- Blue Footer -->
           <tr>
             <td style="padding: 30px 40px; background-color: #1C4670;">
               <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 14px; text-align: center;">Need help? Contact us at <a href="mailto:info@mulligans.uk.com" style="color: #1DC690; text-decoration: none;">info@mulligans.uk.com</a></p>
-              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">© 2025 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligansgolf.carrd.co/#privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
+              <p style="margin: 0; color: #9CA3AF; font-size: 12px; text-align: center;">&copy; 2026 Mulligans Golf Limited. All rights reserved.<br><a href="https://mulligans.uk.com/privacy" style="color: #9CA3AF; text-decoration: underline;">Privacy Policy</a></p>
             </td>
           </tr>
+
         </table>
       </td>
     </tr>
   </table>
+
 </body>
 </html>

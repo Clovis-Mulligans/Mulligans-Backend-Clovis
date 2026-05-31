@@ -24,7 +24,7 @@
 // CRITICAL FIXES (9 Feb 2026)
 // ==========================================
 // [E-C3]  Removed non-null assertion on session.metadata; added explicit null checks
-// [P-C2]  seller_payout now includes shipping: (effectivePrice * orderQuantity) + orderShipping
+// [P-C2]  seller_payout stores item-only amount: effectivePrice * orderQuantity (shipping is platform's)
 // [D-C2]  Order ID generation changed from Math.random() to crypto.randomUUID()
 // [D-C1]  Atomic stock update with updateMany WHERE guard for non-size-variant listings
 // ==========================================
@@ -42,11 +42,17 @@ import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
+import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { validateShippingAddress } from '../utils/addressValidation';
+import { logStockDecrement } from '../lib/stockUtils';
+import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -63,10 +69,7 @@ interface AuthenticatedRequest extends Request {
 // Platform fee calculation
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
-const INSURANCE_RATE = 0.0125; // 1.25% shipping insurance (Shippo/XCover)
-
 // Escrow constants
-const SHIPPING_DEADLINE_DAYS = 5;
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
@@ -127,7 +130,7 @@ export class CartCheckoutController {
             include: {
               images: {
                 take: 1,
-                orderBy: { created_at: 'asc' },
+                orderBy: PRIMARY_IMAGE_ORDER,
               },
               users: {
                 select: {
@@ -468,8 +471,8 @@ export class CartCheckoutController {
           has_offers: hasOffers ? 'true' : 'false',
           ...offerMetadataKeys,
         },
-        success_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-success?session_id={CHECKOUT_SESSION_ID}&type=cart`,
-        cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-cancelled`,
+        success_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-cancelled`,
       });
 
       console.log('[CART] Cart checkout session created:', session.id);
@@ -549,7 +552,7 @@ export class CartCheckoutController {
         include: {
           images: {
             take: 1,
-            orderBy: { display_order: 'asc' },
+            orderBy: PRIMARY_IMAGE_ORDER,
           },
           users: {
             select: {
@@ -640,6 +643,9 @@ export class CartCheckoutController {
         postal_code: shippingAddress.postal_code || '',
         country: shippingAddress.country || 'GB',
       } : null;
+      // Validation per Q1/Q2 decision — throw propagates up to webhook handler
+      // in stripeController.ts:443 which logs, emails info@mulligans.uk.com, and returns 200
+      validateShippingAddress(shippingAddressJson);
 
       // Check if orders already exist (idempotency)
       const existingOrders = await prisma.orders.findMany({
@@ -662,9 +668,8 @@ export class CartCheckoutController {
         },
       });
 
-      // Auto-cancel date (5 days)
-      const autoCancelAt = new Date();
-      autoCancelAt.setDate(autoCancelAt.getDate() + SHIPPING_DEADLINE_DAYS);
+      // Auto-cancel date (5 weekday deadline)
+      const autoCancelAt = calculateShippingDeadline(new Date());
 
       // Create orders for each seller
       const createdOrders: any[] = [];
@@ -718,7 +723,7 @@ export class CartCheckoutController {
                 title: true,
                 images: {
                   take: 1,
-                  orderBy: { display_order: 'asc' },
+                  orderBy: PRIMARY_IMAGE_ORDER,
                 },
               },
             });
@@ -777,7 +782,7 @@ export class CartCheckoutController {
             // Create order
             // OFFER SYSTEM: Include offer_id, original_list_price, discount_amount
             // [D-C2] Order ID now uses crypto.randomUUID() instead of Math.random()
-            // [P-C2] seller_payout now includes shipping cost
+            // [P-C2] seller_payout is item-only — shipping is platform's
             const order = await tx.orders.create({
               data: {
                 id: `order_${crypto.randomUUID()}`,
@@ -788,7 +793,8 @@ export class CartCheckoutController {
                 quantity: orderQuantity,
                 selected_size: selectedSize,
                 shipping_cost: orderShipping,
-                seller_payout: (effectivePrice * orderQuantity) + orderShipping,
+                seller_payout: effectivePrice * orderQuantity,
+                buyer_total: parseFloat(((orderItemTotal / totalItemsValue) * parseFloat(grandTotal)).toFixed(2)),
                 listing_title: listing.title,
                 listing_image: listingImage,
                 listing_price: effectivePrice,
@@ -830,8 +836,10 @@ export class CartCheckoutController {
               });
 
               if (stockResult.count === 0) {
-                throw new Error(`Stock race condition detected for listing ${listingId}`);
+                console.log(`[STOCK] GUARD_FAILED listing=${listingId} requested=${orderQuantity} cause=cart_checkout`);
+                throw new Error(`Insufficient stock for listing ${listingId}`);
               }
+              logStockDecrement(listingId, currentStock, orderQuantity, 'cart_checkout');
             } else {
               // Size-variant: update with computed values (race window minimised by being inside tx)
               await tx.listings.update({
@@ -843,6 +851,8 @@ export class CartCheckoutController {
                   updated_at: new Date(),
                 },
               });
+              logStockDecrement(listingId, currentStock, orderQuantity, 'cart_checkout');
+
             }
 
             // [Issue #2] Track listings that sold out for offer expiry
@@ -921,76 +931,48 @@ export class CartCheckoutController {
         const sellerFirstImage = first_image || createdOrders.find(o => o.image_url)?.image_url || null;
 
         // Notify seller
-        const sellerUser = await prisma.users.findUnique({
-          where: { id: seller_id },
-          select: { stripe_connect_status: true },
-        });
-
-        const needsVerification = sellerUser?.stripe_connect_status !== 'active';
-
         // Calculate total quantity for this seller
         const sellerTotalQty = createdOrders
           .filter((o: any) => listing_ids.includes(o.listing_id))
           .reduce((sum: number, o: any) => sum + (o.quantity || 1), 0);
         const qtyText = sellerTotalQty > 1 ? ` (${sellerTotalQty} items)` : '';
 
-        if (needsVerification) {
-          await prisma.notifications.create({
-            data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              user_id: seller_id,
-              type: 'payout',
-              title: 'Congratulations on your sale!',
-              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal.toFixed(2)}. Add your bank details to receive payment after delivery.`,
-              image_url: sellerFirstImage,
-              related_id: createdOrders[0]?.id,
-            },
-          });
+        const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
+        const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
+        const sellerNotifType = allLabelsReady ? 'sale_label_ready' : 'sale_action_required';
+        const sellerNotifTitle = allLabelsReady ? 'Items sold!' : 'Items sold — action needed';
+        const sellerNotifBody = allLabelsReady
+          ? 'Your shipping labels are ready. Tap to view your QR codes.'
+          : 'Tap to complete shipping details for your sales.';
+        const sellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await prisma.notifications.create({
+          data: {
+            id: sellerNotifId,
+            user_id: seller_id,
+            type: sellerNotifType,
+            title: sellerNotifTitle,
+            message: sellerNotifBody,
+            image_url: sellerFirstImage,
+            related_id: createdOrders[0]?.id,
+          },
+        });
 
-          // PUSH: Notify seller (needs verification)
-          try {
-            await sendPushNotification(
-              seller_id,
-              'Congratulations on your sale!',
-              `You sold ${listing_ids.length} item(s) for £${subtotal}. Add bank details to get paid.`,
-              { type: 'sale', order_id: createdOrders[0]?.id }
-            );
-          } catch (pushErr) {
-            console.error('[CART] Push to seller failed:', pushErr);
-          }
-        } else {
-          const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
-          const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
-          const cartAutoMsg = allLabelsReady ? 'Your shipping labels are ready — print and ship!' : `Ship within ${SHIPPING_DEADLINE_DAYS} days. Payment released after delivery confirmed.`;
-          await prisma.notifications.create({
-            data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              user_id: seller_id,
-              type: 'sale',
-             title: allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
-              message: `You sold ${listing_ids.length} listing(s)${qtyText} for £${subtotal}. ${cartAutoMsg}`,
-              image_url: sellerFirstImage,
-              related_id: createdOrders[0]?.id,
-            },
-          });
-
-          // PUSH: Notify seller
-          try {
-            await sendPushNotification(
-              seller_id,
-              allLabelsReady ? 'Items Sold — Labels Ready!' : 'Item Sold!',
-              `You sold ${listing_ids.length} item(s) for £${subtotal}. ${cartAutoMsg}`,
-              { type: 'sale', order_id: createdOrders[0]?.id }
-            );
-          } catch (pushErr) {
-            console.error('[CART] Push to seller failed:', pushErr);
-          }
+        // PUSH: Notify seller
+        try {
+          await sendPushNotification(
+            seller_id,
+            sellerNotifTitle,
+            sellerNotifBody,
+            { notification_id: sellerNotifId, type: sellerNotifType, order_id: createdOrders[0]?.id }
+          );
+        } catch (pushErr) {
+          console.error('[CART] Push to seller failed:', pushErr);
         }
 
         // Send sale notification EMAIL to seller
         const sellerEmailRecord = await prisma.users.findUnique({
           where: { id: seller_id },
-          select: { email: true },
+          select: { email: true, display_name: true },
         });
 
         if (sellerEmailRecord?.email) {
@@ -1005,6 +987,16 @@ export class CartCheckoutController {
               orderNumber: createdOrders[0]?.id || 'N/A',
               buyerName: buyer?.display_name || 'Buyer',
               shippingAddress: shippingAddr,
+              sellerName: sellerEmailRecord?.display_name || 'Seller',
+              itemName: listing_ids.length === 1 ? (createdOrders[0]?.listing_title || 'Item') : `${listing_ids.length} items`,
+              itemImageUrl: createdOrders[0]?.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${subtotal.toFixed(2)}`,
+              buyerProtectionFee: '0.00',
+              sellerEarnings: subtotal.toFixed(2),
+              shippingDeadline: formatShippingDeadline(calculateShippingDeadline(new Date())),
+              shipUrl: '#',
             });
             console.log('[CART] Sale notification email sent to seller:', sellerEmailRecord.email);
           } catch (emailError) {
@@ -1021,9 +1013,10 @@ export class CartCheckoutController {
       const itemText = totalItems === 1 ? '1 item' : `${totalItems} items`;
 
       // Notify buyer with image
+      const buyerCartNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: buyerCartNotifId,
           user_id: buyerId,
           type: 'order',
           title: 'Payment Successful!',
@@ -1039,7 +1032,7 @@ export class CartCheckoutController {
           buyerId,
           'Payment Successful!',
           `Your order of ${itemText} is confirmed. Sellers will ship within ${SHIPPING_DEADLINE_DAYS} days.`,
-          { type: 'order', order_id: createdOrders[0]?.id }
+          { notification_id: buyerCartNotifId, type: 'purchase_paid', order_id: createdOrders[0]?.id }
         );
       } catch (pushErr) {
         console.error('[CART] Push to buyer failed:', pushErr);
@@ -1062,6 +1055,19 @@ export class CartCheckoutController {
             itemsList: itemsListHtml,
             totalAmount: `£${grandTotal}`,
             shippingAddress: formattedAddress.replace(/\n/g, '<br>'),
+            orderReference: createdOrders[0]?.id || session.id,
+            itemName: orderItems.length === 1 ? orderItems[0].name : `${orderItems.length} items`,
+            itemImageUrl: createdOrders[0]?.listing_image || '',
+            itemBrand: '',
+            itemCondition: '',
+            itemPrice: orderItems.length === 1 ? `£${orderItems[0].price.replace('£', '')}` : `£${grandTotal}`,
+            itemSubtotal: metadata.items_total || grandTotal,
+            buyerProtectionFee: metadata.platform_fee || '0.00',
+            serviceFee: '0.00',
+            shippingCost: metadata.shipping_total || '0.00',
+            orderTotal: grandTotal,
+            paymentMethod: 'Card payment',
+            orderUrl: '#',
           });
 
           console.log('[CART] Order confirmation email sent to:', buyer.email);
