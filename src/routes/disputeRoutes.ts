@@ -77,12 +77,4 @@ router.get('/admin/:id', adminAuth, DisputeController.getAdminDisputeDetail);
 // PUT /api/disputes/:id/resolve
 router.put('/:id/resolve', adminAuth, DisputeController.adminResolveDispute);
 
-// ============================================
-// SYSTEM ENDPOINTS (CRON JOBS)
-// ============================================
-
-// Auto-escalate expired disputes
-// POST /api/disputes/auto-escalate
-router.post('/auto-escalate', adminAuth, DisputeController.autoEscalateExpired);
-
 export default router;

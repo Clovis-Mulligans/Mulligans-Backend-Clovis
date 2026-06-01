@@ -817,6 +817,10 @@ export class DisputeController {
       }
 
       // Update dispute
+      const buyerDeadline = responseType === 'counter'
+        ? new Date(now.getTime() + 72 * 60 * 60 * 1000)
+        : undefined;
+
       await prisma.disputes.update({
         where: { id: disputeId },
         data: {
@@ -830,6 +834,7 @@ export class DisputeController {
           resolution_amount: resolutionAmount,
           resolved_by: responseType === 'accept' ? 'seller' : null,
           resolved_at: responseType === 'accept' ? now : null,
+          buyer_deadline: buyerDeadline,
           updated_at: now,
         },
       });
@@ -1856,170 +1861,6 @@ export class DisputeController {
     } catch (error: any) {
       console.error('❌ Get admin dispute detail error:', error);
       res.status(500).json({ error: 'Failed to get dispute' });
-    }
-  }
-
-  /**
-   * Auto-escalate expired disputes (called by cron job)
-   * POST /api/disputes/auto-escalate
-   */
-  static async autoEscalateExpired(req: Request, res: Response) {
-    try {
-      // Find disputes past deadline with no seller response
-      const expiredDisputes = await prisma.disputes.findMany({
-        where: {
-          status: 'open',
-          seller_deadline: {
-            lt: new Date(),
-          },
-        },
-        include: {
-          orders: {
-            select: {
-              listing_title: true,
-              listing_image: true,
-              amount: true,
-            },
-          },
-          users_disputes_buyer: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-          users_disputes_seller: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-        },
-      });
-
-      console.log(`🕐 Found ${expiredDisputes.length} expired disputes to auto-escalate`);
-
-      const now = new Date();
-
-      for (const dispute of expiredDisputes) {
-        // Update to escalated
-        await prisma.disputes.update({
-          where: { id: dispute.id },
-          data: {
-            status: 'escalated',
-            auto_escalated: true,
-            updated_at: now,
-          },
-        });
-
-        const buyer = dispute.users_disputes_buyer;
-        const seller = dispute.users_disputes_seller;
-        const listingTitle = dispute.orders.listing_title || 'Your item';
-
-        // Notify buyer
-        const autoEscalatedBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        await prisma.notifications.create({
-          data: {
-            id: autoEscalatedBuyerNotifId,
-            user_id: buyer.id,
-            type: 'dispute_escalated',
-            title: '⚠️ Dispute Auto-Escalated',
-            message: `The seller didn't respond in time. Your dispute for "${listingTitle}" has been escalated to Mulligans for review.`,
-            image_url: dispute.orders.listing_image,
-            related_id: dispute.id,
-          },
-        });
-
-        // PUSH: Notify buyer
-        try {
-          await sendPushNotification(
-            buyer.id,
-            'Dispute Auto-Escalated',
-            `Your dispute for "${listingTitle}" has been escalated for review.`,
-            { notification_id: autoEscalatedBuyerNotifId, type: 'dispute_escalated', dispute_id: dispute.id, order_id: dispute.order_id, is_buyer: true }
-          );
-        } catch (pushErr) {
-          console.error('[DISPUTE] Push notification failed:', pushErr);
-        }
-
-        // Notify seller
-        const autoEscalatedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        await prisma.notifications.create({
-          data: {
-            id: autoEscalatedSellerNotifId,
-            user_id: seller.id,
-            type: 'dispute_escalated',
-            title: '⚠️ Dispute Auto-Escalated',
-            message: `You didn't respond to the dispute for "${listingTitle}" in time. It has been escalated to Mulligans for review.`,
-            image_url: dispute.orders.listing_image,
-            related_id: dispute.id,
-          },
-        });
-
-        // PUSH: Notify seller
-        try {
-          await sendPushNotification(
-            seller.id,
-            'Dispute Auto-Escalated',
-            `Your dispute for "${listingTitle}" has been escalated. Respond promptly.`,
-            { notification_id: autoEscalatedSellerNotifId, type: 'dispute_escalated', dispute_id: dispute.id, order_id: dispute.order_id, is_buyer: false }
-          );
-        } catch (pushErr) {
-          console.error('[DISPUTE] Push notification failed:', pushErr);
-        }
-
-        // Send branded email to admin
-        try {
-          await sendDisputeEscalatedToAdmin({
-            disputeId: dispute.id,
-            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
-            itemTitle: listingTitle,
-            refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
-            buyerName: buyer.display_name || 'Buyer',
-            buyerEmail: buyer.email || '',
-            sellerName: seller.display_name || 'Seller',
-            sellerEmail: seller.email || '',
-            reasonType: dispute.reason_type,
-            escalationReason: 'Auto-escalated: Seller failed to respond within 72 hours',
-            itemImageUrl: dispute.orders?.listing_image || '',
-            itemBrand: '',
-            itemCondition: '',
-            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
-          });
-        } catch (emailError) {
-          console.error('⚠️ Failed to send auto-escalation email to admin:', emailError);
-        }
-
-        // Send confirmation to buyer
-        if (buyer.email) {
-          try {
-            await sendDisputeEscalatedToBuyer(buyer.email, {
-              buyerName: buyer.display_name || 'Buyer',
-              itemTitle: listingTitle,
-              orderNumber: dispute.order_id.slice(-8).toUpperCase(),
-              refundAmount: parseFloat(dispute.requested_refund_amount.toString()).toFixed(2),
-              itemImageUrl: dispute.orders?.listing_image || '',
-              itemBrand: '',
-              itemCondition: '',
-              itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
-            });
-          } catch (emailError) {
-            console.error('⚠️ Failed to send auto-escalation confirmation to buyer:', emailError);
-          }
-        }
-
-        console.log(`✅ Auto-escalated dispute: ${dispute.id}`);
-      }
-
-      res.json({ 
-        success: true, 
-        escalated_count: expiredDisputes.length,
-        dispute_ids: expiredDisputes.map(d => d.id),
-      });
-    } catch (error: any) {
-      console.error('❌ Auto-escalate error:', error);
-      res.status(500).json({ error: 'Failed to auto-escalate disputes' });
     }
   }
 

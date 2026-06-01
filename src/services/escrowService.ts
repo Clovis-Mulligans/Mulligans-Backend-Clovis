@@ -1205,7 +1205,7 @@ export async function autoExpireReturns(): Promise<void> {
           await prisma.disputes.update({
             where: { id: returnRequest.disputes.id },
             data: {
-              status: 'resolved',
+              status: 'admin_resolved',
               resolution_type: 'no_refund',
               resolution_amount: 0,
               resolution_notes: 'Return expired - buyer did not ship within deadline',
@@ -1393,15 +1393,14 @@ export async function autoEscalateDisputes(): Promise<void> {
 
   try {
     const now = new Date();
-    const escalationThreshold = new Date(now.getTime() - 72 * 60 * 60 * 1000); // 72 hours ago
 
-    // Find disputes that are still 'open' and older than 72 hours
+    // Find open disputes past seller_deadline OR counter_offered past buyer_deadline
     const overdueDisputes = await prisma.disputes.findMany({
       where: {
-        status: 'open',
-        created_at: {
-          lte: escalationThreshold,
-        },
+        OR: [
+          { status: 'open', seller_deadline: { lte: now } },
+          { status: 'counter_offered', buyer_deadline: { lte: now, not: null } },
+        ],
       },
       include: {
         orders: {
@@ -1436,15 +1435,19 @@ export async function autoEscalateDisputes(): Promise<void> {
         const listingTitle = order.listing_title || order.listings?.title || 'Item';
         const listingImage = order.listings?.images?.[0]?.image_url || order.listing_image || null;
 
-        console.log(`[ESCROW] Auto-escalating dispute ${dispute.id} - seller didn't respond within 72 hours`);
+        const isBuyerTimeout = dispute.status === 'counter_offered';
+        const escalationReason = isBuyerTimeout
+          ? 'Buyer did not respond to counter-offer within 72 hours'
+          : 'Seller did not respond within 72 hours';
 
-        // Update dispute status to escalated
+        console.log(`[ESCROW] Auto-escalating dispute ${dispute.id} - ${escalationReason}`);
+
         await prisma.disputes.update({
           where: { id: dispute.id },
           data: {
             status: 'escalated',
             escalated_at: now,
-            escalation_reason: 'Seller did not respond within 72 hours',
+            escalation_reason: escalationReason,
             auto_escalated: true,
             updated_at: now,
           },
@@ -1508,7 +1511,7 @@ export async function autoEscalateDisputes(): Promise<void> {
             type: 'dispute_escalation',
             order_id: order.id,
             subject: `[AUTO-ESCALATED] Dispute for "${listingTitle}"`,
-            message: `This dispute was automatically escalated because the seller (${seller.display_name}) did not respond within 72 hours.\n\nOrder ID: ${order.id}\nDispute ID: ${dispute.id}\nBuyer: ${buyer.display_name}\nSeller: ${seller.display_name}\nRequested: ${dispute.requested_refund_percent}% refund - £${dispute.requested_refund_amount}\nReason: ${dispute.reason_type} - ${dispute.reason_text}`,
+            message: `This dispute was automatically escalated: ${escalationReason}.\n\nOrder ID: ${order.id}\nDispute ID: ${dispute.id}\nBuyer: ${buyer.display_name}\nSeller: ${seller.display_name}\nRequested: ${dispute.requested_refund_percent}% refund - £${dispute.requested_refund_amount}\nReason: ${dispute.reason_type} - ${dispute.reason_text}`,
             status: 'open',
             priority: 'high',
             created_at: now,
