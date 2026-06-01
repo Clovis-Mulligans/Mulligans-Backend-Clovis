@@ -53,6 +53,7 @@ import { autoPurchaseLabel } from '../services/autoShippingService';
 import { validateShippingAddress } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
+import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -1074,6 +1075,17 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         } catch (emailError) {
           console.error('[CART] Failed to send order confirmation email:', emailError);
         }
+      }
+
+      // Meta CAPI Purchase event (fire-and-forget)
+      if (buyer?.email && createdOrders.length > 0) {
+        sendMetaPurchaseEvent({
+          orderId: session.id,
+          amount: parseFloat(grandTotal),
+          currency: 'GBP',
+          buyerEmail: buyer.email,
+          testEventCode: process.env.META_TEST_EVENT_CODE,
+        });
       }
 
       console.log('[CART] Cart order fulfilled successfully');
