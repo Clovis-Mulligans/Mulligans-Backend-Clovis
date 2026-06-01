@@ -50,7 +50,7 @@ const BLOCKING_RETURN_STATUSES = ['pending', 'approved', 'awaiting_address', 'la
 // ============================================
 // HELPER: Check if order has blocking dispute
 // ============================================
-async function hasBlockingDispute(orderId: string): Promise<boolean> {
+export async function hasBlockingDispute(orderId: string): Promise<boolean> {
   const dispute = await prisma.disputes.findUnique({
     where: { order_id: orderId },
     select: { status: true },
@@ -63,7 +63,7 @@ async function hasBlockingDispute(orderId: string): Promise<boolean> {
 // ============================================
 // HELPER: Check if order has blocking return
 // ============================================
-async function hasBlockingReturn(orderId: string): Promise<boolean> {
+export async function hasBlockingReturn(orderId: string): Promise<boolean> {
   const returnRequest = await prisma.return_requests.findFirst({
     where: { 
       order_id: orderId,
@@ -1048,8 +1048,95 @@ export async function autoProcessReturnRefunds(): Promise<void> {
 }
 
 // ============================================
+// SEND RETURN SHIP REMINDERS
+// Runs daily - reminds buyer 24h before return_ship_deadline (48h after label created)
+// ============================================
+export async function sendReturnShipReminders(): Promise<void> {
+  console.log('[ESCROW] Running return ship reminder check...');
+
+  try {
+    const now = new Date();
+    const reminderThreshold = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    const returnsNeedingReminder = await prisma.return_requests.findMany({
+      where: {
+        status: 'label_created',
+        reminder_sent_at: null,
+        return_ship_deadline: {
+          lte: reminderThreshold,
+          gt: now,
+          not: null,
+        },
+      },
+      include: {
+        orders: {
+          include: {
+            listings: {
+              select: {
+                title: true,
+                images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
+              },
+            },
+            users_orders_buyer_idTousers: {
+              select: { id: true, display_name: true },
+            },
+          },
+        },
+      },
+    });
+
+    console.log(`[ESCROW] Found ${returnsNeedingReminder.length} returns needing ship reminder`);
+
+    for (const returnRequest of returnsNeedingReminder) {
+      try {
+        const order = returnRequest.orders;
+        const buyer = order.users_orders_buyer_idTousers;
+        const listingTitle = order.listing_title || order.listings?.title || 'Item';
+        const listingImage = order.listings?.images?.[0]?.image_url || order.listing_image || null;
+
+        await prisma.return_requests.update({
+          where: { id: returnRequest.id },
+          data: { reminder_sent_at: now },
+        });
+
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: buyer.id,
+            type: 'return_reminder',
+            title: 'Return Shipping Reminder',
+            message: `You have 24 hours left to ship your return for "${listingTitle}". If not shipped by the deadline, the return will be cancelled and the seller will receive payment.`,
+            image_url: listingImage,
+            related_id: order.id,
+          },
+        });
+
+        try {
+          await sendPushNotification(
+            buyer.id,
+            'Ship Your Return — 24h Left',
+            `Return for "${listingTitle}" must be shipped within 24 hours or it will be cancelled.`,
+            { type: 'return_reminder', order_id: order.id, return_id: returnRequest.id }
+          );
+        } catch (pushErr) {
+          console.error('[ESCROW] Push reminder failed:', pushErr);
+        }
+
+        console.log(`[ESCROW] ✅ Sent return ship reminder for return ${returnRequest.id}`);
+      } catch (reminderErr: any) {
+        console.error(`[ESCROW] ❌ Failed to send reminder for return ${returnRequest.id}:`, reminderErr.message);
+      }
+    }
+
+    console.log('[ESCROW] Return ship reminder check complete');
+  } catch (error: any) {
+    console.error('[ESCROW] Return ship reminder job failed:', error.message);
+  }
+}
+
+// ============================================
 // AUTO-EXPIRE RETURNS
-// Runs daily - cancels returns if buyer doesn't ship within 5 days
+// Runs daily - cancels returns if buyer doesn't ship within deadline
 // ============================================
 export async function autoExpireReturns(): Promise<void> {
   console.log('[ESCROW] Running return expiry check...');
@@ -1454,6 +1541,7 @@ export async function runEscrowJobs(): Promise<void> {
   await autoReleaseEscrow();
   await sendInspectionReminders();
   await autoProcessReturnRefunds();
+  await sendReturnShipReminders();
   await autoExpireReturns();
   await autoEscalateDisputes();
   await checkLostInTransit();
@@ -1467,8 +1555,9 @@ export default {
   autoCancelUnshippedOrders,
   autoReleaseEscrow,
   autoProcessReturnRefunds,
+  sendReturnShipReminders,
   autoExpireReturns,
-  autoEscalateDisputes, 
+  autoEscalateDisputes,
   checkLostInTransit,
   runEscrowJobs,
 };

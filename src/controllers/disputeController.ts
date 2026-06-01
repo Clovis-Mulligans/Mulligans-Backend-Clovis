@@ -15,7 +15,8 @@ import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
-import { 
+import crypto from 'crypto';
+import {
   sendDisputeOpenedToSeller,
   sendDisputeOpenedToBuyer,
   sendDisputeResponseToBuyer,
@@ -25,6 +26,7 @@ import {
 } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
+import { calculateSellerPayout as calcPayout, BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -111,7 +113,6 @@ async function transferSellerPayout(
   console.log(`   Refund amount: £${refundAmount.toFixed(2)}`);
 
   try {
-    // Get order with seller details
     const order = await prisma.orders.findUnique({
       where: { id: orderId },
       include: {
@@ -132,52 +133,45 @@ async function transferSellerPayout(
       return { success: false, error: 'Order not found' };
     }
 
+    // Short-circuit: already transferred
+    if (order.stripe_transfer_id) {
+      console.log(`   Order already has transfer ${order.stripe_transfer_id} — skipping`);
+      return { success: true, transferId: order.stripe_transfer_id, amount: 0 };
+    }
+
     const seller = order.users_orders_seller_idTousers;
     const orderAmount = parseFloat(order.amount.toString());
     const sellerPayout = order.seller_payout ? parseFloat(order.seller_payout.toString()) : null;
 
-    // Calculate what seller should receive
-    // If seller_payout is stored, use the proportional reduction
-    // Otherwise calculate from order amount
     let sellerReceives: number;
 
     if (sellerPayout !== null) {
-      // Proportional calculation based on refund percentage
       const refundPercent = orderAmount > 0 ? refundAmount / orderAmount : 0;
       sellerReceives = sellerPayout * (1 - refundPercent);
     } else {
-      // Fallback: Calculate seller payout from order amount minus fees
-      // Order amount includes buyer protection fee, so work backwards
-      // Total = ItemPrice + (ItemPrice * 0.075) + 0.99
-      // Total = ItemPrice * 1.075 + 0.99
-      // ItemPrice = (Total - 0.99) / 1.075
-      const itemPrice = (orderAmount - PLATFORM_FEE_FIXED) / (1 + PLATFORM_FEE_PERCENT);
+      // B5 fix: use the centralised fee module for the fallback
+      const payoutResult = calcPayout(orderAmount, 1, 0, true, 0);
       const refundPercent = orderAmount > 0 ? refundAmount / orderAmount : 0;
-      sellerReceives = itemPrice * (1 - refundPercent);
+      sellerReceives = payoutResult.total * (1 - refundPercent);
     }
 
-    // Round to 2 decimal places
     sellerReceives = Math.round(sellerReceives * 100) / 100;
 
     console.log(`   Order amount: £${orderAmount.toFixed(2)}`);
     console.log(`   Seller payout (stored): £${sellerPayout?.toFixed(2) || 'N/A'}`);
     console.log(`   Seller receives after dispute: £${sellerReceives.toFixed(2)}`);
 
-    // If seller receives nothing (100% refund), no transfer needed
     if (sellerReceives <= 0) {
       console.log('   Seller receives £0 - no transfer needed');
       return { success: true, amount: 0 };
     }
 
-    // Check if seller has a Connect account
     if (!seller.stripe_connect_id) {
       console.error('❌ Seller has no Stripe Connect account:', seller.id);
-      
-      // Notify seller they need to set up payments
-      const noConnectNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
       await prisma.notifications.create({
         data: {
-          id: noConnectNotifId,
+          id: crypto.randomUUID(),
           user_id: seller.id,
           type: 'payout_pending',
           title: '💰 Payment Pending - Action Required',
@@ -186,57 +180,30 @@ async function transferSellerPayout(
         },
       });
 
-      // PUSH: Notify seller
       try {
         await sendPushNotification(
           seller.id,
           'Payment Pending - Action Required',
           `You have £${sellerReceives.toFixed(2)} waiting. Add bank details to receive payment.`,
-          { notification_id: noConnectNotifId, type: 'payout_pending', order_id: orderId, is_buyer: false }
+          { type: 'payout_pending', order_id: orderId, is_buyer: false }
         );
       } catch (pushErr) {
         console.error('[DISPUTE] Push notification failed:', pushErr);
       }
 
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: 'Seller has no Connect account - notified to set up',
         amount: sellerReceives,
       };
     }
 
-    // Check if Connect account is active
     if (seller.stripe_connect_status !== 'active') {
       console.warn('⚠️ Seller Connect account not fully verified:', seller.stripe_connect_status);
-      
-      // Still attempt transfer - Stripe will hold if not verified
-      const notVerifiedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      await prisma.notifications.create({
-        data: {
-          id: notVerifiedNotifId,
-          user_id: seller.id,
-          type: 'payout_pending',
-          title: '💰 Payment Processing',
-          message: `£${sellerReceives.toFixed(2)} from a resolved dispute is being processed. Complete your bank verification to receive funds.`,
-          related_id: orderId,
-        },
-      });
-
-      // PUSH: Notify seller
-      try {
-        await sendPushNotification(
-          seller.id,
-          'Payment Processing',
-          `£${sellerReceives.toFixed(2)} is being processed. Complete verification to receive funds.`,
-          { notification_id: notVerifiedNotifId, type: 'payout_pending', order_id: orderId, is_buyer: false }
-        );
-      } catch (pushErr) {
-        console.error('[DISPUTE] Push notification failed:', pushErr);
-      }
     }
 
-    // Create the transfer
     const transferAmountPence = Math.round(sellerReceives * 100);
+    const idempotencyKey = `dispute_transfer_${disputeId}`;
 
     const transfer = await stripe.transfers.create({
       amount: transferAmountPence,
@@ -250,15 +217,19 @@ async function transferSellerPayout(
         refund_amount: refundAmount.toFixed(2),
         seller_receives: sellerReceives.toFixed(2),
       },
+    }, { idempotencyKey });
+
+    // Persist transfer ID atomically
+    await prisma.orders.update({
+      where: { id: orderId },
+      data: { stripe_transfer_id: transfer.id },
     });
 
     console.log(`✅ Transfer created: ${transfer.id} for £${sellerReceives.toFixed(2)}`);
 
-    // Notify seller of payment
-    const disputePayoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
-        id: disputePayoutNotifId,
+        id: crypto.randomUUID(),
         user_id: seller.id,
         type: 'payout',
         title: '💰 Payment Released',
@@ -267,39 +238,27 @@ async function transferSellerPayout(
       },
     });
 
-    // PUSH: Notify seller
     try {
       await sendPushNotification(
         seller.id,
         'Payment Released',
         `£${sellerReceives.toFixed(2)} from dispute resolution has been transferred.`,
-        { notification_id: disputePayoutNotifId, type: 'payout_released', order_id: orderId, is_buyer: false }
+        { type: 'payout_released', order_id: orderId, is_buyer: false }
       );
     } catch (pushErr) {
       console.error('[DISPUTE] Push notification failed:', pushErr);
     }
 
-    return { 
-      success: true, 
-      transferId: transfer.id, 
+    return {
+      success: true,
+      transferId: transfer.id,
       amount: sellerReceives,
     };
 
   } catch (error: any) {
     console.error('❌ Transfer failed:', error.message);
-    
-    // Log for admin review
-    console.error('TRANSFER_FAILED', {
-      orderId,
-      disputeId,
-      refundAmount,
-      error: error.message,
-    });
-
-    return { 
-      success: false, 
-      error: error.message,
-    };
+    console.error('TRANSFER_FAILED', { orderId, disputeId, refundAmount, error: error.message });
+    return { success: false, error: error.message };
   }
 }
 
@@ -782,46 +741,30 @@ export class DisputeController {
         return res.status(400).json({ error: 'Invalid response type. Must be: accept, counter, or reject' });
       }
 
-      // Find the dispute
-      const dispute = await prisma.disputes.findFirst({
-        where: {
-          id: disputeId,
-          seller_id: userId,
-          status: 'open',
-        },
-        include: {
-          orders: {
-            select: {
-              id: true,
-              amount: true,
-              seller_payout: true,
-              listing_title: true,
-              listing_image: true,
-              stripe_payment_intent_id: true,
+      // Row-lock the dispute to prevent concurrent resolution
+      const dispute = await prisma.$transaction(async (tx) => {
+        const rows: any[] = await tx.$queryRaw`
+          SELECT id FROM disputes WHERE id = ${disputeId} AND seller_id = ${userId} AND status = 'open' FOR UPDATE`;
+        if (rows.length === 0) return null;
+        return tx.disputes.findFirst({
+          where: { id: disputeId, seller_id: userId, status: 'open' },
+          include: {
+            orders: {
+              select: {
+                id: true, amount: true, seller_payout: true,
+                listing_title: true, listing_image: true, stripe_payment_intent_id: true,
+              },
             },
+            users_disputes_buyer: { select: { id: true, display_name: true, email: true } },
+            users_disputes_seller: { select: { id: true, display_name: true, email: true } },
           },
-          users_disputes_buyer: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-          users_disputes_seller: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-        },
+        });
       });
 
       if (!dispute) {
         return res.status(404).json({ error: 'Dispute not found or you cannot respond to it' });
       }
 
-      // Check if deadline has passed
       if (new Date() > dispute.seller_deadline) {
         return res.status(400).json({ error: 'Response deadline has passed. This dispute has been escalated.' });
       }
@@ -896,13 +839,12 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
       const listingImage = dispute.orders.listing_image;
 
-      // ✅ If seller accepted, process the refund AND transfer remaining to seller
+      // If seller accepted, process the refund AND transfer remaining to seller
       if (responseType === 'accept' && resolutionAmount !== null && dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(resolutionAmount * 100);
-        
+
         try {
-          // 1. Process refund to buyer
-          await stripe.refunds.create({
+          const refund = await stripe.refunds.create({
             payment_intent: dispute.orders.stripe_payment_intent_id,
             amount: refundAmountPence,
             reason: 'requested_by_customer',
@@ -911,32 +853,33 @@ export class DisputeController {
               order_id: dispute.order_id,
               resolution: 'seller_accepted',
             },
-          });
-          console.log(`💸 Refund processed: £${resolutionAmount.toFixed(2)}`);
+          }, { idempotencyKey: `dispute_refund_${disputeId}` });
+          console.log(`💸 Refund processed: £${resolutionAmount.toFixed(2)} (${refund.id})`);
 
-          // 2. ✅ CRITICAL: Transfer remaining funds to seller (if not 100% refund)
+          // Persist refund ID + update order in one write
+          await prisma.orders.update({
+            where: { id: dispute.order_id },
+            data: {
+              stripe_refund_id: refund.id,
+              status: dispute.requested_refund_percent === 100 ? 'refunded' : 'completed',
+              updated_at: now,
+            },
+          });
+
+          // Transfer remaining to seller (skip at 100% — nothing left)
           if (dispute.requested_refund_percent < 100) {
             const transferResult = await transferSellerPayout(
               dispute.order_id,
               resolutionAmount,
               disputeId
             );
-            
+
             if (transferResult.success) {
               console.log(`💰 Seller payout transferred: £${transferResult.amount?.toFixed(2)}`);
             } else {
               console.error('⚠️ Seller payout transfer failed:', transferResult.error);
             }
           }
-
-          // 3. Update order status
-          await prisma.orders.update({
-            where: { id: dispute.order_id },
-            data: {
-              status: dispute.requested_refund_percent === 100 ? 'refunded' : 'completed',
-              updated_at: now,
-            },
-          });
         } catch (refundError: any) {
           console.error('⚠️ Refund failed:', refundError.message);
         }
@@ -1076,38 +1019,24 @@ export class DisputeController {
 
       console.log('✅ Buyer accepting counter proposal:', disputeId);
 
-      const dispute = await prisma.disputes.findFirst({
-        where: {
-          id: disputeId,
-          buyer_id: userId,
-          status: 'counter_offered',
-        },
-        include: {
-          orders: {
-            select: {
-              id: true,
-              amount: true,
-              seller_payout: true,
-              stripe_payment_intent_id: true,
-              listing_title: true,
-              listing_image: true,
+      // Row-lock the dispute to prevent concurrent resolution
+      const dispute = await prisma.$transaction(async (tx) => {
+        const rows: any[] = await tx.$queryRaw`
+          SELECT id FROM disputes WHERE id = ${disputeId} AND buyer_id = ${userId} AND status = 'counter_offered' FOR UPDATE`;
+        if (rows.length === 0) return null;
+        return tx.disputes.findFirst({
+          where: { id: disputeId, buyer_id: userId, status: 'counter_offered' },
+          include: {
+            orders: {
+              select: {
+                id: true, amount: true, seller_payout: true,
+                stripe_payment_intent_id: true, listing_title: true, listing_image: true,
+              },
             },
+            users_disputes_buyer: { select: { id: true, display_name: true, email: true } },
+            users_disputes_seller: { select: { id: true, display_name: true, email: true } },
           },
-          users_disputes_buyer: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-          users_disputes_seller: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-        },
+        });
       });
 
       if (!dispute) {
@@ -1121,7 +1050,7 @@ export class DisputeController {
       if (dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(counterOfferAmount * 100);
         try {
-          await stripe.refunds.create({
+          const refund = await stripe.refunds.create({
             payment_intent: dispute.orders.stripe_payment_intent_id,
             amount: refundAmountPence,
             reason: 'requested_by_customer',
@@ -1130,26 +1059,33 @@ export class DisputeController {
               order_id: dispute.order_id,
               resolution: 'buyer_accepted_counter',
             },
+          }, { idempotencyKey: `dispute_counter_refund_${disputeId}` });
+          console.log(`💸 counter proposal refund processed: £${counterOfferAmount.toFixed(2)} (${refund.id})`);
+
+          await prisma.orders.update({
+            where: { id: dispute.order_id },
+            data: { stripe_refund_id: refund.id },
           });
-          console.log(`💸 counter proposal refund processed: £${counterOfferAmount.toFixed(2)}`);
         } catch (refundError: any) {
           console.error('⚠️ Refund failed:', refundError.message);
           return res.status(500).json({ error: 'Failed to process refund' });
         }
       }
 
-      // 2. ✅ CRITICAL: Transfer remaining funds to seller
-      const transferResult = await transferSellerPayout(
-        dispute.order_id,
-        counterOfferAmount,
-        disputeId
-      );
+      // 2. Transfer remaining funds to seller (skip at 100% — nothing left)
+      let transferResult: { success: boolean; transferId?: string; amount?: number; error?: string } = { success: true, amount: 0 };
+      if (dispute.counter_offer_percent !== 100) {
+        transferResult = await transferSellerPayout(
+          dispute.order_id,
+          counterOfferAmount,
+          disputeId
+        );
 
-      if (transferResult.success) {
-        console.log(`💰 Seller payout transferred: £${transferResult.amount?.toFixed(2)}`);
-      } else {
-        console.error('⚠️ Seller payout transfer failed:', transferResult.error);
-        // Continue anyway - we'll notify admin and seller
+        if (transferResult.success) {
+          console.log(`💰 Seller payout transferred: £${transferResult.amount?.toFixed(2)}`);
+        } else {
+          console.error('⚠️ Seller payout transfer failed:', transferResult.error);
+        }
       }
 
       // 3. Update dispute
@@ -1428,37 +1364,24 @@ export class DisputeController {
         return res.status(400).json({ error: 'Resolution type and notes are required' });
       }
 
-      const dispute = await prisma.disputes.findFirst({
-        where: {
-          id: disputeId,
-          status: 'escalated',
-        },
-        include: {
-          orders: {
-            select: {
-              id: true,
-              amount: true,
-              seller_payout: true,
-              stripe_payment_intent_id: true,
-              listing_title: true,
-              listing_image: true,
+      // Row-lock the dispute to prevent concurrent resolution
+      const dispute = await prisma.$transaction(async (tx) => {
+        const rows: any[] = await tx.$queryRaw`
+          SELECT id FROM disputes WHERE id = ${disputeId} AND status = 'escalated' FOR UPDATE`;
+        if (rows.length === 0) return null;
+        return tx.disputes.findFirst({
+          where: { id: disputeId, status: 'escalated' },
+          include: {
+            orders: {
+              select: {
+                id: true, amount: true, seller_payout: true,
+                stripe_payment_intent_id: true, listing_title: true, listing_image: true,
+              },
             },
+            users_disputes_buyer: { select: { id: true, display_name: true, email: true } },
+            users_disputes_seller: { select: { id: true, display_name: true, email: true } },
           },
-          users_disputes_buyer: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-          users_disputes_seller: {
-            select: {
-              id: true,
-              display_name: true,
-              email: true,
-            },
-          },
-        },
+        });
       });
 
       if (!dispute) {
@@ -1469,16 +1392,18 @@ export class DisputeController {
       let finalRefundAmount = 0;
       const now = new Date();
 
-      // Calculate refund amount based on resolution type
       if (resolutionType === 'full_refund') {
         finalRefundAmount = orderAmount;
       } else if (resolutionType === 'partial_refund') {
         if (!resolutionAmount || resolutionAmount <= 0) {
           return res.status(400).json({ error: 'Resolution amount required for partial refund' });
         }
+        // B4: upper-bound validation
+        if (resolutionAmount > orderAmount) {
+          return res.status(400).json({ error: `Resolution amount (£${resolutionAmount.toFixed(2)}) cannot exceed order amount (£${orderAmount.toFixed(2)})` });
+        }
         finalRefundAmount = resolutionAmount;
       }
-      // No refund: finalRefundAmount stays 0
 
       console.log(`   Order amount: £${orderAmount.toFixed(2)}`);
       console.log(`   Final refund: £${finalRefundAmount.toFixed(2)}`);
@@ -1487,7 +1412,7 @@ export class DisputeController {
       if (finalRefundAmount > 0 && dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(finalRefundAmount * 100);
         try {
-          await stripe.refunds.create({
+          const refund = await stripe.refunds.create({
             payment_intent: dispute.orders.stripe_payment_intent_id,
             amount: refundAmountPence,
             reason: 'requested_by_customer',
@@ -1497,8 +1422,13 @@ export class DisputeController {
               resolution: 'admin_resolved',
               resolution_type: resolutionType,
             },
+          }, { idempotencyKey: `dispute_admin_refund_${disputeId}` });
+          console.log(`💸 Admin resolution refund processed: £${finalRefundAmount.toFixed(2)} (${refund.id})`);
+
+          await prisma.orders.update({
+            where: { id: dispute.order_id },
+            data: { stripe_refund_id: refund.id },
           });
-          console.log(`💸 Admin resolution refund processed: £${finalRefundAmount.toFixed(2)}`);
         } catch (refundError: any) {
           console.error('⚠️ Refund failed:', refundError.message);
           return res.status(500).json({ error: 'Failed to process refund' });

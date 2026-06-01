@@ -595,6 +595,8 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       console.warn(`[RETURN] Label cost (£${labelCost.toFixed(2)}) exceeds refund (£${originalRefund.toFixed(2)}) — refund zeroed out`);
     }
 
+    const returnShipDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+
     // Update return request
     await prisma.return_requests.update({
       where: { id: returnId },
@@ -608,6 +610,7 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
         shipping_deducted: labelCost,
         refund_amount: newRefundAmount,
         status: 'label_created',
+        return_ship_deadline: returnShipDeadline,
         updated_at: new Date(),
       },
     });
@@ -618,6 +621,7 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       carrier: carrierName,
       labelCost,
       newRefundAmount,
+      returnShipDeadline: returnShipDeadline.toISOString(),
     });
 
     // Get info for notifications
@@ -822,6 +826,8 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       labelCost = parseFloat((transaction.rate as any).amount || '0');
     }
 
+    const returnShipDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+
     // Update return request (refund amount stays the same since seller paid)
     await prisma.return_requests.update({
       where: { id: returnId },
@@ -834,6 +840,7 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
         shippo_transaction_id: transaction.objectId,
         shipping_deducted: 0, // Seller paid, so nothing deducted from buyer's refund
         status: 'label_created',
+        return_ship_deadline: returnShipDeadline,
         updated_at: new Date(),
       },
     });

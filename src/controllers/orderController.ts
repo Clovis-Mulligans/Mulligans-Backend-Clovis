@@ -18,6 +18,7 @@ import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS } from '../config/constants
 import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { restoreListingStock } from '../lib/stockUtils';
 import { weekdaysUntil, calculateShippingDeadline } from '../utils/shippingDeadline';
+import { hasBlockingDispute, hasBlockingReturn } from '../services/escrowService';
 
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
@@ -853,7 +854,13 @@ if (order.disputes) {
           buyer_id: userId,
           status: 'delivered',
         },
-        include: {
+        select: {
+          id: true,
+          seller_id: true,
+          buyer_id: true,
+          amount: true,
+          seller_payout: true,
+          stripe_transfer_id: true,
           listings: {
             select: {
               title: true,
@@ -877,11 +884,25 @@ if (order.disputes) {
         return res.status(404).json({ error: 'Order not found or cannot confirm receipt' });
       }
 
+      // Short-circuit if already transferred
+      if (order.stripe_transfer_id) {
+        return res.status(400).json({ error: 'Payment has already been released for this order' });
+      }
+
+      // Block if dispute or return is active
+      if (await hasBlockingDispute(orderId)) {
+        return res.status(400).json({ error: 'Cannot confirm receipt — an active dispute is blocking this order' });
+      }
+      if (await hasBlockingReturn(orderId)) {
+        return res.status(400).json({ error: 'Cannot confirm receipt — an active return is blocking this order' });
+      }
+
       const seller = order.users_orders_seller_idTousers;
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
-      // ✅ Transfer funds to seller immediately
+      // Transfer funds to seller with idempotency + persist transfer ID
+      let transferId: string | null = null;
       if (seller.stripe_connect_id && order.seller_payout) {
         const transferAmount = Math.round(parseFloat(order.seller_payout.toString()) * 100);
 
@@ -893,10 +914,10 @@ if (order.disputes) {
             metadata: {
               order_id: order.id,
               type: 'buyer_confirmed_receipt',
-              confirmed_at: new Date().toISOString(),
             },
-          });
+          }, { idempotencyKey: `confirm_receipt_transfer_${orderId}` });
 
+          transferId = transfer.id;
           console.log(`💸 Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)}`);
         } catch (transferError: any) {
           console.error('⚠️ Transfer failed:', transferError.message);
@@ -904,14 +925,14 @@ if (order.disputes) {
         }
       }
 
-      // Update order to completed
       const now = new Date();
       await prisma.orders.update({
         where: { id: orderId },
         data: {
           status: 'completed',
           completed_at: now,
-          escrow_release_at: now, // Mark as released
+          escrow_release_at: now,
+          stripe_transfer_id: transferId,
           updated_at: now,
         },
       });

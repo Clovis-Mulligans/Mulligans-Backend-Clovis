@@ -474,6 +474,7 @@ model disputes {
   resolved_by              String?
   resolved_at              DateTime?
   seller_deadline          DateTime
+  buyer_deadline           DateTime?
   auto_escalated           Boolean           @default(false)
   created_at               DateTime          @default(now())
   updated_at               DateTime          @updatedAt
@@ -530,6 +531,7 @@ model return_requests {
   created_at             DateTime  @default(now())
   updated_at             DateTime  @updatedAt
   return_ship_deadline   DateTime?
+  reminder_sent_at       DateTime?
   stripe_refund_id       String?
   disputes               disputes? @relation(fields: [dispute_id], references: [id])
   orders                 orders    @relation(fields: [order_id], references: [id])
