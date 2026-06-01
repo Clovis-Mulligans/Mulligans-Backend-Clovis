@@ -2,7 +2,6 @@
 import crypto from 'crypto';
 
 const META_API_VERSION = 'v18.0';
-const IOS_BUNDLE_ID = 'com.mulligansgolf.app';
 
 let envWarningLogged = false;
 
@@ -62,15 +61,6 @@ async function _sendMetaPurchaseEvent(params: MetaPurchaseEventParams): Promise<
         action_source: 'app',
         event_id: params.orderId,
         user_data: userData,
-        app_data: {
-          advertiser_tracking_enabled: 1,
-          application_tracking_enabled: 1,
-          extinfo: [
-            'a2',
-            IOS_BUNDLE_ID,
-            '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-          ],
-        },
         custom_data: {
           currency: params.currency,
           value: params.amount,
