@@ -8,6 +8,7 @@
 // ✅ NEW: Dispute resolution data included in order details
 
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
@@ -657,7 +658,7 @@ if (order.disputes) {
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
-      const shippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const shippedNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: shippedNotifId,
@@ -769,7 +770,7 @@ if (order.disputes) {
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
-      const deliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const deliveredNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: deliveredNotifId,
@@ -949,7 +950,7 @@ if (order.disputes) {
       // Notify seller
       const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
-      const payoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const payoutNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: payoutNotifId,
@@ -1066,7 +1067,7 @@ if (order.disputes) {
       });
 
       // Notify buyer - claim is being processed
-      const lostBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const lostBuyerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: lostBuyerNotifId,
@@ -1092,7 +1093,7 @@ if (order.disputes) {
       }
 
       // Notify seller
-      const lostSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const lostSellerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: lostSellerNotifId,
@@ -1453,7 +1454,7 @@ if (isBuyerCancelling) {
         ? `${cancelledBy} cancelled the order for "${listingTitle}". Your item has been relisted. Reason: ${fullCancelReason}`
         : `${cancelledBy} cancelled the order for "${listingTitle}". A refund has been processed. Reason: ${fullCancelReason}`;
 
-      const cancelledNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const cancelledNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: cancelledNotifId,
@@ -1640,7 +1641,7 @@ if (isBuyerCancelling) {
       });
 
       // Notify seller
-      const disputeSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const disputeSellerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: disputeSellerNotifId,
@@ -1764,7 +1765,7 @@ if (isBuyerCancelling) {
       // Notify seller
       const payoutAmount = parseFloat(sellerPayout.toString()).toFixed(2);
 
-      const escrowPayoutNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const escrowPayoutNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: escrowPayoutNotifId,

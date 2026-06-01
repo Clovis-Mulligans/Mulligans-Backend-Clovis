@@ -5,6 +5,7 @@
 // ✅ Full notifications: In-app, Push, and Email
 
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
@@ -235,7 +236,7 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
     // If awaiting address, notify seller specifically
     if (initialStatus === 'awaiting_address' && !isSeller) {
       // In-app notification
-      const returnAddressNeededNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const returnAddressNeededNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: returnAddressNeededNotifId,
@@ -281,7 +282,7 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
     const otherUserId = isBuyer ? order.seller_id : order.buyer_id;
 
     // In-app notification
-    const returnApprovedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const returnApprovedNotifId = crypto.randomUUID();
     await prisma.notifications.create({
       data: {
         id: returnApprovedNotifId,
@@ -629,7 +630,7 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
     const seller = returnRequest.orders.users_orders_seller_idTousers;
 
     // In-app notification to seller
-    const returnLabelCreatedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const returnLabelCreatedNotifId = crypto.randomUUID();
     await prisma.notifications.create({
       data: {
         id: returnLabelCreatedNotifId,
@@ -857,7 +858,7 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
     const buyer = returnRequest.orders.users_orders_buyer_idTousers;
 
     // In-app notification to buyer
-    const returnLabelReadyNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const returnLabelReadyNotifId = crypto.randomUUID();
     await prisma.notifications.create({
       data: {
         id: returnLabelReadyNotifId,
@@ -978,7 +979,7 @@ export const markReturnShipped = async (req: AuthenticatedRequest, res: Response
     const seller = returnRequest.orders.users_orders_seller_idTousers;
 
     // In-app notification to seller
-    const returnShippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const returnShippedNotifId = crypto.randomUUID();
     await prisma.notifications.create({
       data: {
         id: returnShippedNotifId,
@@ -1094,7 +1095,7 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
     const refundAmount = returnRequest.refund_amount?.toFixed(2) || '0.00';
 
     // In-app notification to buyer
-    const returnDeliveredNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const returnDeliveredNotifId = crypto.randomUUID();
     await prisma.notifications.create({
       data: {
         id: returnDeliveredNotifId,

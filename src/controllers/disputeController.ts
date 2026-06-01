@@ -425,7 +425,7 @@ export class DisputeController {
       const buyer = order.users_orders_buyer_idTousers;
 
       // Create notification for seller
-      const disputeOpenedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const disputeOpenedSellerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: disputeOpenedSellerNotifId,
@@ -905,7 +905,7 @@ export class DisputeController {
         notificationMessage = `The seller has rejected your claim for "${listingTitle}". Mulligans will now review and make a decision.`;
       }
 
-      const sellerRespondedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const sellerRespondedNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: sellerRespondedNotifId,
@@ -950,24 +950,45 @@ export class DisputeController {
         }
       }
 
-      // If seller accepted, send resolution email
-      if (responseType === 'accept' && buyer.email) {
-        try {
-          await sendDisputeResolved(buyer.email, {
-            userName: buyer.display_name || 'Buyer',
-            itemTitle: listingTitle,
-            orderNumber: dispute.order_id.slice(-8).toUpperCase(),
-            resolutionType: dispute.requested_refund_percent === 100 ? 'full_refund' : 'partial_refund',
-            refundAmount: resolutionAmount?.toFixed(2),
-            adminNotes: 'The seller accepted your refund request.',
-            isBuyer: true,
-            itemImageUrl: dispute.orders?.listing_image || '',
-            itemBrand: '',
-            itemCondition: '',
-            itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
-          });
-        } catch (emailError) {
-          console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+      // If seller accepted, send resolution emails to both parties
+      if (responseType === 'accept') {
+        if (buyer.email) {
+          try {
+            await sendDisputeResolved(buyer.email, {
+              userName: buyer.display_name || 'Buyer',
+              itemTitle: listingTitle,
+              orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+              resolutionType: dispute.requested_refund_percent === 100 ? 'full_refund' : 'partial_refund',
+              refundAmount: resolutionAmount?.toFixed(2),
+              adminNotes: 'The seller accepted your refund request.',
+              isBuyer: true,
+              itemImageUrl: dispute.orders?.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+            });
+          } catch (emailError) {
+            console.error('⚠️ Failed to send resolution email to buyer:', emailError);
+          }
+        }
+        if (seller.email) {
+          try {
+            await sendDisputeResolved(seller.email, {
+              userName: seller.display_name || 'Seller',
+              itemTitle: listingTitle,
+              orderNumber: dispute.order_id.slice(-8).toUpperCase(),
+              resolutionType: dispute.requested_refund_percent === 100 ? 'full_refund' : 'partial_refund',
+              refundAmount: resolutionAmount?.toFixed(2),
+              adminNotes: `You accepted the buyer's refund request of £${resolutionAmount?.toFixed(2)}.`,
+              isBuyer: false,
+              itemImageUrl: dispute.orders?.listing_image || '',
+              itemBrand: '',
+              itemCondition: '',
+              itemPrice: `£${parseFloat(dispute.orders?.amount?.toString() || '0').toFixed(2)}`,
+            });
+          } catch (emailError) {
+            console.error('⚠️ Failed to send resolution email to seller:', emailError);
+          }
         }
       }
 
@@ -1120,7 +1141,7 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
 
       // Notify seller
-      const counterAcceptedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const counterAcceptedNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: counterAcceptedNotifId,
@@ -1262,7 +1283,7 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
 
       // Notify seller
-      const escalatedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const escalatedSellerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: escalatedSellerNotifId,
@@ -1501,7 +1522,7 @@ export class DisputeController {
       }
 
       // Buyer notification
-      const adminResolvedBuyerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const adminResolvedBuyerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: adminResolvedBuyerNotifId,
@@ -1515,7 +1536,7 @@ export class DisputeController {
       });
 
       // Seller notification
-      const adminResolvedSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const adminResolvedSellerNotifId = crypto.randomUUID();
       await prisma.notifications.create({
         data: {
           id: adminResolvedSellerNotifId,

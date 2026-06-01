@@ -333,7 +333,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
 
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: order.buyer_id,
             type: 'order_cancelled',
             title: 'Order Cancelled - Full Refund Issued',
@@ -358,7 +358,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
         // 7. Notify seller
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: seller.id,
             type: 'order_cancelled',
             title: 'Order Cancelled - Shipping Deadline Missed',
@@ -571,8 +571,10 @@ export async function autoReleaseEscrow(): Promise<void> {
         // ============================================
         // CALCULATE CORRECT PAYOUT FOR GROUP
         // ============================================
-        // Items: sum of seller payouts (excludes platform fee), fall back to amount for legacy orders
-        const itemsTotal = orders.reduce((sum, o) => sum + parseFloat(o.amount.toString()), 0);
+        const itemsTotal = orders.reduce((sum, o) => {
+          const payout = o.seller_payout ? parseFloat(o.seller_payout.toString()) : parseFloat(o.amount.toString());
+          return sum + payout;
+        }, 0);
         
         // Check if any order in the group was auto-shipped
         const isAutoShipped = orders.some(o => (o as any).label_auto_generated === true);
@@ -618,7 +620,7 @@ export async function autoReleaseEscrow(): Promise<void> {
           // Notify seller about the issue
           await prisma.notifications.create({
             data: {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: crypto.randomUUID(),
               user_id: seller.id,
               type: 'payout',
               title: 'Order Completed - No Payout Due',
@@ -731,7 +733,7 @@ export async function autoReleaseEscrow(): Promise<void> {
 
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: seller.id,
             type: 'payout',
             title: 'Payment Released!',
@@ -965,7 +967,7 @@ export async function autoProcessReturnRefunds(): Promise<void> {
         // Notify buyer - refund processed
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: buyer.id,
             type: 'return_refunded',
             title: '✅ Refund Processed',
@@ -1012,7 +1014,7 @@ export async function autoProcessReturnRefunds(): Promise<void> {
         // Notify seller - return completed
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: seller.id,
             type: 'return_completed',
             title: 'Return Completed',
@@ -1232,7 +1234,7 @@ export async function autoExpireReturns(): Promise<void> {
         // Notify buyer - return expired
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: buyer.id,
             type: 'return_expired',
             title: 'Return Expired',
@@ -1257,7 +1259,7 @@ export async function autoExpireReturns(): Promise<void> {
         // Notify seller - return expired, they'll get paid
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: seller.id,
             type: 'return_expired',
             title: 'Return Cancelled - Buyer Missed Deadline',
@@ -1350,7 +1352,7 @@ export async function checkLostInTransit(): Promise<void> {
         // Notify buyer they can report as lost
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: order.buyer_id,
             type: 'delivery_delayed',
             title: 'Delivery Taking Longer Than Expected',
@@ -1456,7 +1458,7 @@ export async function autoEscalateDisputes(): Promise<void> {
         // Notify buyer - dispute escalated
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: buyer.id,
             type: 'dispute_escalated',
             title: 'Dispute Escalated to Mulligans',
@@ -1481,7 +1483,7 @@ export async function autoEscalateDisputes(): Promise<void> {
         // Notify seller - dispute escalated (their fault for not responding)
         await prisma.notifications.create({
           data: {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: seller.id,
             type: 'dispute_escalated',
             title: '⚠️ Dispute Escalated - No Response',
@@ -1506,7 +1508,7 @@ export async function autoEscalateDisputes(): Promise<void> {
         // Create admin support ticket for review
         await prisma.support_tickets.create({
           data: {
-            id: `ticket_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: crypto.randomUUID(),
             user_id: buyer.id,
             type: 'dispute_escalation',
             order_id: order.id,
