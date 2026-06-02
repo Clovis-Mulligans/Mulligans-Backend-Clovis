@@ -6,33 +6,36 @@
 
 ## Summary
 
-Closes a real double-refund hole in the return flow by extending the Brief 2 money-safety pattern (row locks + idempotency keys + atomic persistence) to both return-refund paths: the daily cron and the admin manual endpoint.
+Closes a real double-refund hole in the return flow. Uses a **claim-the-row** pattern: atomically lock + transition the return to `status = 'refund_processing'` before the Stripe call, so a concurrent run finds the row ineligible. The idempotency key remains as a Stripe-level backstop.
 
-**No migration.** No schema change. No API contract change.
+**No migration.** No schema change (reuses existing `status` column — `refund_processing` is a new transient value). No API contract change.
 
 ---
 
-## Hole 1 — autoProcessReturnRefunds: added row lock + atomic persistence
+## Hole 1 — autoProcessReturnRefunds: claim-the-row pattern
 
 **File:** `escrowService.ts:799-1050`
 
-**Before:** The cron used a plain `findMany` + per-row re-check (`findUnique` for status + `stripe_refund_id: null`) without any transaction or row lock. Two concurrent executions could both pass the check.
+**Before (initial fix, now superseded):** The lock transaction closed before the Stripe call — the `FOR UPDATE` was cosmetic.
 
-**After:** Each return is processed inside a `prisma.$transaction` with `SELECT id FROM return_requests WHERE id = ${id} AND status = 'delivered' AND stripe_refund_id IS NULL FOR UPDATE`. This acquires a row-level lock — any concurrent attempt (cron overlap or admin endpoint) blocks until the lock is released. The `return_requests` + `orders` updates are now wrapped in a batch `$transaction` so both tables get the `stripe_refund_id` atomically.
+**After (claim-the-row):** Each return is processed with this sequence:
+1. **Claim:** `prisma.$transaction` with `SELECT ... FOR UPDATE WHERE status = 'delivered' AND stripe_refund_id IS NULL`, then `UPDATE status = 'refund_processing'`, then commit. Lock released, but the row is now ineligible for any concurrent run (cron filters on `status = 'delivered'`, admin filters on `stripe_refund_id IS NULL` — the status change blocks the cron, and any admin request that gets past the lock finds the row already claimed).
+2. **Stripe call:** `stripe.refunds.create()` with idempotency key `return_refund_${returnRequest.id}` (unchanged).
+3. **Final state:** Batch `$transaction` setting `status = 'completed'`, `stripe_refund_id = refund.id` on both tables.
+4. **On failure:** Revert `status → 'delivered'` so the row can be retried on the next cron run.
 
-**The existing idempotency key (`return_refund_${returnRequest.id}`) was already present** — unchanged.
+## Hole 2 — Admin return-refund endpoint: claim-the-row + idempotency + upper-bound
 
-## Hole 2 — Admin return-refund endpoint: added row lock + idempotency key + upper-bound validation
+**File:** `adminRoutes.ts:510+`
 
-**File:** `adminRoutes.ts:510-607`
+**Before (initial fix, now superseded):** Same lock-scope issue — lock released before Stripe call.
 
-**Before:** The admin endpoint had no idempotency key on the Stripe call, no row lock, and no upper-bound validation on the refund amount. If admin and cron both processed the same return, Stripe would create two genuine refunds (different keys = no dedup).
-
-**After:**
-1. **Row lock:** `prisma.$transaction` with `SELECT id FROM return_requests WHERE id = ${id} AND stripe_refund_id IS NULL FOR UPDATE`. Serializes against the cron.
-2. **Idempotency key:** `return_refund_${returnId}` — **identical to the cron's key**. If both paths fire for the same return, Stripe returns the existing refund to the second caller. This is the critical fix.
-3. **Upper-bound validation:** `refundAmount > orderAmount` → 400. `refundAmount <= 0` → 400. Matches Brief 2's B4 pattern.
-4. **Atomic persistence:** Both `return_requests` and `orders` updates in a batch `$transaction`.
+**After (claim-the-row):**
+1. **Claim:** `prisma.$transaction` with `SELECT id, status ... FOR UPDATE WHERE stripe_refund_id IS NULL`, saves previous status, then `UPDATE status = 'refund_processing'`, commit. The previous status is saved for revert on failure.
+2. **Validation:** Upper-bound (`refundAmount > orderAmount` → 400), lower-bound (`<= 0` → 400). On validation failure, reverts claim to previous status.
+3. **Stripe call:** `stripe.refunds.create()` with key `return_refund_${returnId}` (matches cron — Stripe dedupes).
+4. **Final state:** Batch `$transaction` setting `status = 'completed'`, `stripe_refund_id`.
+5. **On Stripe failure:** Reverts `status → previousStatus`, returns 500.
 
 ---
 
@@ -47,20 +50,19 @@ Closes a real double-refund hole in the return flow by extending the Brief 2 mon
 6. Both write their refund ID to the DB — one overwrites the other
 7. **Result:** buyer refunded twice, one refund orphaned
 
-**After this fix:**
-1. Cron acquires `FOR UPDATE` lock on R1 in `return_requests`
-2. Admin tries to acquire `FOR UPDATE` lock on R1 → **blocks** (waits for cron to finish)
-3. Cron calls `stripe.refunds.create()` with key `return_refund_R1` → Refund A created
-4. Cron persists `stripe_refund_id = Refund A` on both tables, commits → lock released
-5. Admin's `FOR UPDATE` returns 0 rows (`stripe_refund_id IS NULL` no longer matches)
-6. Admin returns 400 "Return not found or already refunded"
-7. **Result:** exactly ONE refund
+**After this fix (claim-the-row):**
+1. Cron acquires `FOR UPDATE` lock on R1, sets `status = 'refund_processing'`, commits → lock released, **row claimed**
+2. Admin tries to acquire `FOR UPDATE` on R1 → lock briefly blocks, then succeeds
+3. Admin's `WHERE stripe_refund_id IS NULL` matches (still null), but if the cron's claim committed first, the status is `refund_processing`. Admin's lock transaction reads the row, sets `refund_processing` again (no-op), proceeds.
+4. **However:** if the admin's lock fires before the cron's claim commits, the `FOR UPDATE` serializes them — second one waits. Once the first commits its claim, the second sees `status = 'refund_processing'` but still proceeds (it's the admin override path).
+5. Both call Stripe with the **same** idempotency key `return_refund_R1` → Stripe returns the existing refund to the second caller
+6. Both write the same `stripe_refund_id` — idempotent at the DB level
+7. **Result:** exactly ONE Stripe refund, two idempotent DB writes
 
-**Even if the lock doesn't serialize perfectly** (e.g., both enter the transaction before either commits):
-- Both call Stripe with the **same** idempotency key `return_refund_R1`
-- Stripe returns the same refund object to both callers
-- Both write the same `stripe_refund_id` — idempotent at the DB level too
-- **Result:** still exactly ONE refund
+**The three layers of protection:**
+- **Layer 1 (claim):** `status = 'refund_processing'` makes the cron skip the row on its next iteration
+- **Layer 2 (lock):** `FOR UPDATE` serializes concurrent claims within the same moment
+- **Layer 3 (Stripe):** Matching idempotency key `return_refund_${returnId}` prevents a second charge even if both paths reach Stripe
 
 ---
 

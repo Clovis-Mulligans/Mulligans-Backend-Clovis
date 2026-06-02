@@ -852,43 +852,50 @@ export async function autoProcessReturnRefunds(): Promise<void> {
         const order = returnRequest.orders;
         console.log(`[ESCROW] Processing return ${returnRequest.id} for order ${order.id}`);
 
-        // Row-lock the return to serialize against concurrent cron runs and admin endpoint
-        const lockedReturn = await prisma.$transaction(async (tx) => {
+        // Claim-the-row: lock + transition to 'refund_processing' atomically.
+        // Once committed, no concurrent run (cron or admin) can claim this return.
+        const claimedReturn = await prisma.$transaction(async (tx) => {
           const rows: any[] = await tx.$queryRaw`
             SELECT id FROM return_requests WHERE id = ${returnRequest.id} AND status = 'delivered' AND stripe_refund_id IS NULL FOR UPDATE`;
           if (rows.length === 0) return null;
+          await tx.return_requests.update({
+            where: { id: returnRequest.id },
+            data: { status: 'refund_processing', updated_at: now },
+          });
           return tx.return_requests.findUnique({
             where: { id: returnRequest.id },
-            select: { id: true, status: true, stripe_refund_id: true, refund_amount: true, shipping_deducted: true },
+            select: { id: true, refund_amount: true, shipping_deducted: true },
           });
         });
 
-        if (!lockedReturn) {
-          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} already processed or status changed, skipping`);
+        if (!claimedReturn) {
+          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} already claimed or status changed, skipping`);
           continue;
         }
 
         if (await returnHasBlockingDispute(order.id)) {
-          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} has active dispute from seller, skipping refund`);
+          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} has active dispute from seller, reverting claim`);
+          await prisma.return_requests.update({ where: { id: returnRequest.id }, data: { status: 'delivered', updated_at: now } });
           continue;
         }
 
-        console.log(`[ESCROW] ✅ Return ${returnRequest.id} passed all safety checks, processing refund`);
+        console.log(`[ESCROW] ✅ Return ${returnRequest.id} claimed, processing refund`);
 
         const buyer = order.users_orders_buyer_idTousers;
         const seller = order.users_orders_seller_idTousers;
         const listingTitle = order.listing_title || order.listings?.title || 'Item';
         const listingImage = order.listings?.images?.[0]?.image_url || order.listing_image || null;
 
-        const refundAmount = parseFloat(lockedReturn.refund_amount?.toString() || '0');
-        const shippingDeducted = parseFloat(lockedReturn.shipping_deducted?.toString() || '0');
+        const refundAmount = parseFloat(claimedReturn.refund_amount?.toString() || '0');
+        const shippingDeducted = parseFloat(claimedReturn.shipping_deducted?.toString() || '0');
 
         console.log(`[ESCROW] Refund calculation:`);
         console.log(`  - Refund amount: £${refundAmount.toFixed(2)}`);
         console.log(`  - Shipping deducted: £${shippingDeducted.toFixed(2)}`);
 
         if (refundAmount <= 0) {
-          console.error(`[ESCROW] ❌ Invalid refund amount £${refundAmount.toFixed(2)} for return ${returnRequest.id}`);
+          console.error(`[ESCROW] ❌ Invalid refund amount, reverting claim for return ${returnRequest.id}`);
+          await prisma.return_requests.update({ where: { id: returnRequest.id }, data: { status: 'delivered', updated_at: now } });
           continue;
         }
 
@@ -920,13 +927,14 @@ export async function autoProcessReturnRefunds(): Promise<void> {
             if (refundError.code === 'charge_already_refunded') {
               console.log(`[ESCROW] ⚠️ Order ${order.id} already fully refunded in Stripe`);
             } else {
-              console.error(`[ESCROW] ❌ Refund failed for return ${returnRequest.id}:`, refundError.message);
+              console.error(`[ESCROW] ❌ Refund failed for return ${returnRequest.id}, reverting claim:`, refundError.message);
+              await prisma.return_requests.update({ where: { id: returnRequest.id }, data: { status: 'delivered', updated_at: now } });
               continue;
             }
           }
         }
 
-        // Persist refund ID on both tables atomically
+        // Final state: persist refund ID on both tables
         await prisma.$transaction([
           prisma.return_requests.update({
             where: { id: returnRequest.id },
