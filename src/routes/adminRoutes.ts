@@ -518,7 +518,7 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
     // Once committed, no concurrent run (cron or admin) can claim this return.
     const claimedReturn = await prisma.$transaction(async (tx) => {
       const rows: any[] = await tx.$queryRaw`
-        SELECT id, status FROM return_requests WHERE id = ${returnId} AND stripe_refund_id IS NULL FOR UPDATE`;
+        SELECT id, status FROM return_requests WHERE id = ${returnId} AND stripe_refund_id IS NULL AND status != 'refund_processing' AND status != 'completed' FOR UPDATE`;
       if (rows.length === 0) return null;
       const previousStatus = (rows[0] as any).status;
       await tx.return_requests.update({
@@ -543,6 +543,13 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
     });
 
     if (!claimedReturn) {
+      const existing = await prisma.return_requests.findUnique({
+        where: { id: returnId },
+        select: { status: true, stripe_refund_id: true },
+      });
+      if (existing?.status === 'refund_processing') {
+        return res.status(409).json({ error: 'A refund for this return is already in progress' });
+      }
       return res.status(400).json({ error: 'Return not found or already refunded' });
     }
 
@@ -607,11 +614,11 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
       }),
     ]);
 
-    if (lockedReturn.orders.listing_id) {
+    if (claimedReturn.orders.listing_id) {
       await restoreListingStock(
         prisma,
-        lockedReturn.orders.listing_id,
-        lockedReturn.orders.quantity || 1,
+        claimedReturn.orders.listing_id,
+        claimedReturn.orders.quantity || 1,
         'return_refund',
       );
     }
@@ -622,7 +629,7 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
       AUDIT_ACTIONS.PROCESS_REFUND,
       'return',
       returnId,
-      { amount: refundAmount, stripe_refund_id: refund.id, order_id: lockedReturn.order_id },
+      { amount: refundAmount, stripe_refund_id: refund.id, order_id: claimedReturn.order_id },
       req
     );
 

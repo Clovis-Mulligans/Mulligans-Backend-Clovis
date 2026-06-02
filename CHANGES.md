@@ -50,19 +50,25 @@ Closes a real double-refund hole in the return flow. Uses a **claim-the-row** pa
 6. Both write their refund ID to the DB — one overwrites the other
 7. **Result:** buyer refunded twice, one refund orphaned
 
-**After this fix (claim-the-row):**
-1. Cron acquires `FOR UPDATE` lock on R1, sets `status = 'refund_processing'`, commits → lock released, **row claimed**
-2. Admin tries to acquire `FOR UPDATE` on R1 → lock briefly blocks, then succeeds
-3. Admin's `WHERE stripe_refund_id IS NULL` matches (still null), but if the cron's claim committed first, the status is `refund_processing`. Admin's lock transaction reads the row, sets `refund_processing` again (no-op), proceeds.
-4. **However:** if the admin's lock fires before the cron's claim commits, the `FOR UPDATE` serializes them — second one waits. Once the first commits its claim, the second sees `status = 'refund_processing'` but still proceeds (it's the admin override path).
-5. Both call Stripe with the **same** idempotency key `return_refund_R1` → Stripe returns the existing refund to the second caller
-6. Both write the same `stripe_refund_id` — idempotent at the DB level
-7. **Result:** exactly ONE Stripe refund, two idempotent DB writes
+**After this fix (claim-the-row + admin exclusion):**
+1. Cron acquires `FOR UPDATE` lock on R1 (`WHERE status = 'delivered' AND stripe_refund_id IS NULL`), sets `status = 'refund_processing'`, commits → lock released, **row claimed**
+2. Admin tries to acquire `FOR UPDATE` on R1 (`WHERE stripe_refund_id IS NULL AND status != 'refund_processing' AND status != 'completed'`) → the `WHERE` no longer matches (status is `refund_processing`) → returns 0 rows
+3. Admin returns **409 Conflict: "A refund for this return is already in progress"** — does NOT proceed to Stripe
+4. Cron completes: Stripe refund, then `status = 'completed'` + `stripe_refund_id` persisted
+5. **Result:** exactly ONE Stripe refund, admin gets a clear rejection
+
+**If admin fires first (before cron):**
+1. Admin acquires lock, claims row (`refund_processing`), commits
+2. Cron's `findMany WHERE status = 'delivered'` does not match `refund_processing` → **cron skips the row entirely**
+3. Admin completes: Stripe refund → `completed`
+4. **Result:** exactly ONE Stripe refund
 
 **The three layers of protection:**
-- **Layer 1 (claim):** `status = 'refund_processing'` makes the cron skip the row on its next iteration
+- **Layer 1 (claim):** `status = 'refund_processing'` makes both the cron (`WHERE delivered`) and admin (`WHERE status != 'refund_processing'`) skip/reject the row
 - **Layer 2 (lock):** `FOR UPDATE` serializes concurrent claims within the same moment
-- **Layer 3 (Stripe):** Matching idempotency key `return_refund_${returnId}` prevents a second charge even if both paths reach Stripe
+- **Layer 3 (Stripe):** Matching idempotency key `return_refund_${returnId}` prevents a second charge even if both paths somehow reach Stripe
+
+**`refund_processing` added to `BLOCKING_RETURN_STATUSES`** (`escrowService.ts:48`) so that `hasBlockingReturn()` blocks escrow release while a return refund is in flight.
 
 ---
 

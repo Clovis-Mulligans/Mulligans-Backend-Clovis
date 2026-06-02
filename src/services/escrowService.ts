@@ -45,7 +45,7 @@ const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 da
 const BLOCKING_DISPUTE_STATUSES = ['open', 'counter_offered', 'escalated'];
 
 // Return statuses that BLOCK escrow release
-const BLOCKING_RETURN_STATUSES = ['pending', 'approved', 'awaiting_address', 'label_created', 'shipped', 'delivered'];
+const BLOCKING_RETURN_STATUSES = ['pending', 'approved', 'awaiting_address', 'label_created', 'shipped', 'delivered', 'refund_processing'];
 
 // ============================================
 // HELPER: Check if order has blocking dispute
