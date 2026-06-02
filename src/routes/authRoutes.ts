@@ -2,6 +2,7 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
+import { validateSendingAddress } from '../lib/sellerAddress';
 import {
   CognitoIdentityProviderClient,
   SignUpCommand,
@@ -652,6 +653,7 @@ router.get('/profile', authenticateToken, async (req: any, res: Response) => {
         rating: true,
         location: true,
         created_at: true,
+        sending_address: true,
       },
     });
 
@@ -663,6 +665,65 @@ router.get('/profile', authenticateToken, async (req: any, res: Response) => {
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Failed to get profile' });
+  }
+});
+
+/**
+ * Get current user's sending address
+ */
+router.get('/sending-address', authenticateToken, async (req: any, res: Response) => {
+  try {
+    const userId = req.user.sub || req.user.id;
+    const user = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { sending_address: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ sending_address: user.sending_address || null });
+  } catch (error) {
+    console.error('Get sending address error:', error);
+    res.status(500).json({ error: 'Failed to get sending address' });
+  }
+});
+
+/**
+ * Save/update sending address (seller's sending + return address)
+ */
+router.put('/sending-address', authenticateToken, async (req: any, res: Response) => {
+  try {
+    const userId = req.user.sub || req.user.id;
+    const { sending_address } = req.body;
+
+    const validation = validateSendingAddress(sending_address);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    const sanitized = {
+      name: (sending_address.name || '').trim().slice(0, 200),
+      line1: sending_address.line1.trim().slice(0, 200),
+      line2: sending_address.line2 ? sending_address.line2.trim().slice(0, 200) : null,
+      city: sending_address.city.trim().slice(0, 100),
+      postal_code: sending_address.postal_code.trim().toUpperCase().slice(0, 20),
+      country: sending_address.country.trim().toUpperCase().slice(0, 2),
+    };
+
+    await prisma.users.update({
+      where: { id: userId },
+      data: {
+        sending_address: sanitized,
+        updated_at: new Date(),
+      },
+    });
+
+    res.json({ success: true, sending_address: sanitized });
+  } catch (error) {
+    console.error('Update sending address error:', error);
+    res.status(500).json({ error: 'Failed to update sending address' });
   }
 });
 

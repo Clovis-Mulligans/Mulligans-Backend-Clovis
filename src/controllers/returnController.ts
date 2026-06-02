@@ -10,6 +10,7 @@ import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
+import { getSellerSendingAddress } from '../lib/sellerAddress';
 import { sendPushNotification } from './pushNotificationController';
 import { 
   sendReturnAddressNeeded,
@@ -38,51 +39,8 @@ interface AuthenticatedRequest extends Request {
 }
 
 // ============================================
-// GET SELLER'S ADDRESS FROM STRIPE
-// ============================================
-async function getSellerAddressFromStripe(stripeConnectId: string): Promise<{
-  name: string;
-  line1: string;
-  line2?: string;
-  city: string;
-  state?: string;
-  postal_code: string;
-  country: string;
-} | null> {
-  try {
-    const account = await stripe.accounts.retrieve(stripeConnectId);
-    
-    // Try individual address first (for individual accounts)
-    const address = account.individual?.address || 
-                    account.business_profile?.support_address ||
-                    account.company?.address;
-    
-    if (!address || !address.postal_code || !address.line1) {
-      return null;
-    }
-
-    const name = account.individual?.first_name 
-      ? `${account.individual.first_name} ${account.individual.last_name || ''}`
-      : account.business_profile?.name || 'Seller';
-
-    return {
-      name: name.trim(),
-      line1: address.line1,
-      line2: address.line2 || undefined,
-      city: address.city || '',
-      state: address.state || undefined,
-      postal_code: address.postal_code,
-      country: address.country || 'GB',
-    };
-  } catch (error) {
-    console.error('❌ Error fetching seller address from Stripe:', error);
-    return null;
-  }
-}
-
-// ============================================
-// CHECK SELLER STRIPE STATUS
-// Returns whether seller has completed Stripe setup with address
+// CHECK SELLER ADDRESS STATUS
+// Returns whether seller has a stored sending address
 // GET /api/returns/seller-status/:orderId
 // ============================================
 export const checkSellerStripeStatus = async (req: AuthenticatedRequest, res: Response) => {
@@ -108,33 +66,16 @@ export const checkSellerStripeStatus = async (req: AuthenticatedRequest, res: Re
       return res.status(404).json({ success: false, error: 'Order not found' });
     }
 
-    const seller = order.users_orders_seller_idTousers;
-    
-    // Check if seller has Stripe Connect
-    if (!seller.stripe_connect_id) {
-      return res.json({
-        success: true,
-        data: {
-          hasStripeAccount: false,
-          hasAddress: false,
-          canReceiveReturns: false,
-          message: 'Seller has not set up payment account',
-        },
-      });
-    }
-
-    // Check if we can get their address
-    const address = await getSellerAddressFromStripe(seller.stripe_connect_id);
+    const sellerAddr = await getSellerSendingAddress(order.seller_id);
 
     return res.json({
       success: true,
       data: {
-        hasStripeAccount: true,
-        hasAddress: !!address,
-        canReceiveReturns: !!address,
-        message: address 
-          ? 'Seller can receive returns' 
-          : 'Seller needs to complete address in Stripe',
+        hasAddress: sellerAddr.isReal,
+        canReceiveReturns: sellerAddr.isReal,
+        message: sellerAddr.isReal
+          ? 'Seller can receive returns'
+          : 'Seller needs to set their sending address',
       },
     });
   } catch (error: any) {
@@ -201,18 +142,9 @@ export const createReturnRequest = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    // Check seller has Stripe address
     const seller = order.users_orders_seller_idTousers;
-    let initialStatus = 'approved';
-    
-    if (!seller.stripe_connect_id) {
-      initialStatus = 'awaiting_address';
-    } else {
-      const address = await getSellerAddressFromStripe(seller.stripe_connect_id);
-      if (!address) {
-        initialStatus = 'awaiting_address';
-      }
-    }
+    const sellerAddr = await getSellerSendingAddress(order.seller_id);
+    let initialStatus = sellerAddr.isReal ? 'approved' : 'awaiting_address';
 
     // Calculate refund amount (100% minus return shipping will be calculated later)
     const refundAmount = parseFloat(order.listing_price?.toString() || order.amount.toString());
@@ -375,19 +307,13 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
     const buyer = order.users_orders_buyer_idTousers;
     const seller = order.users_orders_seller_idTousers;
 
-    // Get seller's address from Stripe
-    if (!seller.stripe_connect_id) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Seller has not set up their payment account' 
-      });
-    }
-
-    const sellerAddress = await getSellerAddressFromStripe(seller.stripe_connect_id);
-    if (!sellerAddress) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Could not retrieve seller address. Seller needs to complete Stripe setup.' 
+    const sellerAddress = await getSellerSendingAddress(order.seller_id);
+    if (!sellerAddress.isReal || !sellerAddress.address) {
+      return res.status(400).json({
+        success: false,
+        error: 'sending_address_required',
+        addressRequired: true,
+        reason: sellerAddress.failureReason,
       });
     }
 
@@ -412,7 +338,7 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
 
     console.log('📦 Getting return shipping rates');
     console.log('📍 From (buyer):', buyerAddress);
-    console.log('📍 To (seller):', sellerAddress);
+    console.log('📍 To (seller):', sellerAddress.address);
 
     // Create shipment for rates (REVERSED: buyer → seller)
     const shipment = await shippo.shipments.create({
@@ -426,13 +352,12 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
         country: buyerAddress.country || 'GB',
       },
       addressTo: {
-        name: sellerAddress.name,
-        street1: sellerAddress.line1,
-        street2: sellerAddress.line2 || '',
-        city: sellerAddress.city,
-        state: sellerAddress.state || '',
-        zip: sellerAddress.postal_code,
-        country: sellerAddress.country,
+        name: sellerAddress.address.name,
+        street1: sellerAddress.address.line1,
+        street2: sellerAddress.address.line2 || '',
+        city: sellerAddress.address.city,
+        zip: sellerAddress.address.postal_code,
+        country: sellerAddress.address.country,
       },
       parcels: [{
         length: parcelConfig.length,
@@ -1200,13 +1125,8 @@ export const getReturnRequest = async (req: AuthenticatedRequest, res: Response)
       });
     }
 
-    // Check seller address status if needed
-    let sellerHasAddress = false;
-    const seller = returnRequest.orders.users_orders_seller_idTousers;
-    if (seller.stripe_connect_id) {
-      const address = await getSellerAddressFromStripe(seller.stripe_connect_id);
-      sellerHasAddress = !!address;
-    }
+    const sellerAddrResult = await getSellerSendingAddress(returnRequest.orders.seller_id);
+    const sellerHasAddress = sellerAddrResult.isReal;
 
     res.json({
       success: true,

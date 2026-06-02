@@ -6,7 +6,8 @@
 import { prisma } from '../lib/prisma';
 import { normalizeCarrierName } from '../utils/carrierName';
 import { Shippo } from 'shippo';
-import { PARCEL_SIZES, getSellerAddress, SellerAddress } from '../controllers/shippingController';
+import { PARCEL_SIZES } from '../controllers/shippingController';
+import { getSellerSendingAddress } from '../lib/sellerAddress';
 
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
@@ -52,57 +53,6 @@ const TRACKED_KEYWORDS = [
   'parcel', 'guaranteed', 'special delivery', 'recorded', 'parcelforce',
   'dpd', 'evri', 'yodel', 'ups', 'fedex', 'dhl', 'hermes',
 ];
-
-// ============================================
-// POSTCODE → CITY MAPPING
-// (Duplicated from shippingController — same function used for rate estimation)
-// ============================================
-
-const getEstimatedCity = (postcode: string): string => {
-  if (!postcode) return 'London';
-  const prefix = postcode.toUpperCase().replace(/[0-9]/g, '').trim();
-  const cityMap: { [key: string]: string } = {
-    'RH': 'Reigate', 'GU': 'Guildford', 'KT': 'Kingston',
-    'CR': 'Croydon', 'SM': 'Sutton', 'TW': 'Twickenham',
-    'BR': 'Bromley', 'DA': 'Dartford', 'ME': 'Maidstone',
-    'TN': 'Tunbridge Wells', 'CT': 'Canterbury', 'BN': 'Brighton',
-    'PO': 'Portsmouth', 'SO': 'Southampton', 'BH': 'Bournemouth',
-    'SP': 'Salisbury', 'BA': 'Bath', 'BS': 'Bristol',
-    'GL': 'Gloucester', 'OX': 'Oxford', 'HP': 'Hemel Hempstead',
-    'SL': 'Slough', 'RG': 'Reading', 'MK': 'Milton Keynes',
-    'NN': 'Northampton', 'CV': 'Coventry', 'B': 'Birmingham',
-    'WS': 'Walsall', 'WV': 'Wolverhampton', 'DY': 'Dudley',
-    'ST': 'Stoke-on-Trent', 'DE': 'Derby', 'NG': 'Nottingham',
-    'LE': 'Leicester', 'PE': 'Peterborough', 'CB': 'Cambridge',
-    'IP': 'Ipswich', 'NR': 'Norwich', 'CO': 'Colchester',
-    'CM': 'Chelmsford', 'SS': 'Southend', 'RM': 'Romford',
-    'IG': 'Ilford', 'EN': 'Enfield', 'AL': 'St Albans',
-    'WD': 'Watford', 'HA': 'Harrow', 'UB': 'Uxbridge',
-    'LU': 'Luton', 'SG': 'Stevenage', 'HU': 'Hull',
-    'YO': 'York', 'LS': 'Leeds', 'BD': 'Bradford',
-    'HX': 'Halifax', 'HD': 'Huddersfield', 'WF': 'Wakefield',
-    'S': 'Sheffield', 'DN': 'Doncaster', 'LN': 'Lincoln',
-    'M': 'Manchester', 'OL': 'Oldham', 'BL': 'Bolton',
-    'WN': 'Wigan', 'WA': 'Warrington', 'L': 'Liverpool',
-    'CH': 'Chester', 'CW': 'Crewe', 'SK': 'Stockport',
-    'PR': 'Preston', 'BB': 'Blackburn', 'FY': 'Blackpool',
-    'LA': 'Lancaster', 'CA': 'Carlisle', 'NE': 'Newcastle',
-    'SR': 'Sunderland', 'DH': 'Durham', 'TS': 'Middlesbrough',
-    'DL': 'Darlington', 'EH': 'Edinburgh', 'G': 'Glasgow',
-    'PA': 'Paisley', 'KA': 'Kilmarnock', 'ML': 'Motherwell',
-    'FK': 'Falkirk', 'KY': 'Kirkcaldy', 'DD': 'Dundee',
-    'AB': 'Aberdeen', 'PH': 'Perth', 'IV': 'Inverness',
-    'CF': 'Cardiff', 'NP': 'Newport', 'SA': 'Swansea',
-    'LL': 'Llandudno', 'SY': 'Shrewsbury', 'HR': 'Hereford',
-    'WR': 'Worcester', 'DT': 'Dorchester', 'EX': 'Exeter',
-    'PL': 'Plymouth', 'TQ': 'Torquay', 'TR': 'Truro',
-    'TA': 'Taunton',
-  };
-  if (['E', 'EC', 'N', 'NW', 'SE', 'SW', 'W', 'WC'].includes(prefix)) {
-    return 'London';
-  }
-  return cityMap[prefix] || 'London';
-};
 
 // ============================================
 // MAIN FUNCTION: AUTO-PURCHASE LABEL
@@ -168,11 +118,11 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
       return { success: false, orderId, skippedReason: 'seller_not_verified' };
     }
 
-    // Gate 2: Seller must have a real address from Stripe
-    const realSellerAddress = await getSellerAddress(order.seller_id);
-    if (!realSellerAddress.isReal) {
-      console.log(`[AUTO-SHIP] Gate 2 fail: no valid address for seller ${seller?.id} (reason: ${realSellerAddress.failureReason})`);
-      return { success: false, orderId, skippedReason: 'no_valid_address' };
+    // Gate 2: Seller must have a stored sending address
+    const sellerAddr = await getSellerSendingAddress(order.seller_id);
+    if (!sellerAddr.isReal || !sellerAddr.address) {
+      console.log(`[AUTO-SHIP] Gate 2 fail: no sending address for seller ${seller?.id}`);
+      return { success: false, orderId, skippedReason: 'no_address' as any };
     }
 
     // 4. Get parcel config from PARCEL_SIZES
@@ -187,15 +137,16 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
     }
 
     // 6. Create Shippo shipment to get rates
-    console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${realSellerAddress.postcode} → ${shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '?'}`);
+    console.log(`[AUTO-SHIP] Requesting rates: ${parcelSize} parcel, ${sellerAddr.address.postal_code} → ${shippingAddress.postal_code || shippingAddress.postalCode || shippingAddress.postcode || '?'}`);
 
     const shipment = await shippo.shipments.create({
       addressFrom: {
-        name: seller?.display_name || 'Seller',
-        street1: realSellerAddress.street1,
-        city: realSellerAddress.city,
-        zip: realSellerAddress.postcode,
-        country: 'GB',
+        name: sellerAddr.address.name,
+        street1: sellerAddr.address.line1,
+        street2: sellerAddr.address.line2 || '',
+        city: sellerAddr.address.city,
+        zip: sellerAddr.address.postal_code,
+        country: sellerAddr.address.country,
       },
       addressTo: {
         name: shippingAddress.name || 'Buyer',

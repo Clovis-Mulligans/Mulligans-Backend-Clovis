@@ -253,6 +253,7 @@ model users {
   default_shipping_cost                        Decimal?          @db.Decimal(10, 2)
   offers_free_shipping                         Boolean           @default(false)
   postcode_area                                String?
+  sending_address                              Json?
   preferred_carriers                           String?
   email_notifications                          Boolean           @default(true)
   marketing_emails                             Boolean           @default(false)

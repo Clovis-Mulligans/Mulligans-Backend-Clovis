@@ -9,12 +9,8 @@ import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { Shippo } from 'shippo';
 import { sendPushNotification } from './pushNotificationController';
-import Stripe from 'stripe';
 import { normalizeCarrierName } from '../utils/carrierName';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-11-17.clover',
-});
+import { getSellerSendingAddress, SellerAddressResult } from '../lib/sellerAddress';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { sendDeliveryConfirmation } from '../services/emailService';
@@ -24,134 +20,6 @@ import { sendDeliveryConfirmation } from '../services/emailService';
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
 });
-
-// Determine city based on postcode prefix for rate estimation
-    function getEstimatedCity(postcode: string): string {
-      if (!postcode) return 'London';
-      const prefix = postcode.toUpperCase().replace(/[0-9]/g, '').trim();
-      const cityMap: { [key: string]: string } = {
-        'RH': 'Reigate', 'GU': 'Guildford', 'KT': 'Kingston',
-        'CR': 'Croydon', 'SM': 'Sutton', 'TW': 'Twickenham',
-        'BR': 'Bromley', 'DA': 'Dartford', 'ME': 'Maidstone',
-        'TN': 'Tunbridge Wells', 'CT': 'Canterbury', 'BN': 'Brighton',
-        'PO': 'Portsmouth', 'SO': 'Southampton', 'BH': 'Bournemouth',
-        'SP': 'Salisbury', 'BA': 'Bath', 'BS': 'Bristol',
-        'GL': 'Gloucester', 'OX': 'Oxford', 'HP': 'Hemel Hempstead',
-        'SL': 'Slough', 'RG': 'Reading', 'MK': 'Milton Keynes',
-        'NN': 'Northampton', 'CV': 'Coventry', 'B': 'Birmingham',
-        'WS': 'Walsall', 'WV': 'Wolverhampton', 'DY': 'Dudley',
-        'ST': 'Stoke-on-Trent', 'DE': 'Derby', 'NG': 'Nottingham',
-        'LE': 'Leicester', 'PE': 'Peterborough', 'CB': 'Cambridge',
-        'IP': 'Ipswich', 'NR': 'Norwich', 'CO': 'Colchester',
-        'CM': 'Chelmsford', 'SS': 'Southend', 'RM': 'Romford',
-        'IG': 'Ilford', 'EN': 'Enfield', 'AL': 'St Albans',
-        'WD': 'Watford', 'HA': 'Harrow', 'UB': 'Uxbridge',
-        'LU': 'Luton', 'SG': 'Stevenage', 'HU': 'Hull',
-        'YO': 'York', 'LS': 'Leeds', 'BD': 'Bradford',
-        'HX': 'Halifax', 'HD': 'Huddersfield', 'WF': 'Wakefield',
-        'S': 'Sheffield', 'DN': 'Doncaster', 'LN': 'Lincoln',
-        'M': 'Manchester', 'OL': 'Oldham', 'BL': 'Bolton',
-        'WN': 'Wigan', 'WA': 'Warrington', 'L': 'Liverpool',
-        'CH': 'Chester', 'CW': 'Crewe', 'SK': 'Stockport',
-        'PR': 'Preston', 'BB': 'Blackburn', 'FY': 'Blackpool',
-        'LA': 'Lancaster', 'CA': 'Carlisle', 'NE': 'Newcastle',
-        'SR': 'Sunderland', 'DH': 'Durham', 'TS': 'Middlesbrough',
-        'DL': 'Darlington', 'EH': 'Edinburgh', 'G': 'Glasgow',
-        'PA': 'Paisley', 'KA': 'Kilmarnock', 'ML': 'Motherwell',
-        'FK': 'Falkirk', 'KY': 'Kirkcaldy', 'DD': 'Dundee',
-        'AB': 'Aberdeen', 'PH': 'Perth', 'IV': 'Inverness',
-        'CF': 'Cardiff', 'NP': 'Newport', 'SA': 'Swansea',
-        'LL': 'Llandudno', 'SY': 'Shrewsbury', 'HR': 'Hereford',
-        'WR': 'Worcester', 'DT': 'Dorchester', 'EX': 'Exeter',
-        'PL': 'Plymouth', 'TQ': 'Torquay', 'TR': 'Truro',
-        'TA': 'Taunton',
-      }
-      // Check for London postcodes
-      if (['E', 'EC', 'N', 'NW', 'SE', 'SW', 'W', 'WC'].includes(prefix)) {
-        return 'London';
-      }
-      return cityMap[prefix] || 'London';
-    };
-
-/**
- * Typed result from getSellerAddress.
- * isReal: true when Stripe returned a usable address, false otherwise.
- */
-export type SellerAddress = {
-  street1: string;
-  city: string;
-  postcode: string;
-  country: string;
-  isReal: boolean;
-  failureReason?: 'no_stripe_connect' | 'stripe_api_error' | 'no_address_on_account' | 'no_postcode';
-};
-
-/**
- * Get seller's real address from Stripe Connect.
- * Returns isReal: false with a failureReason when no valid address is available.
- */
-export async function getSellerAddress(sellerId: string): Promise<SellerAddress> {
-  const seller = await prisma.users.findUnique({
-    where: { id: sellerId },
-    select: { stripe_connect_id: true, postcode_area: true },
-  });
-
-  if (!seller?.stripe_connect_id) {
-    return {
-      street1: '',
-      city: getEstimatedCity(seller?.postcode_area || ''),
-      postcode: seller?.postcode_area || '',
-      country: 'GB',
-      isReal: false,
-      failureReason: 'no_stripe_connect',
-    };
-  }
-
-  try {
-    const account = await stripe.accounts.retrieve(seller.stripe_connect_id);
-    const addr = (account as any).individual?.address || (account as any).company?.address;
-
-    if (!addr?.line1) {
-      return {
-        street1: '',
-        city: getEstimatedCity(seller.postcode_area || ''),
-        postcode: seller.postcode_area || '',
-        country: 'GB',
-        isReal: false,
-        failureReason: 'no_address_on_account',
-      };
-    }
-
-    if (!addr.postal_code && !seller.postcode_area) {
-      return {
-        street1: addr.line1,
-        city: addr.city || getEstimatedCity(''),
-        postcode: '',
-        country: 'GB',
-        isReal: false,
-        failureReason: 'no_postcode',
-      };
-    }
-
-    return {
-      street1: addr.line1,
-      city: addr.city || getEstimatedCity(seller.postcode_area || ''),
-      postcode: addr.postal_code || seller.postcode_area || '',
-      country: 'GB',
-      isReal: true,
-    };
-  } catch (err) {
-    console.warn('[SHIPPING] Could not retrieve seller Stripe address:', err);
-    return {
-      street1: '',
-      city: getEstimatedCity(seller.postcode_area || ''),
-      postcode: seller.postcode_area || '',
-      country: 'GB',
-      isReal: false,
-      failureReason: 'stripe_api_error',
-    };
-  }
-}
 
 // ============================================
 // SHIPPING PRICE CONSTANTS
@@ -252,7 +120,7 @@ export const getParcelSizes = async (req: Request, res: Response) => {
 // ============================================
 export const getShippingRates = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { orderId, senderAddress } = req.body;
+    const { orderId } = req.body;
 
     if (!orderId) {
       return res.status(400).json({
@@ -306,43 +174,29 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
       });
     }
 
-    // Determine origin address: use senderAddress if provided, else Stripe Connect
-    let originStreet1: string;
-    let originCity: string;
-    let originPostcode: string;
-
-    if (senderAddress?.street1 && senderAddress?.postcode) {
-      originStreet1 = senderAddress.street1;
-      originCity = senderAddress.city || getEstimatedCity(senderAddress.postcode);
-      originPostcode = senderAddress.postcode;
-      console.log('[SHIPPING] Using manual senderAddress for rates');
-    } else {
-      const sellerAddr = await getSellerAddress(order.seller_id);
-      if (!sellerAddr.isReal) {
-        return res.status(400).json({
-          success: false,
-          error: 'No valid origin address available. Please provide your address or complete Stripe verification.',
-          addressRequired: true,
-          reason: sellerAddr.failureReason,
-        });
-      }
-      originStreet1 = sellerAddr.street1;
-      originCity = sellerAddr.city;
-      originPostcode = sellerAddr.postcode;
+    const sellerAddr = await getSellerSendingAddress(order.seller_id);
+    if (!sellerAddr.isReal || !sellerAddr.address) {
+      return res.status(400).json({
+        success: false,
+        error: 'sending_address_required',
+        addressRequired: true,
+        reason: sellerAddr.failureReason,
+      });
     }
 
     console.log('📦 Getting Shippo rates for order:', orderId);
-    console.log('📍 Origin:', originPostcode);
+    console.log('📍 Origin:', sellerAddr.address.postal_code);
     console.log('📍 Buyer address:', JSON.stringify(shippingAddress, null, 2));
     console.log('🛡️ Insurance value:', order.insured_value?.toString() || order.amount.toString());
 
     const shipment = await shippo.shipments.create({
       addressFrom: {
-        name: seller?.display_name || 'Seller',
-        street1: originStreet1,
-        city: originCity,
-        zip: originPostcode,
-        country: 'GB',
+        name: sellerAddr.address.name,
+        street1: sellerAddr.address.line1,
+        street2: sellerAddr.address.line2 || '',
+        city: sellerAddr.address.city,
+        zip: sellerAddr.address.postal_code,
+        country: sellerAddr.address.country,
       },
       addressTo: {
         name: shippingAddress.name || 'Buyer',
@@ -477,7 +331,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
 // ============================================
 export const createShippingLabel = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { orderId, rateId, senderAddress } = req.body;
+    const { orderId, rateId } = req.body;
 
     if (!orderId || !rateId) {
       return res.status(400).json({
