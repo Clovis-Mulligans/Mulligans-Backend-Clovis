@@ -411,8 +411,8 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
         rates,
         parcelSize,
         sellerAddress: {
-          city: sellerAddress.city,
-          postcode: sellerAddress.postal_code,
+          city: sellerAddress.address.city,
+          postcode: sellerAddress.address.postal_code,
         },
       },
     });
