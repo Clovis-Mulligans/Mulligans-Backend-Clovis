@@ -510,92 +510,104 @@ router.patch('/returns/:id', adminAuth, async (req, res) => {
 router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, res) => {
   try {
     const { amount } = req.body;
-    
-    const returnRequest = await prisma.return_requests.findUnique({
-      where: { id: req.params.id },
-      include: {
-        orders: {
-          select: {
-            id: true,
-            amount: true,
-            quantity: true,
-            stripe_payment_intent_id: true,
-            listing_id: true,
+    const returnId = req.params.id;
+
+    // Row-lock the return to serialize against the cron (autoProcessReturnRefunds)
+    const lockedReturn = await prisma.$transaction(async (tx) => {
+      const rows: any[] = await tx.$queryRaw`
+        SELECT id FROM return_requests WHERE id = ${returnId} AND stripe_refund_id IS NULL FOR UPDATE`;
+      if (rows.length === 0) return null;
+      return tx.return_requests.findUnique({
+        where: { id: returnId },
+        include: {
+          orders: {
+            select: {
+              id: true,
+              amount: true,
+              quantity: true,
+              stripe_payment_intent_id: true,
+              listing_id: true,
+            },
           },
         },
-      },
+      });
     });
 
-    if (!returnRequest) {
-      return res.status(404).json({ error: 'Return not found' });
+    if (!lockedReturn) {
+      return res.status(400).json({ error: 'Return not found or already refunded' });
     }
 
-    if (returnRequest.stripe_refund_id) {
-      return res.status(400).json({ error: 'Return already refunded' });
-    }
-
-    if (!returnRequest.orders.stripe_payment_intent_id) {
+    if (!lockedReturn.orders.stripe_payment_intent_id) {
       return res.status(400).json({ error: 'No payment intent found for this order' });
     }
 
-    // Calculate refund amount
-    const refundAmount = amount || (returnRequest.refund_amount ? parseFloat(returnRequest.refund_amount.toString()) : parseFloat(returnRequest.orders.amount.toString()));
+    const orderAmount = parseFloat(lockedReturn.orders.amount.toString());
+    const refundAmount = amount || (lockedReturn.refund_amount ? parseFloat(lockedReturn.refund_amount.toString()) : orderAmount);
 
-    // Process Stripe refund
+    // Upper-bound validation
+    if (refundAmount > orderAmount) {
+      return res.status(400).json({ error: `Refund amount (£${refundAmount.toFixed(2)}) cannot exceed order amount (£${orderAmount.toFixed(2)})` });
+    }
+    if (refundAmount <= 0) {
+      return res.status(400).json({ error: 'Refund amount must be greater than zero' });
+    }
+
+    // Idempotency key matches the cron's key — Stripe dedupes if both paths fire
     const refund = await stripe.refunds.create({
-      payment_intent: returnRequest.orders.stripe_payment_intent_id,
+      payment_intent: lockedReturn.orders.stripe_payment_intent_id,
       amount: Math.round(refundAmount * 100),
       reason: 'requested_by_customer',
       metadata: {
-        return_id: returnRequest.id,
-        order_id: returnRequest.order_id,
+        return_id: returnId,
+        order_id: lockedReturn.order_id,
         admin_processed: 'true',
       },
+    }, {
+      idempotencyKey: `return_refund_${returnId}`,
     });
 
     const now = new Date();
 
-    // Update return request
-    await prisma.return_requests.update({
-      where: { id: req.params.id },
-      data: {
-        status: 'completed',
-        completed_at: now,
-        refund_amount: refundAmount,
-        stripe_refund_id: refund.id,
-        updated_at: now,
-      },
-    });
+    // Persist refund ID on both tables atomically
+    await prisma.$transaction([
+      prisma.return_requests.update({
+        where: { id: returnId },
+        data: {
+          status: 'completed',
+          completed_at: now,
+          refund_amount: refundAmount,
+          stripe_refund_id: refund.id,
+          updated_at: now,
+        },
+      }),
+      prisma.orders.update({
+        where: { id: lockedReturn.order_id },
+        data: {
+          status: 'returned',
+          refunded_at: now,
+          refund_amount: refundAmount,
+          stripe_refund_id: refund.id,
+          updated_at: now,
+        },
+      }),
+    ]);
 
-    // Update order status
-    await prisma.orders.update({
-      where: { id: returnRequest.order_id },
-      data: {
-        status: 'returned',
-        refunded_at: now,
-        refund_amount: refundAmount,
-        stripe_refund_id: refund.id,
-        updated_at: now,
-      },
-    });
-
-    // Return refund: item came back to seller, restore listing stock
-    if (returnRequest.orders.listing_id) {
+    if (lockedReturn.orders.listing_id) {
       await restoreListingStock(
         prisma,
-        returnRequest.orders.listing_id,
-        returnRequest.orders.quantity || 1,
+        lockedReturn.orders.listing_id,
+        lockedReturn.orders.quantity || 1,
         'return_refund',
       );
     }
 
-    console.log(`✅ Admin processed refund for return ${req.params.id}: £${refundAmount.toFixed(2)}`);
+    console.log(`✅ Admin processed refund for return ${returnId}: £${refundAmount.toFixed(2)}`);
 
     await logAdminAction(
       AUDIT_ACTIONS.PROCESS_REFUND,
       'return',
-      req.params.id,
-      { amount: refundAmount, stripe_refund_id: refund.id, order_id: returnRequest.order_id },
+      returnId,
+      { amount: refundAmount, stripe_refund_id: refund.id, order_id: lockedReturn.order_id },
       req
     );
 

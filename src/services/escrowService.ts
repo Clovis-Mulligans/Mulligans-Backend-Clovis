@@ -852,23 +852,22 @@ export async function autoProcessReturnRefunds(): Promise<void> {
         const order = returnRequest.orders;
         console.log(`[ESCROW] Processing return ${returnRequest.id} for order ${order.id}`);
 
-        // ✅ SAFETY CHECK 1: Re-verify return status
-        const freshReturn = await prisma.return_requests.findUnique({
-          where: { id: returnRequest.id },
-          select: { status: true, stripe_refund_id: true },
+        // Row-lock the return to serialize against concurrent cron runs and admin endpoint
+        const lockedReturn = await prisma.$transaction(async (tx) => {
+          const rows: any[] = await tx.$queryRaw`
+            SELECT id FROM return_requests WHERE id = ${returnRequest.id} AND status = 'delivered' AND stripe_refund_id IS NULL FOR UPDATE`;
+          if (rows.length === 0) return null;
+          return tx.return_requests.findUnique({
+            where: { id: returnRequest.id },
+            select: { id: true, status: true, stripe_refund_id: true, refund_amount: true, shipping_deducted: true },
+          });
         });
 
-        if (freshReturn?.status !== 'delivered') {
-          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} status changed to ${freshReturn?.status}, skipping`);
+        if (!lockedReturn) {
+          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} already processed or status changed, skipping`);
           continue;
         }
 
-        if (freshReturn?.stripe_refund_id) {
-          console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} already has refund ${freshReturn.stripe_refund_id}, skipping`);
-          continue;
-        }
-
-        // ✅ SAFETY CHECK 2: Check if seller disputed the returned item
         if (await returnHasBlockingDispute(order.id)) {
           console.log(`[ESCROW] ⚠️ Return ${returnRequest.id} has active dispute from seller, skipping refund`);
           continue;
@@ -881,9 +880,8 @@ export async function autoProcessReturnRefunds(): Promise<void> {
         const listingTitle = order.listing_title || order.listings?.title || 'Item';
         const listingImage = order.listings?.images?.[0]?.image_url || order.listing_image || null;
 
-        // Calculate refund amount
-        const refundAmount = parseFloat(returnRequest.refund_amount?.toString() || '0');
-        const shippingDeducted = parseFloat(returnRequest.shipping_deducted?.toString() || '0');
+        const refundAmount = parseFloat(lockedReturn.refund_amount?.toString() || '0');
+        const shippingDeducted = parseFloat(lockedReturn.shipping_deducted?.toString() || '0');
 
         console.log(`[ESCROW] Refund calculation:`);
         console.log(`  - Refund amount: £${refundAmount.toFixed(2)}`);
@@ -896,14 +894,13 @@ export async function autoProcessReturnRefunds(): Promise<void> {
 
         let refundId: string | null = null;
 
-        // Process Stripe refund
         if (order.stripe_payment_intent_id) {
           const refundAmountPence = Math.round(refundAmount * 100);
 
           try {
             const refund = await stripe.refunds.create({
               payment_intent: order.stripe_payment_intent_id,
-              amount: refundAmountPence, // Partial refund (excludes shipping if buyer paid)
+              amount: refundAmountPence,
               reason: 'requested_by_customer',
               metadata: {
                 order_id: order.id,
@@ -914,7 +911,7 @@ export async function autoProcessReturnRefunds(): Promise<void> {
                 shipping_deducted: shippingDeducted.toFixed(2),
               },
             }, {
-              idempotencyKey: `return_refund_${returnRequest.id}`, // ✅ Prevent double refund
+              idempotencyKey: `return_refund_${returnRequest.id}`,
             });
 
             refundId = refund.id;
@@ -924,33 +921,33 @@ export async function autoProcessReturnRefunds(): Promise<void> {
               console.log(`[ESCROW] ⚠️ Order ${order.id} already fully refunded in Stripe`);
             } else {
               console.error(`[ESCROW] ❌ Refund failed for return ${returnRequest.id}:`, refundError.message);
-              continue; // Don't update status if refund failed
+              continue;
             }
           }
         }
 
-        // ✅ Update return request status IMMEDIATELY after successful refund
-        await prisma.return_requests.update({
-          where: { id: returnRequest.id },
-          data: {
-            status: 'completed',
-            completed_at: now,
-            stripe_refund_id: refundId, // ✅ Store refund ID to prevent double processing
-            updated_at: now,
-          },
-        });
-
-        // Update order status to returned
-        await prisma.orders.update({
-          where: { id: order.id },
-          data: {
-            status: 'returned',
-            refunded_at: now,
-            refund_amount: refundAmount,
-            stripe_refund_id: refundId,
-            updated_at: now,
-          },
-        });
+        // Persist refund ID on both tables atomically
+        await prisma.$transaction([
+          prisma.return_requests.update({
+            where: { id: returnRequest.id },
+            data: {
+              status: 'completed',
+              completed_at: now,
+              stripe_refund_id: refundId,
+              updated_at: now,
+            },
+          }),
+          prisma.orders.update({
+            where: { id: order.id },
+            data: {
+              status: 'returned',
+              refunded_at: now,
+              refund_amount: refundAmount,
+              stripe_refund_id: refundId,
+              updated_at: now,
+            },
+          }),
+        ]);
 
         // Relist the item (seller can sell it again)
         if (order.listing_id) {

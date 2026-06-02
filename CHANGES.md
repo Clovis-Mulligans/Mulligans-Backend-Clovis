@@ -1,94 +1,73 @@
-# CHANGES — Seller Sending/Return Address (Backend)
+# CHANGES — Brief 3a: Return-Refund Money-Safety Bulletproofing
 
-**Branch:** `task/seller-sending-address`  
-**Base:** `main` (`347ffc9`)  
+**Branch:** `task/return-refund-safety`  
+**Base:** `main` (`9fa0c92`)  
 **Repo:** `Mulligans-Backend` → `Clovis-Mulligans/Mulligans-Backend-Clovis`
 
 ## Summary
 
-Moves the seller sender address from a live Stripe lookup to an authoritative `users.sending_address` JSON field. One shared function replaces two divergent Stripe-calling implementations. The client `senderAddress` override is removed. Both `getEstimatedCity` duplicates are removed.
+Closes a real double-refund hole in the return flow by extending the Brief 2 money-safety pattern (row locks + idempotency keys + atomic persistence) to both return-refund paths: the daily cron and the admin manual endpoint.
 
-## Migration
+**No migration.** No schema change. No API contract change.
 
-`prisma/migrations/20260602000000_add_seller_sending_address/migration.sql`  
-Adds `sending_address JSONB` (nullable) to `users` table.  
-**Must be applied before/with code deploy.** Additive-nullable — rollback-safe.
+---
 
-## Deploy ordering
+## Hole 1 — autoProcessReturnRefunds: added row lock + atomic persistence
 
-1. Run the Prisma migration (`npx prisma migrate deploy`)
-2. Deploy the updated backend code
-3. Sellers will need to set their sending address via the new PUT endpoint (frontend brief follows)
-4. Until a seller sets their address, auto-ship skips gracefully and manual label generation returns `{ error: 'sending_address_required', addressRequired: true }`
+**File:** `escrowService.ts:799-1050`
 
-## Design decisions
+**Before:** The cron used a plain `findMany` + per-row re-check (`findUnique` for status + `stripe_refund_id: null`) without any transaction or row lock. Two concurrent executions could both pass the check.
 
-**JSON field shape:** `{ name, line1, line2, city, postal_code, country }` — matches `orders.shipping_address` for consistency. Stored as `Json?` (Prisma) / `JSONB` (Postgres) for flexibility. Chose JSON over discrete columns because (a) the address is always read/written as a unit, (b) matches existing patterns, (c) simpler migration.
+**After:** Each return is processed inside a `prisma.$transaction` with `SELECT id FROM return_requests WHERE id = ${id} AND status = 'delivered' AND stripe_refund_id IS NULL FOR UPDATE`. This acquires a row-level lock — any concurrent attempt (cron overlap or admin endpoint) blocks until the lock is released. The `return_requests` + `orders` updates are now wrapped in a batch `$transaction` so both tables get the `stripe_refund_id` atomically.
 
-**getEstimatedCity removed:** Both copies (shippingController + autoShippingService) deleted. With the DB field now authoritative and containing a real city, postcode→city estimation is dead code. See `questions.md` for full rationale.
+**The existing idempotency key (`return_refund_${returnRequest.id}`) was already present** — unchanged.
 
-**No Stripe fallback:** Per Harry's locked decision — DB is authoritative, Stripe is no longer consulted for shipping address once this field exists.
+## Hole 2 — Admin return-refund endpoint: added row lock + idempotency key + upper-bound validation
 
-**Consistent error shape:** All address-required responses use `{ error: 'sending_address_required', addressRequired: true, reason: 'no_sending_address' }` across both outbound and return paths.
+**File:** `adminRoutes.ts:510-607`
+
+**Before:** The admin endpoint had no idempotency key on the Stripe call, no row lock, and no upper-bound validation on the refund amount. If admin and cron both processed the same return, Stripe would create two genuine refunds (different keys = no dedup).
+
+**After:**
+1. **Row lock:** `prisma.$transaction` with `SELECT id FROM return_requests WHERE id = ${id} AND stripe_refund_id IS NULL FOR UPDATE`. Serializes against the cron.
+2. **Idempotency key:** `return_refund_${returnId}` — **identical to the cron's key**. If both paths fire for the same return, Stripe returns the existing refund to the second caller. This is the critical fix.
+3. **Upper-bound validation:** `refundAmount > orderAmount` → 400. `refundAmount <= 0` → 400. Matches Brief 2's B4 pattern.
+4. **Atomic persistence:** Both `return_requests` and `orders` updates in a batch `$transaction`.
+
+---
+
+## Race scenario walkthrough: "admin + cron both process the same return"
+
+**Before this fix:**
+1. Cron finds return R1 (`stripe_refund_id: null`, `status: delivered`, `escrow_release_at <= now`)
+2. Admin clicks "Process Refund" for R1 at the same moment
+3. Both read R1, both see `stripe_refund_id: null`
+4. Cron calls `stripe.refunds.create()` with key `return_refund_R1` → Refund A created
+5. Admin calls `stripe.refunds.create()` with **NO key** → Refund B created (genuine second refund!)
+6. Both write their refund ID to the DB — one overwrites the other
+7. **Result:** buyer refunded twice, one refund orphaned
+
+**After this fix:**
+1. Cron acquires `FOR UPDATE` lock on R1 in `return_requests`
+2. Admin tries to acquire `FOR UPDATE` lock on R1 → **blocks** (waits for cron to finish)
+3. Cron calls `stripe.refunds.create()` with key `return_refund_R1` → Refund A created
+4. Cron persists `stripe_refund_id = Refund A` on both tables, commits → lock released
+5. Admin's `FOR UPDATE` returns 0 rows (`stripe_refund_id IS NULL` no longer matches)
+6. Admin returns 400 "Return not found or already refunded"
+7. **Result:** exactly ONE refund
+
+**Even if the lock doesn't serialize perfectly** (e.g., both enter the transaction before either commits):
+- Both call Stripe with the **same** idempotency key `return_refund_R1`
+- Stripe returns the same refund object to both callers
+- Both write the same `stripe_refund_id` — idempotent at the DB level too
+- **Result:** still exactly ONE refund
 
 ---
 
 ## Per-file changelog
 
-### NEW: `src/lib/sellerAddress.ts`
-- `SendingAddress` interface — typed shape for the JSON field
-- `SellerAddressResult` type — `{ address, isReal, failureReason }` matching the old `SellerAddress` pattern for minimal call-site change
-- `getSellerSendingAddress(sellerId)` — reads `users.sending_address` from DB, validates required fields present, returns typed result
-- `validateSendingAddress(data)` — input validation for the PUT endpoint (presence, type, max-length checks)
+### `src/services/escrowService.ts`
+- `autoProcessReturnRefunds()`: Per-return processing now wrapped in `prisma.$transaction` with `SELECT ... FOR UPDATE` row lock on `return_requests`. The `return_requests` + `orders` status/refundId updates are now a batch `$transaction` (atomic). Safety checks (status re-verify, `stripe_refund_id` null check) are now enforced by the `FOR UPDATE` WHERE clause. `returnHasBlockingDispute` check remains outside the lock (it reads different tables — no lock conflict).
 
-### NEW: `prisma/migrations/20260602000000_add_seller_sending_address/migration.sql`
-- `ALTER TABLE "users" ADD COLUMN "sending_address" JSONB;`
-
-### `prisma/schema.prisma`
-- Added `sending_address Json?` to `users` model
-
-### `src/controllers/shippingController.ts`
-- **[Site 1] Removed:** `getSellerAddress()` function (93-154), `SellerAddress` type (76-87), `getEstimatedCity()` (29-70), Stripe import + initialisation (12-17)
-- **[Site 2] Rewired:** `getShippingRates()` origin address logic — now calls `getSellerSendingAddress(order.seller_id)`. Removed `senderAddress` client override from request destructuring. Returns `{ error: 'sending_address_required', addressRequired: true }` when missing.
-- **[Site 2] Updated:** Shippo `addressFrom` now uses `sellerAddr.address.*` fields including `line2`.
-- Verified: `getShippingRates` trace: auth → find order → check ownership → check buyer address → `getSellerSendingAddress()` → if `!isReal` return 400 → build Shippo shipment → return rates.
-- Verified: `createShippingLabel` trace: auth → find order → check ownership → check status → check no duplicate → purchase label via Shippo transaction → update order. (No address re-check — trusts the rate's shipment from the prior step, unchanged from before.)
-
-### `src/services/autoShippingService.ts`
-- **[Site 3] Rewired:** Gate 2 — `getSellerAddress().isReal` → `getSellerSendingAddress(order.seller_id).isReal`. Returns `skippedReason: 'no_address'` on miss (graceful skip, order stays `to_ship`).
-- **[Site 4] Rewired:** `addressFrom` in Shippo shipment — uses `sellerAddr.address.*` fields.
-- **[Site 10] Removed:** `getEstimatedCity()` duplicate (61-106).
-- **Updated import:** `getSellerAddress, SellerAddress` from shippingController → `getSellerSendingAddress` from lib/sellerAddress.
-- Verified: Auto-ship trace: Gate 1 (Stripe Connect status) → Gate 2 (`getSellerSendingAddress`) → if `!isReal` skip gracefully → build Shippo shipment → filter tracked rates → select best rate → purchase label → update order with `label_auto_generated: true`.
-
-### `src/controllers/returnController.ts`
-- **[Site 5] Removed:** `getSellerAddressFromStripe()` function (43-82) — entire function and comment block.
-- **[Site 6] Rewired:** `checkSellerStripeStatus()` — now calls `getSellerSendingAddress(order.seller_id)`. Removed Stripe Connect checks (`stripe_connect_id`, `stripe_connect_status`). Returns `hasAddress: sellerAddr.isReal`. Renamed comment to "CHECK SELLER ADDRESS STATUS".
-- **[Site 7] Rewired:** `createReturnRequest()` — `awaiting_address` gate now uses `getSellerSendingAddress()` instead of checking Stripe Connect + `getSellerAddressFromStripe()`.
-- **[Site 8] Rewired:** `getReturnShippingRates()` — seller address from `getSellerSendingAddress()`. Returns `{ error: 'sending_address_required', addressRequired: true }` when missing. Updated `addressTo` in Shippo shipment to use `sellerAddress.address.*`.
-- **[Site 9] Rewired:** `getReturnRequest()` — `sellerHasAddress` now from `getSellerSendingAddress()` instead of `getSellerAddressFromStripe()`.
-- Verified: Return rate trace: auth → find return → check status → `getSellerSendingAddress()` → if `!isReal` return 400 → get buyer address from order → build Shippo shipment → return rates.
-
-### `src/routes/authRoutes.ts`
-- **Updated:** `GET /profile` now includes `sending_address` in the select/response.
-- **New:** `GET /sending-address` — returns the authenticated user's sending address.
-- **New:** `PUT /sending-address` — validates + stores the authenticated user's sending address. Input sanitised (trimmed, length-capped, uppercase postal_code + country).
-
----
-
-## Blast radius verification matrix
-
-| # | Site | File | Status | How verified |
-|---|------|------|--------|-------------|
-| 1 | `getSellerAddress()` definition | shippingController.ts | Removed | grep confirms 0 references to old function |
-| 2 | `getShippingRates()` origin logic | shippingController.ts | Rewired | Reads `getSellerSendingAddress()`, senderAddress override removed |
-| 3 | Auto-ship Gate 2 | autoShippingService.ts | Rewired | Uses `getSellerSendingAddress().isReal`, graceful skip on false |
-| 4 | Auto-ship addressFrom | autoShippingService.ts | Rewired | Uses `sellerAddr.address.*` fields |
-| 5 | `getSellerAddressFromStripe()` definition | returnController.ts | Removed | grep confirms 0 references to old function |
-| 6 | `checkSellerStripeStatus()` | returnController.ts | Rewired | Uses `getSellerSendingAddress()`, no Stripe call |
-| 7 | `createReturnRequest()` gate | returnController.ts | Rewired | awaiting_address based on `!sellerAddr.isReal` |
-| 8 | `getReturnShippingRates()` addressTo | returnController.ts | Rewired | Uses `sellerAddress.address.*` fields |
-| 9 | `getReturnRequest()` address check | returnController.ts | Rewired | Uses `getSellerSendingAddress().isReal` |
-| 10 | `getEstimatedCity()` (autoShipping) | autoShippingService.ts | Removed | grep confirms 0 references |
-| 11 | `getEstimatedCity()` (shipping) | shippingController.ts | Removed | grep confirms 0 references |
-| 12 | Schema | schema.prisma | Added | `sending_address Json?` on users model |
+### `src/routes/adminRoutes.ts`
+- `POST /admin/returns/:id/refund`: Entire handler now starts with a `prisma.$transaction` + `FOR UPDATE` lock on the return row. Added idempotency key `return_refund_${returnId}` (matches cron key exactly). Added upper-bound validation (`refundAmount > orderAmount` → 400, `refundAmount <= 0` → 400). Both table updates in a batch `$transaction`.
