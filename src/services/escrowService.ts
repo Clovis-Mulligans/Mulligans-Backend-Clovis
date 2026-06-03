@@ -43,6 +43,9 @@ const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 da
 const PAYOUT_REMINDER_INTERVAL_DAYS = 3; // Re-remind seller every 3 days while payout blocked
 const PAYOUT_ADMIN_ESCALATION_DAYS = 14; // Escalate to admin after 14 days blocked
 
+// Forced return auto-confirm deadlines (imported from forcedReturnService for reference)
+import { FORCED_RETURN_SELLER_CONFIRM_DAYS, FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS } from './forcedReturnService';
+
 // Dispute statuses that BLOCK escrow release
 const BLOCKING_DISPUTE_STATUSES = ['open', 'counter_offered', 'escalated'];
 
@@ -1625,6 +1628,168 @@ export async function autoEscalateDisputes(): Promise<void> {
 }
 
 // ============================================
+// AUTO-CONFIRM FORCED RETURNS
+// Runs daily — if seller doesn't confirm receipt of a forced return:
+// - 3 days after carrier DELIVERED → auto-confirm + refund 100%
+// - 14 days after shipped (fallback if no DELIVERED signal) → same
+// ============================================
+export async function autoConfirmForcedReturns(): Promise<void> {
+  console.log('[ESCROW] Running forced-return auto-confirm check...');
+
+  try {
+    const now = new Date();
+    const threeDAgo = new Date(now.getTime() - FORCED_RETURN_SELLER_CONFIRM_DAYS * 24 * 60 * 60 * 1000);
+    const fourteenDAgo = new Date(now.getTime() - FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS * 24 * 60 * 60 * 1000);
+
+    const staleReturns = await prisma.return_requests.findMany({
+      where: {
+        is_forced: true,
+        status: 'shipped',
+        stripe_refund_id: null,
+        OR: [
+          { delivered_at: { not: null, lte: threeDAgo } },
+          { delivered_at: null, shipped_at: { not: null, lte: fourteenDAgo } },
+        ],
+      },
+      include: {
+        orders: {
+          select: {
+            id: true,
+            amount: true,
+            buyer_id: true,
+            seller_id: true,
+            listing_id: true,
+            listing_title: true,
+            listing_image: true,
+            stripe_payment_intent_id: true,
+          },
+        },
+      },
+    });
+
+    console.log(`[ESCROW] Found ${staleReturns.length} forced returns to auto-confirm`);
+
+    for (const returnRequest of staleReturns) {
+      try {
+        const order = returnRequest.orders;
+        const isDeliveryBased = !!returnRequest.delivered_at;
+        console.log(`[ESCROW] Auto-confirming forced return ${returnRequest.id} (${isDeliveryBased ? 'delivery+3d' : 'shipped+14d fallback'})`);
+
+        // Claim-the-row
+        const claimed = await prisma.$transaction(async (tx) => {
+          const rows: any[] = await tx.$queryRaw`
+            SELECT id FROM return_requests
+            WHERE id = ${returnRequest.id} AND status = 'shipped' AND stripe_refund_id IS NULL
+            FOR UPDATE`;
+          if (rows.length === 0) return null;
+          await tx.return_requests.update({
+            where: { id: returnRequest.id },
+            data: { status: 'refund_processing', delivered_at: returnRequest.delivered_at || now, updated_at: now },
+          });
+          return true;
+        });
+
+        if (!claimed) {
+          console.log(`[ESCROW] ⚠️ Forced return ${returnRequest.id} already claimed, skipping`);
+          continue;
+        }
+
+        const refundAmount = parseFloat(returnRequest.refund_amount?.toString() || '0');
+
+        if (!order.stripe_payment_intent_id || refundAmount <= 0) {
+          console.error(`[ESCROW] ❌ Cannot refund forced return ${returnRequest.id}: PI=${order.stripe_payment_intent_id}, amount=${refundAmount}`);
+          await prisma.return_requests.update({ where: { id: returnRequest.id }, data: { status: 'shipped', updated_at: now } });
+          continue;
+        }
+
+        let refundId: string;
+        try {
+          const refund = await stripe.refunds.create({
+            payment_intent: order.stripe_payment_intent_id,
+            amount: Math.round(refundAmount * 100),
+            reason: 'requested_by_customer',
+            metadata: {
+              return_id: returnRequest.id,
+              order_id: order.id,
+              resolution: 'forced_return_auto_confirmed',
+            },
+          }, { idempotencyKey: `forced_return_refund_${returnRequest.id}` });
+
+          refundId = refund.id;
+          console.log(`[ESCROW] ✅ Forced return refund ${refund.id}: £${refundAmount.toFixed(2)}`);
+        } catch (refundErr: any) {
+          console.error(`[ESCROW] ❌ Forced return refund failed, reverting:`, refundErr.message);
+          await prisma.return_requests.update({ where: { id: returnRequest.id }, data: { status: 'shipped', updated_at: now } });
+          continue;
+        }
+
+        // Finalise
+        await prisma.$transaction([
+          prisma.return_requests.update({
+            where: { id: returnRequest.id },
+            data: { status: 'completed', completed_at: now, stripe_refund_id: refundId, updated_at: now },
+          }),
+          prisma.orders.update({
+            where: { id: order.id },
+            data: { status: 'returned', refunded_at: now, refund_amount: refundAmount, stripe_refund_id: refundId, updated_at: now },
+          }),
+        ]);
+
+        // Relist item
+        if (order.listing_id) {
+          await prisma.listings.update({
+            where: { id: order.listing_id },
+            data: { status: 'active', updated_at: now },
+          }).catch(err => console.error('[ESCROW] Relist failed:', err));
+        }
+
+        // Notify seller
+        const listingTitle = order.listing_title || 'Item';
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: order.seller_id,
+            type: 'return_completed',
+            title: 'Return Auto-Confirmed',
+            message: `You did not confirm receipt of the return for "${listingTitle}" within the deadline. The return has been auto-confirmed and the buyer refunded £${refundAmount.toFixed(2)}.`,
+            image_url: order.listing_image,
+            related_id: returnRequest.id,
+          },
+        });
+
+        // Notify buyer
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: order.buyer_id,
+            type: 'return_refunded',
+            title: 'Refund Processed',
+            message: `Your refund of £${refundAmount.toFixed(2)} for "${listingTitle}" has been processed.`,
+            image_url: order.listing_image,
+            related_id: returnRequest.id,
+          },
+        });
+
+        await sendPushNotification(
+          order.buyer_id,
+          'Refund Processed',
+          `£${refundAmount.toFixed(2)} refund for "${listingTitle}" is on its way.`,
+          { type: 'return_refunded', return_id: returnRequest.id, order_id: order.id }
+        ).catch(err => console.error('[ESCROW] Push to buyer failed:', err));
+
+        console.log(`[ESCROW] ✅ Forced return ${returnRequest.id} auto-confirmed — buyer refunded £${refundAmount.toFixed(2)}`);
+      } catch (returnErr: any) {
+        console.error(`[ESCROW] ❌ Failed to auto-confirm forced return ${returnRequest.id}:`, returnErr.message);
+      }
+    }
+
+    console.log('[ESCROW] Forced-return auto-confirm check complete');
+  } catch (error: any) {
+    console.error('[ESCROW] Forced-return auto-confirm job failed:', error.message);
+  }
+}
+
+// ============================================
 // RUN ALL ESCROW JOBS
 // Called by cron scheduler
 // ============================================
@@ -1639,6 +1804,7 @@ export async function runEscrowJobs(): Promise<void> {
   await autoProcessReturnRefunds();
   await sendReturnShipReminders();
   await autoExpireReturns();
+  await autoConfirmForcedReturns();
   await autoEscalateDisputes();
   await checkLostInTransit();
 
@@ -1653,6 +1819,7 @@ export default {
   autoProcessReturnRefunds,
   sendReturnShipReminders,
   autoExpireReturns,
+  autoConfirmForcedReturns,
   autoEscalateDisputes,
   checkLostInTransit,
   runEscrowJobs,

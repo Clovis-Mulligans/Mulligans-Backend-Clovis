@@ -792,7 +792,25 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
 
         console.log(`✅ Updated order ${order.id} status to ${newStatus}`);
       } else {
-        console.log(`⚠️ No order found for tracking number: ${trackingNumber}`);
+        // Check if this is a RETURN label tracking number
+        const returnRequest = await prisma.return_requests.findFirst({
+          where: { return_tracking_number: trackingNumber },
+          select: { id: true, status: true, delivered_at: true },
+        });
+
+        if (returnRequest) {
+          if (status === 'DELIVERED' && !returnRequest.delivered_at) {
+            await prisma.return_requests.update({
+              where: { id: returnRequest.id },
+              data: { delivered_at: new Date(), updated_at: new Date() },
+            });
+            console.log(`📬 Return ${returnRequest.id} delivered to seller (tracking: ${trackingNumber})`);
+          } else {
+            console.log(`📬 Return tracking update for ${returnRequest.id}: ${status}`);
+          }
+        } else {
+          console.log(`⚠️ No order or return found for tracking number: ${trackingNumber}`);
+        }
       }
     }
 

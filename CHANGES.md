@@ -1,60 +1,82 @@
-# CHANGES — Ship-Status Integrity: remove manual "mark as shipped" bypass
+# CHANGES — Brief 3b: Forced Returns on High-Value Refunds
 
-**Branch:** `task/ship-status-integrity`
-**Base:** `upstream/main` (`bb04308`)
+**Branch:** `task/3b-forced-returns`
+**Base:** `upstream/main` (`f941aaa`)
 
-## Investigation Findings
+## What this does
 
-### 1. Tracking webhook status transitions (confirmed)
-`shippingController.ts` `handleShippoWebhook`:
-- `PRE_TRANSIT` → keeps `to_ship` (label registered, no carrier scan), clears `auto_cancel_at`
-- `TRANSIT` → sets `in_transit` + `shipped_at` (real carrier scan)
-- `DELIVERED` → sets `delivered` + `delivered_at` + `escrow_release_at`
-- `RETURNED` → sets `returned`
-- `FAILURE` → sets `delivery_failed`
-- ALL events clear `auto_cancel_at` and update ALL orders sharing the same tracking number
+When a dispute refund of ≥70% of item cost is agreed (seller accepts, buyer accepts counter, or admin resolves), it triggers a **forced return**: the buyer must return the item before receiving a refund. On completion, the buyer is refunded **100% of item cost** (not the partial amount). The platform pays for the return label.
 
-### 2. Manual endpoints identified (both self-attestation)
-| Endpoint | File | Requires label? | What it does |
-|---|---|---|---|
-| `POST /api/shipping/mark-shipped` | shippingController.ts | Yes (`label_url`) | Sets `in_transit` + `shipped_at` on seller's say-so |
-| `PUT /api/orders/:id/ship` | orderController.ts | No | Takes seller-provided tracking_number + carrier, sets `in_transit` + `shipped_at` |
+## Components
 
-Both are self-attestation — neither verifies an actual carrier scan. The orderController version also accepts a seller-provided tracking number (not verified against Shippo). Both removed.
+### 1. Forced return threshold + creation (`forcedReturnService.ts` — NEW)
+- `isForceReturnThreshold(refundAmount, itemCost)` — true if ≥70%
+- `resolveReturnLabelPayer()` — payer seam (returns `'platform'` for forced; future: seller-debit)
+- `createForcedReturn()` — creates return_request with `is_forced: true`, auto-purchases platform-paid return label via Shippo, notifies both parties, sets 5-day buyer ship deadline
 
-### 3. Auto-cancel deadline (5 weekdays) — no change needed
-`autoCancelUnshippedOrders` keys off `auto_cancel_at <= now` where `status = 'to_ship'`. The Shippo webhook clears `auto_cancel_at` on ANY tracking event, including `PRE_TRANSIT` (which fires when a label is created/registered). This means:
-- Once a label exists → PRE_TRANSIT fires → `auto_cancel_at` cleared → no auto-cancel risk
-- A seller who creates a label but is slow to drop off won't be auto-cancelled
-- 5 weekdays is sufficient for the label-creation-to-carrier-scan gap
+### 2. Dispute resolution intercepts (`disputeController.ts`)
+Three insertion points, all BEFORE the Stripe refund call:
+- **Seller accepts** (~line 850): if `requested_refund_amount ≥ 70%` → forced return
+- **Buyer accepts counter** (~line 1110): if `counter_offer_amount ≥ 70%` → forced return
+- **Admin resolves** (~line 1510): if `finalRefundAmount ≥ 70%` → forced return
 
-**No deadline change needed.** See questions.md for a separate concern about "label created but never dropped off".
+When triggered: creates forced return, sets dispute `resolution_type: 'forced_return'`, does NOT process Stripe refund, does NOT transfer to seller, does NOT change order status. The blocking return prevents any money movement.
 
-## Changes
+### 3. Seller confirms receipt → 100% refund (`returnController.ts`)
+Modified `confirmReturnDelivered`: if `is_forced`, uses claim-the-row (FOR UPDATE → `refund_processing`), refunds 100% of item cost via Stripe with idempotency key, marks return completed + order returned. Reverts on failure.
 
-### Removed: `POST /api/shipping/mark-shipped`
-- **Controller:** `shippingController.markAsShipped` removed (was lines 630-759)
-- **Route:** `shippingRoutes.ts` line 77 removed
-- **Export:** Removed from shippingController default export
+### 4a. Return delivery webhook (`shippingController.ts`)
+Extended `handleShippoWebhook` to check `return_requests.return_tracking_number` when no order matches. On DELIVERED status, sets `return_requests.delivered_at`.
 
-### Removed: `PUT /api/orders/:id/ship`
-- **Controller:** `orderController.markAsShipped` removed (was lines 580-710)
-- **Route:** `orderRoutes.ts` line 30 removed
-- **Import cleanup:** `sendShippingNotification` removed from orderController imports (was only used by markAsShipped)
+### 4b. Seller auto-confirm (`escrowService.ts`)
+`autoConfirmForcedReturns()` — added to `runEscrowJobs`. Auto-confirms forced returns where:
+- Carrier delivered + 3 days passed without seller confirmation
+- OR shipped 14+ days ago with no delivery signal (fallback)
 
-### Preserved (not touched)
-- `POST /api/returns/mark-shipped` (returnController) — buyer's return flow, different purpose
-- Shippo webhook handler — now the **sole setter** of outbound `in_transit`/shipped status
-- `autoCancelUnshippedOrders` — no deadline change
+Uses same claim-the-row pattern as manual confirmation. Concurrency-safe with `confirmReturnDelivered`.
+
+### 5. Buyer-didn't-return timeout
+The existing `autoExpireReturns` already handles this — forced returns with `status: 'label_created'` past `return_ship_deadline` are cancelled. Order goes back to `delivered` → seller gets paid.
+
+## Schema change
+```prisma
+is_forced  Boolean  @default(false)  // on return_requests
+```
+Migration: `prisma/migrations/forced_returns/migration.sql`
+
+## Money safety
+
+| Scenario | Guard |
+|---|---|
+| Double refund | Stripe idempotency key `forced_return_refund_${returnId}` |
+| Concurrent seller-confirm + auto-confirm | FOR UPDATE on `status = 'shipped'` — only one can claim |
+| Concurrent timeout + confirmation | Different status targets: timeout queries `label_created`, confirmation queries `shipped` |
+| Refund AND release to seller | BLOCKING_RETURN_STATUSES prevents escrow release while return active |
+| Claim revert on Stripe failure | Status reverted to `shipped` if Stripe call fails |
+
+## Constants
+- `FORCED_RETURN_THRESHOLD = 0.70` (70%)
+- `FORCED_RETURN_SHIP_DEADLINE_DAYS = 5`
+- `FORCED_RETURN_SELLER_CONFIRM_DAYS = 3` (after delivery)
+- `FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS = 14` (after ship, no delivery signal)
 
 ## Files changed
 
 | File | Change |
 |---|---|
-| `src/controllers/shippingController.ts` | Removed `markAsShipped` function + export |
-| `src/routes/shippingRoutes.ts` | Removed `mark-shipped` route + import |
-| `src/controllers/orderController.ts` | Removed `markAsShipped` method + unused import |
-| `src/routes/orderRoutes.ts` | Removed `/:id/ship` route |
+| `prisma/schema.prisma` | Added `is_forced` to `return_requests` |
+| `src/services/forcedReturnService.ts` | **NEW** — threshold check, payer seam, forced return creation + label purchase |
+| `src/controllers/disputeController.ts` | ≥70% intercept at 3 resolution paths |
+| `src/controllers/returnController.ts` | Forced return handling in `confirmReturnDelivered` |
+| `src/controllers/shippingController.ts` | Webhook handles return tracking DELIVERED |
+| `src/services/escrowService.ts` | `autoConfirmForcedReturns()` + wired into `runEscrowJobs` |
 
-## Remaining callers (grep confirmation)
-After removal, only `POST /api/returns/mark-shipped` remains (return flow, out of scope). No backend code references the removed endpoints.
+## Dev test plan
+1. ≥70% dispute → forced return created, no Stripe refund
+2. <70% dispute → normal immediate refund (unchanged)
+3. Platform-paid label generated, `paid_by: 'platform'`
+4. Seller confirms → buyer refunded 100% item cost, idempotent
+5. Concurrent confirm → second call gets 409
+6. Buyer doesn't ship → timeout cancels return, seller gets paid
+7. Seller doesn't confirm + carrier DELIVERED → auto-confirm after 3 days
+8. Seller doesn't confirm + no DELIVERED → fallback auto-confirm after 14 days

@@ -92,7 +92,42 @@ This is NOT introduced by this change (it existed before), but removing the manu
 
 **Blocked:** No — does not affect this brief.
 
-## orderController.markAsShipped — removed (confirmed self-attestation)
+## orderController.markAsShipped — removed (confirmed self-attestation, ship-status-integrity)
+
+---
+
+# Questions — Brief 3b: Forced Returns
+
+## Schema: `is_forced` on `return_requests`
+
+Single boolean column, nullable with `DEFAULT false`. Existing returns unaffected. Dev: `prisma db push`. Prod: `prisma/migrations/forced_returns/migration.sql`.
+
+No additional columns needed — `paid_by` (set to `'platform'`), `return_ship_deadline`, `refund_amount`, `dispute_id`, `delivered_at` all exist already.
+
+## Payer seam: `resolveReturnLabelPayer()`
+
+In `forcedReturnService.ts`. Returns `'platform'` for forced returns. To enable seller-debit later, change this one function to return `'seller'` and wire up the charging logic. Commented clearly.
+
+## Buyer ship deadline: 5 days (confirmed)
+
+## Seller confirm deadline
+
+- **Primary:** 3 days after `delivered_at` (set by Shippo DELIVERED webhook for return parcel — newly wired in this brief)
+- **Fallback:** 14 days after `shipped_at` if carrier never reports DELIVERED
+- Both use claim-the-row refund pattern
+
+## Forced return does NOT change the `paid_by` FK constraint
+
+The `paid_by` field has a FK to `users.id`. For forced returns, we set `paid_by: 'platform'` (a string, not a user ID). This will fail the FK constraint.
+
+**Options:**
+1. Make `paid_by` nullable and leave it NULL for platform-pays (then check `is_forced` to infer payer)
+2. Drop the FK constraint on `paid_by` (it's optional anyway)
+3. Create a system user ID for 'platform'
+
+**Recommendation:** Option 1 — set `paid_by: null` for forced returns. The `is_forced` flag tells us the platform paid. Simplest change, no FK issues.
+
+**This is flagged for Harry — the current code sets `paid_by: 'platform'` which will fail the FK. Harry should confirm approach before testing.**
 
 This endpoint accepted a seller-provided tracking number without Shippo verification. While it could theoretically serve "shipped with own label" sellers, the tracking number isn't monitored by Shippo webhooks, so the buyer gets no automatic delivery updates and the transition to `delivered` would never fire automatically. It's effectively self-attestation with a tracking number string.
 

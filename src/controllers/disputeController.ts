@@ -27,6 +27,7 @@ import {
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { calculateSellerPayout as calcPayout, BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
+import { isForceReturnThreshold, createForcedReturn } from '../services/forcedReturnService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -844,8 +845,44 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
       const listingImage = dispute.orders.listing_image;
 
-      // If seller accepted, process the refund AND transfer remaining to seller
+      // If seller accepted, check forced return threshold before refunding
       if (responseType === 'accept' && resolutionAmount !== null && dispute.orders.stripe_payment_intent_id) {
+        // ≥70% of item cost → forced return (buyer must return item first)
+        if (isForceReturnThreshold(resolutionAmount, orderAmount)) {
+          console.log(`[FORCED-RETURN] Seller accepted ≥70% refund (£${resolutionAmount.toFixed(2)} / £${orderAmount.toFixed(2)}) — triggering forced return`);
+
+          const forcedReturn = await createForcedReturn({
+            orderId: dispute.order_id,
+            disputeId,
+            buyerId: buyer.id,
+            sellerId: seller.id,
+            itemCost: orderAmount,
+            listingTitle,
+            listingImage,
+          });
+
+          // Update dispute: resolved but with forced return pending
+          await prisma.disputes.update({
+            where: { id: disputeId },
+            data: {
+              resolution_type: 'forced_return',
+              resolution_amount: orderAmount,
+              updated_at: now,
+            },
+          });
+
+          // DO NOT: process Stripe refund, transfer to seller, change order status
+          // The blocking return prevents any money movement
+
+          return res.json({
+            success: true,
+            forcedReturn: true,
+            returnId: forcedReturn.returnId,
+            message: `Refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${orderAmount.toFixed(2)}.`,
+          });
+        }
+
+        // <70% — normal immediate refund
         const refundAmountPence = Math.round(resolutionAmount * 100);
 
         try {
@@ -1070,8 +1107,49 @@ export class DisputeController {
       }
 
       const counterOfferAmount = parseFloat(dispute.counter_offer_amount!.toString());
+      const orderAmount = parseFloat(dispute.orders.amount.toString());
       const now = new Date();
 
+      const buyer = dispute.users_disputes_buyer;
+      const seller = dispute.users_disputes_seller;
+      const listingTitle = dispute.orders.listing_title || 'Your item';
+      const listingImage = dispute.orders.listing_image;
+
+      // ≥70% of item cost → forced return (buyer must return item first)
+      if (isForceReturnThreshold(counterOfferAmount, orderAmount)) {
+        console.log(`[FORCED-RETURN] Buyer accepted counter ≥70% (£${counterOfferAmount.toFixed(2)} / £${orderAmount.toFixed(2)}) — triggering forced return`);
+
+        const forcedReturn = await createForcedReturn({
+          orderId: dispute.order_id,
+          disputeId,
+          buyerId: buyer.id,
+          sellerId: seller.id,
+          itemCost: orderAmount,
+          listingTitle,
+          listingImage,
+        });
+
+        await prisma.disputes.update({
+          where: { id: disputeId },
+          data: {
+            status: 'buyer_accepted',
+            resolution_type: 'forced_return',
+            resolution_amount: orderAmount,
+            resolved_by: 'buyer',
+            resolved_at: now,
+            updated_at: now,
+          },
+        });
+
+        return res.json({
+          success: true,
+          forcedReturn: true,
+          returnId: forcedReturn.returnId,
+          message: `Counter-offer of ≥70% triggers a forced return. Return the item to receive a full refund of £${orderAmount.toFixed(2)}.`,
+        });
+      }
+
+      // <70% — normal immediate refund
       // 1. Process refund to buyer
       if (dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(counterOfferAmount * 100);
@@ -1135,10 +1213,6 @@ export class DisputeController {
           updated_at: now,
         },
       });
-
-      const buyer = dispute.users_disputes_buyer;
-      const seller = dispute.users_disputes_seller;
-      const listingTitle = dispute.orders.listing_title || 'Your item';
 
       // Notify seller
       const counterAcceptedNotifId = crypto.randomUUID();
@@ -1434,6 +1508,47 @@ export class DisputeController {
       console.log(`   Order amount: £${orderAmount.toFixed(2)}`);
       console.log(`   Final refund: £${finalRefundAmount.toFixed(2)}`);
 
+      // ≥70% of item cost → forced return (buyer must return item first)
+      if (finalRefundAmount > 0 && isForceReturnThreshold(finalRefundAmount, orderAmount)) {
+        console.log(`[FORCED-RETURN] Admin resolved ≥70% refund (£${finalRefundAmount.toFixed(2)} / £${orderAmount.toFixed(2)}) — triggering forced return`);
+
+        const buyer = dispute.users_disputes_buyer;
+        const seller = dispute.users_disputes_seller;
+        const listingTitle = dispute.orders.listing_title || 'Your item';
+        const listingImage = dispute.orders.listing_image;
+
+        const forcedReturn = await createForcedReturn({
+          orderId: dispute.order_id,
+          disputeId,
+          buyerId: buyer.id,
+          sellerId: seller.id,
+          itemCost: orderAmount,
+          listingTitle,
+          listingImage,
+        });
+
+        await prisma.disputes.update({
+          where: { id: disputeId },
+          data: {
+            status: 'admin_resolved',
+            resolution_type: 'forced_return',
+            resolution_amount: orderAmount,
+            resolution_notes: resolutionNotes,
+            resolved_by: 'admin',
+            resolved_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+
+        return res.json({
+          success: true,
+          forcedReturn: true,
+          returnId: forcedReturn.returnId,
+          message: `Admin refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${orderAmount.toFixed(2)}.`,
+        });
+      }
+
+      // <70% or no-refund — normal immediate refund/transfer
       // 1. Process refund if needed
       if (finalRefundAmount > 0 && dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(finalRefundAmount * 100);

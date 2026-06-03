@@ -994,13 +994,127 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
 
     // Only seller can confirm delivery
     if (returnRequest.orders.seller_id !== req.user?.id) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'Only the seller can confirm return delivery' 
+      return res.status(403).json({
+        success: false,
+        error: 'Only the seller can confirm return delivery'
       });
     }
 
-    // Calculate escrow release date
+    const listingTitle = returnRequest.orders.listing_title || 'Item';
+    const buyer = returnRequest.orders.users_orders_buyer_idTousers;
+    const now = new Date();
+
+    // ========================================
+    // FORCED RETURN: immediate 100% refund on seller confirmation
+    // ========================================
+    if ((returnRequest as any).is_forced) {
+      console.log(`[FORCED-RETURN] Seller confirming receipt for forced return ${returnId}`);
+
+      // Claim-the-row: lock + transition to refund_processing
+      const claimed = await prisma.$transaction(async (tx) => {
+        const rows: any[] = await tx.$queryRaw`
+          SELECT id FROM return_requests
+          WHERE id = ${returnId} AND status = 'shipped' AND stripe_refund_id IS NULL
+          FOR UPDATE`;
+        if (rows.length === 0) return null;
+        await tx.return_requests.update({
+          where: { id: returnId },
+          data: { status: 'refund_processing', delivered_at: now, updated_at: now },
+        });
+        return true;
+      });
+
+      if (!claimed) {
+        return res.status(409).json({ success: false, error: 'Return already being processed' });
+      }
+
+      // Refund 100% of item cost
+      const refundAmount = parseFloat(returnRequest.refund_amount?.toString() || '0');
+      const paymentIntentId = returnRequest.orders.stripe_payment_intent_id;
+
+      if (!paymentIntentId || refundAmount <= 0) {
+        console.error(`[FORCED-RETURN] Cannot refund: PI=${paymentIntentId}, amount=${refundAmount}`);
+        await prisma.return_requests.update({ where: { id: returnId }, data: { status: 'shipped', delivered_at: null, updated_at: now } });
+        return res.status(500).json({ success: false, error: 'Cannot process refund — missing payment info' });
+      }
+
+      let refundId: string;
+      try {
+        const refund = await stripe.refunds.create({
+          payment_intent: paymentIntentId,
+          amount: Math.round(refundAmount * 100),
+          reason: 'requested_by_customer',
+          metadata: {
+            return_id: returnId,
+            order_id: returnRequest.order_id,
+            resolution: 'forced_return_completed',
+          },
+        }, { idempotencyKey: `forced_return_refund_${returnId}` });
+
+        refundId = refund.id;
+        console.log(`[FORCED-RETURN] ✅ Refund ${refund.id}: £${refundAmount.toFixed(2)}`);
+      } catch (refundErr: any) {
+        console.error(`[FORCED-RETURN] ❌ Refund failed, reverting claim:`, refundErr.message);
+        await prisma.return_requests.update({ where: { id: returnId }, data: { status: 'shipped', delivered_at: null, updated_at: now } });
+        return res.status(500).json({ success: false, error: 'Stripe refund failed' });
+      }
+
+      // Finalise atomically
+      await prisma.$transaction([
+        prisma.return_requests.update({
+          where: { id: returnId },
+          data: { status: 'completed', completed_at: now, stripe_refund_id: refundId, updated_at: now },
+        }),
+        prisma.orders.update({
+          where: { id: returnRequest.order_id },
+          data: { status: 'returned', refunded_at: now, refund_amount: refundAmount, stripe_refund_id: refundId, updated_at: now },
+        }),
+      ]);
+
+      // Relist the item
+      if (returnRequest.orders.listing_id) {
+        await prisma.listings.update({
+          where: { id: returnRequest.orders.listing_id },
+          data: { status: 'active', updated_at: now },
+        }).catch(err => console.error('[FORCED-RETURN] Relist failed:', err));
+      }
+
+      // Notify buyer
+      await prisma.notifications.create({
+        data: {
+          id: crypto.randomUUID(),
+          user_id: returnRequest.orders.buyer_id,
+          type: 'return_refunded',
+          title: 'Refund Processed',
+          message: `Your refund of £${refundAmount.toFixed(2)} for "${listingTitle}" has been processed.`,
+          image_url: returnRequest.orders.listing_image,
+          related_id: returnId,
+        },
+      });
+
+      await sendPushNotification(
+        returnRequest.orders.buyer_id,
+        'Refund Processed',
+        `£${refundAmount.toFixed(2)} refund for "${listingTitle}" is on its way.`,
+        { type: 'return_refunded', return_id: returnId, order_id: returnRequest.order_id }
+      ).catch(err => console.error('[FORCED-RETURN] Push to buyer failed:', err));
+
+      console.log(`[FORCED-RETURN] ✅ Forced return ${returnId} completed — buyer refunded £${refundAmount.toFixed(2)}`);
+
+      return res.json({
+        success: true,
+        data: {
+          status: 'completed',
+          deliveredAt: now,
+          refundAmount,
+          message: `Forced return completed. Buyer refunded £${refundAmount.toFixed(2)}.`,
+        },
+      });
+    }
+
+    // ========================================
+    // NORMAL RETURN: set delivered + escrow timer (existing flow)
+    // ========================================
     const escrowReleaseAt = new Date();
     escrowReleaseAt.setDate(escrowReleaseAt.getDate() + RETURN_ESCROW_DAYS);
 
@@ -1008,15 +1122,12 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
       where: { id: returnId },
       data: {
         status: 'delivered',
-        delivered_at: new Date(),
+        delivered_at: now,
         escrow_release_at: escrowReleaseAt,
-        updated_at: new Date(),
+        updated_at: now,
       },
     });
 
-    // Get info for notifications
-    const listingTitle = returnRequest.orders.listing_title || 'Item';
-    const buyer = returnRequest.orders.users_orders_buyer_idTousers;
     const refundAmount = returnRequest.refund_amount?.toFixed(2) || '0.00';
 
     // In-app notification to buyer
@@ -1068,7 +1179,7 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
       success: true,
       data: {
         status: 'delivered',
-        deliveredAt: new Date(),
+        deliveredAt: now,
         escrowReleaseAt,
         refundAmount: returnRequest.refund_amount,
         message: `Refund will be processed on ${escrowReleaseAt.toLocaleDateString()}`,
