@@ -7,7 +7,6 @@ import {
   getShippingRates,
   createShippingLabel,
   getTrackingInfo,
-  markAsShipped,
   handleShippoWebhook,
 } from '../controllers/shippingController';
 import { authenticateToken } from '../middleware/auth';
@@ -72,9 +71,7 @@ router.post('/labels', authenticateToken, createShippingLabel);
 // GET /api/shipping/tracking/:orderId
 router.get('/tracking/:orderId', authenticateToken, getTrackingInfo);
 
-// Mark order as shipped (seller only)
-// POST /api/shipping/mark-shipped
-router.post('/mark-shipped', authenticateToken, markAsShipped);
+// markAsShipped route REMOVED — see task/ship-status-integrity
 
 // ============================================
 // DROP-OFF LOCATIONS (Shippo Locations API)

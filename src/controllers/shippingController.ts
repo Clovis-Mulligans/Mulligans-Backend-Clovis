@@ -626,137 +626,8 @@ export const getTrackingInfo = async (req: AuthenticatedRequest, res: Response) 
   }
 };
 
-// ============================================
-// MARK ORDER AS SHIPPED
-// Updates order status after seller ships
-// POST /api/shipping/mark-shipped
-// ============================================
-export const markAsShipped = async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { orderId } = req.body;
-
-    if (!orderId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Order ID is required',
-      });
-    }
-
-    // Get order
-    const order = await prisma.orders.findUnique({
-      where: { id: orderId },
-      include: {
-        listings: {
-          include: {
-            images: {
-              take: 1,
-              orderBy: PRIMARY_IMAGE_ORDER,
-            },
-          },
-        },
-      },
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        error: 'Order not found',
-      });
-    }
-
-    // Check user is the seller
-    if (order.seller_id !== req.user?.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Only the seller can mark an order as shipped',
-      });
-    }
-
-    // Check order has a label
-    if (!order.label_url) {
-      return res.status(400).json({
-        success: false,
-        error: 'Please create a shipping label first',
-      });
-    }
-
-    // Update order status
-    const updatedOrder = await prisma.orders.update({
-      where: { id: orderId },
-      data: {
-        status: 'in_transit',
-        shipped_at: new Date(),
-        updated_at: new Date(),
-      },
-    });
-
-    // ✅ NEW: Also mark ALL related orders as shipped (multi-item cart checkout)
-    if (order.stripe_payment_intent_id) {
-      const relatedOrdersResult = await prisma.orders.updateMany({
-        where: {
-          stripe_payment_intent_id: order.stripe_payment_intent_id,
-          seller_id: order.seller_id,
-          id: { not: orderId },
-          status: 'to_ship',
-        },
-        data: {
-          status: 'in_transit',
-          shipped_at: new Date(),
-          updated_at: new Date(),
-        },
-      });
-      
-      if (relatedOrdersResult.count > 0) {
-        console.log(`✅ Also marked ${relatedOrdersResult.count} related orders as shipped`);
-      }
-    }
-
-    // Notify buyer
-    // ✅ FIX: Add image_url and use consistent type
-    const listingImage = order.listings?.images?.[0]?.image_url || null;
-    
-    const shippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    await prisma.notifications.create({
-      data: {
-        id: shippedNotifId,
-        user_id: order.buyer_id,
-        type: 'shipped',  // ✅ FIX: Use 'shipped' to match frontend
-        title: 'Your Order Has Shipped! 📦',
-        message: `Your ${order.listings?.title || 'item'} is on its way! Tracking: ${order.tracking_number}`,
-        image_url: listingImage,  // ✅ FIX: Add image
-        related_id: orderId,
-      },
-    });
-
-    // PUSH: Notify buyer item shipped
-    try {
-      await sendPushNotification(
-        order.buyer_id,
-        'Your Order Has Shipped!',
-        `"${order.listings?.title || 'Your item'}" is on its way! Tracking: ${order.tracking_number}`,
-        { notification_id: shippedNotifId, type: 'purchase_shipped', order_id: orderId }
-      );
-    } catch (pushErr) {
-      console.error('[SHIP] Push notification failed:', pushErr);
-    }
-
-    res.json({
-      success: true,
-      data: {
-        orderId: updatedOrder.id,
-        status: updatedOrder.status,
-        shippedAt: updatedOrder.shipped_at,
-        trackingNumber: updatedOrder.tracking_number,
-      },
-    });
-  } catch (error: any) {
-    console.error('❌ Error marking order as shipped:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to mark order as shipped',
-    });
-  }
-};
+// markAsShipped REMOVED — manual self-attestation bypass (task/ship-status-integrity)
+// The Shippo tracking webhook is now the sole setter of outbound in_transit/shipped status.
 
 // ============================================
 // SHIPPO WEBHOOK HANDLER
@@ -939,6 +810,5 @@ export default {
   getShippingRates,
   createShippingLabel,
   getTrackingInfo,
-  markAsShipped,
   handleShippoWebhook,
 };

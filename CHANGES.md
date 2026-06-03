@@ -1,60 +1,60 @@
-# CHANGES — Stuck-Order Safety Net + Auto-Ship Stripe Consistency
+# CHANGES — Ship-Status Integrity: remove manual "mark as shipped" bypass
 
-**Branch:** `task/stuck-order-autoship`
-**Base:** `main` (`403ecac` — includes payout fix)
+**Branch:** `task/ship-status-integrity`
+**Base:** `upstream/main` (`bb04308`)
 
-## Change 1 — Auto-Ship Stripe Gate Removed
+## Investigation Findings
 
-**File:** `src/services/autoShippingService.ts`
+### 1. Tracking webhook status transitions (confirmed)
+`shippingController.ts` `handleShippoWebhook`:
+- `PRE_TRANSIT` → keeps `to_ship` (label registered, no carrier scan), clears `auto_cancel_at`
+- `TRANSIT` → sets `in_transit` + `shipped_at` (real carrier scan)
+- `DELIVERED` → sets `delivered` + `delivered_at` + `escrow_release_at`
+- `RETURNED` → sets `returned`
+- `FAILURE` → sets `delivery_failed`
+- ALL events clear `auto_cancel_at` and update ALL orders sharing the same tracking number
 
-Removed the `stripe_connect_status === 'active'` gate at line 116. Auto-ship now requires only a sending address, matching the manual shipping path. Per Harry's model: Stripe onboarding is NOT required to ship — only to withdraw funds.
+### 2. Manual endpoints identified (both self-attestation)
+| Endpoint | File | Requires label? | What it does |
+|---|---|---|---|
+| `POST /api/shipping/mark-shipped` | shippingController.ts | Yes (`label_url`) | Sets `in_transit` + `shipped_at` on seller's say-so |
+| `PUT /api/orders/:id/ship` | orderController.ts | No | Takes seller-provided tracking_number + carrier, sets `in_transit` + `shipped_at` |
 
-## Change 2 — Stuck-Order Safety Net
+Both are self-attestation — neither verifies an actual carrier scan. The orderController version also accepts a seller-provided tracking number (not verified against Shippo). Both removed.
 
-**File:** `src/services/escrowService.ts`
+### 3. Auto-cancel deadline (5 weekdays) — no change needed
+`autoCancelUnshippedOrders` keys off `auto_cancel_at <= now` where `status = 'to_ship'`. The Shippo webhook clears `auto_cancel_at` on ANY tracking event, including `PRE_TRANSIT` (which fires when a label is created/registered). This means:
+- Once a label exists → PRE_TRANSIT fires → `auto_cancel_at` cleared → no auto-cancel risk
+- A seller who creates a label but is slow to drop off won't be auto-cancelled
+- 5 weekdays is sufficient for the label-creation-to-carrier-scan gap
 
-### 2a. Blocked-payout detection (enhanced)
+**No deadline change needed.** See questions.md for a separate concern about "label created but never dropped off".
 
-Previously only checked `!seller.stripe_connect_id`. Now checks both conditions via `sellerCanReceivePayout()`:
-- `stripe_connect_id` must exist
-- `stripe_connect_status` must be `'active'`
+## Changes
 
-### 2b. Schema fields
+### Removed: `POST /api/shipping/mark-shipped`
+- **Controller:** `shippingController.markAsShipped` removed (was lines 630-759)
+- **Route:** `shippingRoutes.ts` line 77 removed
+- **Export:** Removed from shippingController default export
 
-Two new nullable columns on `orders`:
-- `payout_blocked_at` — set when payout first blocked; cleared on successful transfer
-- `payout_reminder_sent_at` — last reminder timestamp; enforces 3-day cadence
+### Removed: `PUT /api/orders/:id/ship`
+- **Controller:** `orderController.markAsShipped` removed (was lines 580-710)
+- **Route:** `orderRoutes.ts` line 30 removed
+- **Import cleanup:** `sendShippingNotification` removed from orderController imports (was only used by markAsShipped)
 
-Migration: `prisma/migrations/stuck_order_safety_net/migration.sql`
-
-### 2c. Seller reminders (3-day cadence)
-
-- Immediate notification on first block: "£X for [item] is ready for you — complete your payment setup to withdraw it."
-- Re-reminder every 3 days (idempotent via `payout_reminder_sent_at`)
-- In-app notification + push notification
-- Stops automatically once seller onboards and payout succeeds
-
-### 2d. Auto-retry
-
-Each daily `autoReleaseEscrow()` run re-processes blocked orders. When seller completes onboarding, next cycle releases funds and clears `payout_blocked_at`.
-
-### 2e. Admin escalation at 14 days
-
-Creates a `support_ticket` with `type: 'payout_blocked'`, `priority: 'high'`. One ticket per order (deduped). No auto-resolution — visibility only.
-
-### 2f. Admin endpoint
-
-**File:** `src/routes/adminRoutes.ts`
-
-`GET /admin/stuck-orders` — returns all blocked-payout orders, oldest first, with seller/buyer info and days-blocked count. Behind `adminAuth`.
+### Preserved (not touched)
+- `POST /api/returns/mark-shipped` (returnController) — buyer's return flow, different purpose
+- Shippo webhook handler — now the **sole setter** of outbound `in_transit`/shipped status
+- `autoCancelUnshippedOrders` — no deadline change
 
 ## Files changed
 
 | File | Change |
 |---|---|
-| `src/services/autoShippingService.ts` | Removed Stripe gate (lines 115-118) |
-| `src/services/escrowService.ts` | Added constants, helper, blocked-payout safety net, clear on transfer |
-| `src/routes/adminRoutes.ts` | Added `GET /admin/stuck-orders` |
-| `prisma/schema.prisma` | Added `payout_blocked_at`, `payout_reminder_sent_at`, index |
-| `prisma/migrations/stuck_order_safety_net/migration.sql` | DDL for new columns |
-| `questions.md` | Schema proposal, security notes |
+| `src/controllers/shippingController.ts` | Removed `markAsShipped` function + export |
+| `src/routes/shippingRoutes.ts` | Removed `mark-shipped` route + import |
+| `src/controllers/orderController.ts` | Removed `markAsShipped` method + unused import |
+| `src/routes/orderRoutes.ts` | Removed `/:id/ship` route |
+
+## Remaining callers (grep confirmation)
+After removal, only `POST /api/returns/mark-shipped` remains (return flow, out of scope). No backend code references the removed endpoints.

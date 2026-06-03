@@ -75,3 +75,25 @@ At 14 days, a `support_ticket` is also auto-created (type: `payout_blocked`, pri
 ## Change 1: Auto-Ship Stripe Gate Removed
 
 The `stripe_connect_status === 'active'` gate at autoShippingService.ts:116 has been removed per the brief. Auto-ship now requires only a sending address, matching the manual path. No other shipping path gates on Stripe status.
+
+---
+
+# Questions — Ship-Status Integrity
+
+## Auto-cancel deadline: no change needed (confirmed)
+
+The 5-weekday deadline is not too tight after removing the manual button. The Shippo webhook fires PRE_TRANSIT when a label is created, which clears `auto_cancel_at`. So sellers with labels won't be auto-cancelled regardless of carrier scan timing.
+
+## Separate concern: "label created but never dropped off"
+
+Once a label exists and PRE_TRANSIT clears `auto_cancel_at`, the order sits at `to_ship` indefinitely if the seller never drops off the parcel. There's no timeout for this state. `checkLostInTransit` only flags orders at `in_transit` for 14+ days — it doesn't catch `to_ship` orders with stale labels.
+
+This is NOT introduced by this change (it existed before), but removing the manual button makes it slightly more visible since the seller can no longer manually advance to `in_transit`. Flagging for awareness — could be a future brief to add a "label created but not scanned within N days" check.
+
+**Blocked:** No — does not affect this brief.
+
+## orderController.markAsShipped — removed (confirmed self-attestation)
+
+This endpoint accepted a seller-provided tracking number without Shippo verification. While it could theoretically serve "shipped with own label" sellers, the tracking number isn't monitored by Shippo webhooks, so the buyer gets no automatic delivery updates and the transition to `delivered` would never fire automatically. It's effectively self-attestation with a tracking number string.
+
+Removed along with shippingController.markAsShipped. If a "shipped outside system" flow is needed later, it should be built with carrier verification (e.g., Shippo universal tracking registration).

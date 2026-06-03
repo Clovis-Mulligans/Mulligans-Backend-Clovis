@@ -27,7 +27,7 @@ router.get('/my-sales', authenticateToken, OrderController.getMySales);
 router.get('/:id', authenticateToken, OrderController.getOrderById);
 
 // Update order status
-router.put('/:id/ship', authenticateToken, OrderController.markAsShipped);
+// router.put('/:id/ship') REMOVED — task/ship-status-integrity
 router.put('/:id/deliver', authenticateToken, OrderController.markAsDelivered);
 router.put('/:id/cancel', authenticateToken, OrderController.cancelOrder);
 router.put('/:id/dispute', authenticateToken, OrderController.openDispute);

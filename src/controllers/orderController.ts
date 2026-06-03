@@ -13,7 +13,7 @@ import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
-import { sendShippingNotification, sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
+import { sendDeliveryConfirmation, sendEscrowReleased, sendInsuranceReportReceivedToBuyer, sendInsuranceReportReceivedToSeller, sendOrderCancellation } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { generateEmailActionToken } from '../routes/emailActionRoutes';
@@ -577,137 +577,8 @@ if (order.disputes) {
     }
   }
 
-  /**
-   * Mark order as shipped (seller only)
-   * PUT /api/orders/:id/ship
-   * ✅ UPDATED: Tracking number is now REQUIRED
-   */
-  static async markAsShipped(req: Request, res: Response) {
-    try {
-      const userId = (req as any).user?.id;
-      const orderId = req.params.id;
-      const { tracking_number, carrier } = req.body;
-
-      // ✅ REQUIRE tracking number
-      if (!tracking_number || !tracking_number.trim()) {
-        return res.status(400).json({ 
-          error: 'Tracking number is required',
-          message: 'All shipments must include a valid tracking number for buyer protection.'
-        });
-      }
-
-      if (!carrier || !carrier.trim()) {
-        return res.status(400).json({ 
-          error: 'Carrier is required',
-          message: 'Please select the shipping carrier (e.g., Royal Mail, Evri, DPD).'
-        });
-      }
-
-      console.log('📦 Marking order as shipped:', orderId);
-
-      const order = await prisma.orders.findFirst({
-        where: {
-          id: orderId,
-          seller_id: userId,
-          status: 'to_ship',
-        },
-        include: {
-          listings: {
-            select: {
-              title: true,
-              images: {
-                take: 1,
-                orderBy: PRIMARY_IMAGE_ORDER,
-              },
-            },
-          },
-          users_orders_buyer_idTousers: {
-            select: {
-              email: true,
-              display_name: true,
-            },
-          },
-        },
-      });
-
-      if (!order) {
-        return res.status(404).json({ error: 'Order not found or cannot be shipped' });
-      }
-
-      const updatedOrder = await prisma.orders.update({
-        where: { id: orderId },
-        data: {
-          status: 'in_transit',
-          tracking_number: tracking_number.trim(),
-          carrier: carrier.trim(),
-          shipped_at: new Date(),
-          auto_cancel_at: null, // Clear auto-cancel since it's now shipped
-          updated_at: new Date(),
-        },
-      });
-
-      // Create notification for buyer
-      const listingTitle = order.listings?.title || 'Your item';
-      const listingImage = order.listings?.images?.[0]?.image_url || null;
-
-      const shippedNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: shippedNotifId,
-          user_id: order.buyer_id,
-          type: 'shipped',
-          title: 'Your item has shipped! 📦',
-          message: `"${listingTitle}" is on its way! Tracking: ${tracking_number}`,
-          image_url: listingImage,
-          related_id: orderId,
-        },
-      });
-
-      console.log('✅ Order marked as shipped:', orderId);
-
-      // ✅ PUSH NOTIFICATION - Item shipped
-      try {
-        await sendPushNotification(
-          order.buyer_id,
-          '📦 Your item has shipped!',
-          `"${listingTitle}" is on its way! Tracking: ${tracking_number}`,
-          { notification_id: shippedNotifId, type: 'purchase_shipped', order_id: orderId }
-        );
-      } catch (pushErr) {
-        console.error('Push notification failed:', pushErr);
-      }
-
-      // Send shipping notification email
-      const buyerEmail = order.users_orders_buyer_idTousers?.email;
-      if (buyerEmail) {
-        try {
-          await sendShippingNotification(buyerEmail, {
-            buyerName: order.users_orders_buyer_idTousers?.display_name || 'there',
-            itemName: listingTitle,
-            trackingNumber: tracking_number,
-            carrier: carrier,
-            orderId: orderId,
-            orderReference: orderId,
-            itemImageUrl: listingImage || '',
-            itemBrand: '',
-            itemCondition: '',
-            itemPrice: `£${parseFloat(order.amount?.toString() || '0').toFixed(2)}`,
-            carrierName: carrier,
-            estimatedDelivery: '3-5 business days',
-            trackingUrl: '#',
-          });
-          console.log('📧 Shipping notification email sent to:', buyerEmail);
-        } catch (emailError) {
-          console.error('⚠️ Failed to send shipping email:', emailError);
-        }
-      }
-
-      res.json({ success: true, order: updatedOrder });
-    } catch (error: any) {
-      console.error('❌ Mark shipped error:', error);
-      res.status(500).json({ error: 'Failed to mark order as shipped' });
-    }
-  }
+  // markAsShipped REMOVED — manual self-attestation bypass (task/ship-status-integrity)
+  // The Shippo tracking webhook is now the sole setter of outbound in_transit/shipped status.
 
   /**
    * Mark order as delivered
