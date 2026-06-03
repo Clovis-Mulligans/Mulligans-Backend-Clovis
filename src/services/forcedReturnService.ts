@@ -155,11 +155,48 @@ export async function createForcedReturn(params: CreateForcedReturnParams): Prom
     labelResult = { purchased: false, error: labelErr.message };
   }
 
+  // 2b. If label purchase failed, escalate to admin immediately
+  if (!labelResult.purchased) {
+    console.warn(`[FORCED-RETURN] ⚠️ Label purchase failed (${labelResult.error}) — escalating to admin`);
+    try {
+      const ticketId = crypto.randomUUID();
+      await prisma.support_tickets.create({
+        data: {
+          id: ticketId,
+          user_id: buyerId,
+          type: 'forced_return_label_failed',
+          order_id: orderId,
+          subject: `[FORCED RETURN] Label purchase failed — order ${orderId}`,
+          message: [
+            `Forced return label could not be auto-purchased.`,
+            '',
+            `Failure reason: ${labelResult.error || 'unknown'}`,
+            `Order ID: ${orderId}`,
+            `Return ID: ${returnId}`,
+            `Dispute ID: ${disputeId}`,
+            `Buyer ID: ${buyerId}`,
+            `Seller ID: ${sellerId}`,
+            `Item cost (refund amount): £${itemCost.toFixed(2)}`,
+            '',
+            `The forced return is at status 'approved' with no label. Money is held in escrow.`,
+            `A return label must be arranged manually before the buyer can ship.`,
+          ].join('\n'),
+          status: 'open',
+          priority: 'high',
+          created_at: now,
+        },
+      });
+      console.log(`[FORCED-RETURN] ⚠️ Label purchase failed (${labelResult.error}) — escalated to admin via support ticket ${ticketId}`);
+    } catch (ticketErr) {
+      console.error('[FORCED-RETURN] Failed to create admin escalation ticket:', ticketErr);
+    }
+  }
+
   // 3. Notify both parties
   try {
     const buyerMessage = labelResult.purchased
       ? `You need to return "${listingTitle}" to receive your full refund of £${itemCost.toFixed(2)}. A prepaid return label has been created — print it and ship within ${FORCED_RETURN_SHIP_DEADLINE_DAYS} days.`
-      : `You need to return "${listingTitle}" to receive your full refund of £${itemCost.toFixed(2)}. We're preparing your return label — check back shortly.`;
+      : `You need to return "${listingTitle}" to receive your full refund of £${itemCost.toFixed(2)}. We're arranging your return label — you'll be notified when it's ready.`;
 
     await prisma.notifications.create({
       data: {

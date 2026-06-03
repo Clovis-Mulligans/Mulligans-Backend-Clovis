@@ -847,16 +847,19 @@ export class DisputeController {
 
       // If seller accepted, check forced return threshold before refunding
       if (responseType === 'accept' && resolutionAmount !== null && dispute.orders.stripe_payment_intent_id) {
+        // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
+        const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
+
         // ≥70% of item cost → forced return (buyer must return item first)
-        if (isForceReturnThreshold(resolutionAmount, orderAmount)) {
-          console.log(`[FORCED-RETURN] Seller accepted ≥70% refund (£${resolutionAmount.toFixed(2)} / £${orderAmount.toFixed(2)}) — triggering forced return`);
+        if (isForceReturnThreshold(resolutionAmount, itemCost)) {
+          console.log(`[FORCED-RETURN] Seller accepted ≥70% refund (£${resolutionAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
 
           const forcedReturn = await createForcedReturn({
             orderId: dispute.order_id,
             disputeId,
             buyerId: buyer.id,
             sellerId: seller.id,
-            itemCost: orderAmount,
+            itemCost,
             listingTitle,
             listingImage,
           });
@@ -866,19 +869,16 @@ export class DisputeController {
             where: { id: disputeId },
             data: {
               resolution_type: 'forced_return',
-              resolution_amount: orderAmount,
+              resolution_amount: itemCost,
               updated_at: now,
             },
           });
-
-          // DO NOT: process Stripe refund, transfer to seller, change order status
-          // The blocking return prevents any money movement
 
           return res.json({
             success: true,
             forcedReturn: true,
             returnId: forcedReturn.returnId,
-            message: `Refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${orderAmount.toFixed(2)}.`,
+            message: `Refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
           });
         }
 
@@ -1108,6 +1108,7 @@ export class DisputeController {
 
       const counterOfferAmount = parseFloat(dispute.counter_offer_amount!.toString());
       const orderAmount = parseFloat(dispute.orders.amount.toString());
+      const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
       const now = new Date();
 
       const buyer = dispute.users_disputes_buyer;
@@ -1116,15 +1117,15 @@ export class DisputeController {
       const listingImage = dispute.orders.listing_image;
 
       // ≥70% of item cost → forced return (buyer must return item first)
-      if (isForceReturnThreshold(counterOfferAmount, orderAmount)) {
-        console.log(`[FORCED-RETURN] Buyer accepted counter ≥70% (£${counterOfferAmount.toFixed(2)} / £${orderAmount.toFixed(2)}) — triggering forced return`);
+      if (isForceReturnThreshold(counterOfferAmount, itemCost)) {
+        console.log(`[FORCED-RETURN] Buyer accepted counter ≥70% (£${counterOfferAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
 
         const forcedReturn = await createForcedReturn({
           orderId: dispute.order_id,
           disputeId,
           buyerId: buyer.id,
           sellerId: seller.id,
-          itemCost: orderAmount,
+          itemCost,
           listingTitle,
           listingImage,
         });
@@ -1134,7 +1135,7 @@ export class DisputeController {
           data: {
             status: 'buyer_accepted',
             resolution_type: 'forced_return',
-            resolution_amount: orderAmount,
+            resolution_amount: itemCost,
             resolved_by: 'buyer',
             resolved_at: now,
             updated_at: now,
@@ -1145,7 +1146,7 @@ export class DisputeController {
           success: true,
           forcedReturn: true,
           returnId: forcedReturn.returnId,
-          message: `Counter-offer of ≥70% triggers a forced return. Return the item to receive a full refund of £${orderAmount.toFixed(2)}.`,
+          message: `Counter-offer of ≥70% triggers a forced return. Return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
         });
       }
 
@@ -1508,9 +1509,12 @@ export class DisputeController {
       console.log(`   Order amount: £${orderAmount.toFixed(2)}`);
       console.log(`   Final refund: £${finalRefundAmount.toFixed(2)}`);
 
+      // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
+      const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
+
       // ≥70% of item cost → forced return (buyer must return item first)
-      if (finalRefundAmount > 0 && isForceReturnThreshold(finalRefundAmount, orderAmount)) {
-        console.log(`[FORCED-RETURN] Admin resolved ≥70% refund (£${finalRefundAmount.toFixed(2)} / £${orderAmount.toFixed(2)}) — triggering forced return`);
+      if (finalRefundAmount > 0 && isForceReturnThreshold(finalRefundAmount, itemCost)) {
+        console.log(`[FORCED-RETURN] Admin resolved ≥70% refund (£${finalRefundAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
 
         const buyer = dispute.users_disputes_buyer;
         const seller = dispute.users_disputes_seller;
@@ -1522,7 +1526,7 @@ export class DisputeController {
           disputeId,
           buyerId: buyer.id,
           sellerId: seller.id,
-          itemCost: orderAmount,
+          itemCost,
           listingTitle,
           listingImage,
         });
@@ -1532,7 +1536,7 @@ export class DisputeController {
           data: {
             status: 'admin_resolved',
             resolution_type: 'forced_return',
-            resolution_amount: orderAmount,
+            resolution_amount: itemCost,
             resolution_notes: resolutionNotes,
             resolved_by: 'admin',
             resolved_at: new Date(),
@@ -1544,7 +1548,7 @@ export class DisputeController {
           success: true,
           forcedReturn: true,
           returnId: forcedReturn.returnId,
-          message: `Admin refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${orderAmount.toFixed(2)}.`,
+          message: `Admin refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
         });
       }
 
