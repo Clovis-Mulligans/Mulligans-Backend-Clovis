@@ -46,3 +46,32 @@ The admin endpoint now validates `refundAmount > orderAmount` before the Stripe 
 ### 5. Escrow release transfer — HAS idempotency key
 **File:** `escrowService.ts:666`  
 **Context:** `autoReleaseEscrow` uses `idempotencyKey: 'escrow_release_group_${trackingKey}'`. Already hardened.
+
+---
+
+# Questions — Stuck-Order Safety Net + Auto-Ship Stripe Consistency
+
+## Schema Change: `payout_blocked_at` + `payout_reminder_sent_at`
+
+Two nullable DateTime columns added to `orders`:
+- `payout_blocked_at` — when escrow release first detected the seller cannot receive payout
+- `payout_reminder_sent_at` — last seller reminder timestamp (enforces 3-day cadence)
+
+Both nullable, no default. Existing orders get NULL. Non-destructive.
+Dev: `prisma db push`. Prod: run `prisma/migrations/stuck_order_safety_net/migration.sql`.
+
+## Admin Surface
+
+`GET /admin/stuck-orders` behind `adminAuth`. Returns JSON for dashboard wiring.
+At 14 days, a `support_ticket` is also auto-created (type: `payout_blocked`, priority: `high`).
+
+## Security
+
+- New fields are server-side only (cron writes, no user-facing endpoint reads/writes them)
+- Admin endpoint does NOT expose raw `stripe_connect_id`
+- Seller notifications say "complete your payment setup" — no financial detail leaked
+- Buyer receives NO notification about blocked payout state
+
+## Change 1: Auto-Ship Stripe Gate Removed
+
+The `stripe_connect_status === 'active'` gate at autoShippingService.ts:116 has been removed per the brief. Auto-ship now requires only a sending address, matching the manual path. No other shipping path gates on Stripe status.

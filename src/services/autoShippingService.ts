@@ -109,16 +109,10 @@ export async function autoPurchaseLabel(orderId: string): Promise<AutoLabelResul
       };
     }
 
-    // 3. HYBRID TRIGGER GATE — three checks before auto-purchasing
+    // 3. GATE — seller must have a sending address (Stripe NOT required to ship)
     const seller = order.users_orders_seller_idTousers;
 
-    // Gate 1: Seller must be Stripe-verified
-    if (seller?.stripe_connect_status !== 'active') {
-      console.log(`[AUTO-SHIP] Gate 1 fail: seller ${seller?.id} not verified (status: ${seller?.stripe_connect_status})`);
-      return { success: false, orderId, skippedReason: 'seller_not_verified' };
-    }
-
-    // Gate 2: Seller must have a stored sending address
+    // Gate: Seller must have a stored sending address
     const sellerAddr = await getSellerSendingAddress(order.seller_id);
     if (!sellerAddr.isReal || !sellerAddr.address) {
       console.log(`[AUTO-SHIP] Gate 2 fail: no sending address for seller ${seller?.id}`);

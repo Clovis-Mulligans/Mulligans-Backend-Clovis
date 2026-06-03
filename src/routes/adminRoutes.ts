@@ -1760,4 +1760,82 @@ router.get('/audit-log', adminAuth, async (req, res) => {
   }
 });
 
+// ============================================
+// STUCK ORDERS (PAYOUT BLOCKED)
+// Orders where seller hasn't completed Stripe onboarding
+// ============================================
+router.get('/stuck-orders', adminAuth, async (req, res) => {
+  try {
+    const stuckOrders = await prisma.orders.findMany({
+      where: {
+        payout_blocked_at: { not: null },
+        status: 'delivered',
+        stripe_transfer_id: null,
+      },
+      include: {
+        listings: {
+          select: {
+            id: true,
+            title: true,
+            images: { take: 1, orderBy: { display_order: 'asc' as const } },
+          },
+        },
+        users_orders_seller_idTousers: {
+          select: {
+            id: true,
+            display_name: true,
+            email: true,
+            stripe_connect_id: true,
+            stripe_connect_status: true,
+          },
+        },
+        users_orders_buyer_idTousers: {
+          select: { id: true, display_name: true, email: true },
+        },
+      },
+      orderBy: { payout_blocked_at: 'asc' },
+    });
+
+    const now = new Date();
+
+    res.json({
+      count: stuckOrders.length,
+      orders: stuckOrders.map(o => {
+        const blockedAt = new Date(o.payout_blocked_at!);
+        const daysBlocked = Math.floor((now.getTime() - blockedAt.getTime()) / (24 * 60 * 60 * 1000));
+        const seller = o.users_orders_seller_idTousers;
+        const buyer = o.users_orders_buyer_idTousers;
+
+        return {
+          id: o.id,
+          amount: parseFloat(o.amount.toString()),
+          listing_title: o.listing_title || o.listings?.title || null,
+          listing_image: o.listings?.images?.[0]?.image_url || o.listing_image || null,
+          blocked_since: o.payout_blocked_at,
+          days_blocked: daysBlocked,
+          last_reminder_sent: o.payout_reminder_sent_at,
+          delivered_at: o.delivered_at,
+          created_at: o.created_at,
+          seller: {
+            id: seller.id,
+            name: seller.display_name,
+            email: seller.email,
+            stripe_connect_status: seller.stripe_connect_status || 'none',
+            has_connect_id: !!seller.stripe_connect_id,
+          },
+          buyer: {
+            id: buyer.id,
+            name: buyer.display_name,
+            email: buyer.email,
+          },
+          escalated: daysBlocked >= 14,
+        };
+      }),
+    });
+  } catch (error: any) {
+    console.error('Failed to fetch stuck orders:', error);
+    res.status(500).json({ error: 'Failed to fetch stuck orders' });
+  }
+});
+
 export default router;

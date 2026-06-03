@@ -40,6 +40,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // CONSTANTS
 // ============================================
 const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 days
+const PAYOUT_REMINDER_INTERVAL_DAYS = 3; // Re-remind seller every 3 days while payout blocked
+const PAYOUT_ADMIN_ESCALATION_DAYS = 14; // Escalate to admin after 14 days blocked
 
 // Dispute statuses that BLOCK escrow release
 const BLOCKING_DISPUTE_STATUSES = ['open', 'counter_offered', 'escalated'];
@@ -136,6 +138,13 @@ async function updateUserRating(userId: string): Promise<void> {
   } catch (error: any) {
     console.error(`[ESCROW] Failed to update rating for user ${userId}:`, error.message);
   }
+}
+
+// ============================================
+// HELPER: Check if seller can receive a payout
+// ============================================
+function sellerCanReceivePayout(seller: { stripe_connect_id: string | null; stripe_connect_status?: string | null }): boolean {
+  return !!seller.stripe_connect_id && seller.stripe_connect_status === 'active';
 }
 
 // ============================================
@@ -467,6 +476,7 @@ export async function autoReleaseEscrow(): Promise<void> {
           select: {
             id: true,
             stripe_connect_id: true,
+            stripe_connect_status: true,
             display_name: true,
             email: true,
           },
@@ -615,31 +625,122 @@ export async function autoReleaseEscrow(): Promise<void> {
         }
 
         // ============================================
-        // CREATE STRIPE TRANSFER
+        // BLOCKED PAYOUT CHECK — SAFETY NET
+        // If seller cannot receive payout, track it, remind, escalate
         // ============================================
-       if (!seller.stripe_connect_id) {
-          console.warn(`[ESCROW] Seller ${seller.id} has no Stripe Connect — leaving orders in delivered status for retry`);
+        if (!sellerCanReceivePayout(seller)) {
+          const blockedReason = !seller.stripe_connect_id
+            ? 'no_stripe_connect_id'
+            : `stripe_status_${seller.stripe_connect_status || 'null'}`;
 
-          // Notify seller to set up Stripe Connect
-          try {
-            await prisma.notifications.create({
-              data: {
-                id: `notif_${crypto.randomUUID()}`,
-                user_id: seller.id,
-                type: 'payout',
-                title: 'Action Required: Set Up Payment',
-                message: 'You have sold items but cannot receive payment until you complete your Stripe setup. Go to Settings > Payment Setup to get started.',
-                related_id: orders[0]?.id,
-              },
-            });
-          } catch (notifErr) {
-            console.error('[ESCROW] Failed to notify seller about missing Connect account:', notifErr);
+          console.warn(`[ESCROW] Seller ${seller.id} cannot receive payout (${blockedReason}) — processing blocked-payout safety net`);
+
+          for (const order of orders) {
+            const wasAlreadyBlocked = !!(order as any).payout_blocked_at;
+            const blockedAt = wasAlreadyBlocked
+              ? new Date((order as any).payout_blocked_at)
+              : now;
+            const daysSinceBlocked = wasAlreadyBlocked
+              ? Math.floor((now.getTime() - blockedAt.getTime()) / (24 * 60 * 60 * 1000))
+              : 0;
+
+            const lastReminderAt = (order as any).payout_reminder_sent_at
+              ? new Date((order as any).payout_reminder_sent_at)
+              : null;
+            const daysSinceReminder = lastReminderAt
+              ? Math.floor((now.getTime() - lastReminderAt.getTime()) / (24 * 60 * 60 * 1000))
+              : Infinity;
+
+            // First time blocked: set the payout_blocked_at timestamp
+            if (!wasAlreadyBlocked) {
+              await prisma.orders.update({
+                where: { id: order.id },
+                data: {
+                  payout_blocked_at: now,
+                  payout_reminder_sent_at: now,
+                  updated_at: now,
+                },
+              });
+            }
+
+            // Send notification if first time OR 3+ days since last reminder
+            const shouldRemind = !wasAlreadyBlocked || daysSinceReminder >= PAYOUT_REMINDER_INTERVAL_DAYS;
+
+            if (shouldRemind) {
+              const listingTitle = order.listings?.title || order.listing_title || 'your item';
+              const payoutAmount = actualPayout.toFixed(2);
+
+              try {
+                await prisma.notifications.create({
+                  data: {
+                    id: crypto.randomUUID(),
+                    user_id: seller.id,
+                    type: 'payout',
+                    title: wasAlreadyBlocked ? 'Reminder: Complete Payment Setup' : 'Action Required: Set Up Payment',
+                    message: `£${payoutAmount} for "${listingTitle}" is ready for you — complete your payment setup to withdraw it.`,
+                    related_id: order.id,
+                  },
+                });
+
+                await sendPushNotification(
+                  seller.id,
+                  wasAlreadyBlocked ? 'Reminder: Complete Payment Setup' : 'Action Required: Set Up Payment',
+                  `£${payoutAmount} is ready — complete your payment setup to withdraw.`,
+                  { type: 'payout_blocked', order_id: order.id }
+                ).catch(err => console.error('[ESCROW] Push to seller failed:', err));
+
+                if (wasAlreadyBlocked) {
+                  await prisma.orders.update({
+                    where: { id: order.id },
+                    data: { payout_reminder_sent_at: now, updated_at: now },
+                  });
+                }
+
+                console.log(`[ESCROW] ${wasAlreadyBlocked ? 'Reminder' : 'Initial'} notification sent to seller ${seller.id} for blocked payout on order ${order.id}`);
+              } catch (notifErr) {
+                console.error('[ESCROW] Failed to notify seller about blocked payout:', notifErr);
+              }
+            } else {
+              console.log(`[ESCROW] Skipping reminder for order ${order.id} — last sent ${daysSinceReminder} day(s) ago`);
+            }
+
+            // 14-day admin escalation
+            if (daysSinceBlocked >= PAYOUT_ADMIN_ESCALATION_DAYS) {
+              const existingTicket = await prisma.support_tickets.findFirst({
+                where: { order_id: order.id, type: 'payout_blocked' },
+              });
+
+              if (!existingTicket) {
+                try {
+                  await prisma.support_tickets.create({
+                    data: {
+                      id: crypto.randomUUID(),
+                      user_id: seller.id,
+                      type: 'payout_blocked',
+                      order_id: order.id,
+                      subject: `[STUCK PAYOUT] Order ${order.id} — seller payout blocked ${daysSinceBlocked}+ days`,
+                      message: `Order ${order.id} has had its payout blocked for ${daysSinceBlocked} days.\n\nSeller: ${seller.display_name || 'Unknown'} (${seller.id})\nSeller email: ${seller.email || 'N/A'}\nSeller Stripe status: ${seller.stripe_connect_status || 'none'}\nStripe Connect ID: ${seller.stripe_connect_id ? 'exists' : 'missing'}\nOrder amount: £${parseFloat(order.amount.toString()).toFixed(2)}\nPayout amount: £${actualPayout.toFixed(2)}\nBlocked since: ${blockedAt.toISOString()}\n\nThe seller has not completed Stripe Connect onboarding. Manual follow-up required.`,
+                      status: 'open',
+                      priority: 'high',
+                      created_at: now,
+                    },
+                  });
+                  console.log(`[ESCROW] ⚠️ Admin ticket created for stuck payout on order ${order.id} (${daysSinceBlocked} days blocked)`);
+                } catch (ticketErr) {
+                  console.error('[ESCROW] Failed to create admin ticket for stuck payout:', ticketErr);
+                }
+              }
+            }
           }
 
           // Do NOT mark as completed — leave in delivered so cron retries next run
           continue;
         }
 
+        // ============================================
+        // CREATE STRIPE TRANSFER
+        // (Seller has active Stripe Connect — proceed with payout)
+        // ============================================
         const transferAmountPence = Math.round(actualPayout * 100);
         let transferId: string | null = null;
         const orderIds = orders.map(o => o.id).join(',');
@@ -677,6 +778,8 @@ export async function autoReleaseEscrow(): Promise<void> {
               status: 'completed',
               completed_at: now,
               stripe_transfer_id: transferId, // ✅ Same transfer ID for all orders
+              payout_blocked_at: null,
+              payout_reminder_sent_at: null,
               updated_at: now,
             },
           });
