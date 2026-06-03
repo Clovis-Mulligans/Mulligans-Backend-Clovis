@@ -34,14 +34,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 // ============================================
 
 
-// Fee calculation - matches your pricing structure
-const calculateSellerPayout = (totalAmount: number): number => {
-  const platformFeePercent = 0.075;
-  const platformFeeFixed = 0.99;
-  const sellerPayout = (totalAmount - platformFeeFixed) / (1 + platformFeePercent);
-  return Math.round(sellerPayout * 100) / 100;
-};
-
 export class OrderController {
   /**
    * Get order counts for badges (pending sales + new purchases)
@@ -1715,7 +1707,7 @@ if (isBuyerCancelling) {
       }
 
       const seller = order.users_orders_seller_idTousers;
-      const sellerPayout = order.seller_payout || calculateSellerPayout(parseFloat(order.amount.toString()));
+      const sellerPayout = order.seller_payout;
       const listingTitle = order.listings?.title || (order as any).listing_title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || (order as any).listing_image || null;
 

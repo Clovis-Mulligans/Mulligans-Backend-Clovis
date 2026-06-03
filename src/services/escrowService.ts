@@ -571,35 +571,17 @@ export async function autoReleaseEscrow(): Promise<void> {
         // ============================================
         // CALCULATE CORRECT PAYOUT FOR GROUP
         // ============================================
-        const itemsTotal = orders.reduce((sum, o) => {
+        // Seller receives item price only — platform retains shipping and pays label cost
+        const actualPayout = orders.reduce((sum, o) => {
           const payout = o.seller_payout ? parseFloat(o.seller_payout.toString()) : parseFloat(o.amount.toString());
           return sum + payout;
         }, 0);
-        
-        // Check if any order in the group was auto-shipped
+
         const isAutoShipped = orders.some(o => (o as any).label_auto_generated === true);
-        
-        let actualPayout: number;
-        let shippingAmount = 0;
-        let labelCostTotal = 0;
-        
-        if (isAutoShipped) {
-          // AUTO-SHIPPED: Seller gets items only (platform keeps shipping margin)
-          actualPayout = itemsTotal;
-        } else {
-          // MANUAL SHIP: Old formula — items + shipping - label cost
-          shippingAmount = Math.max(...orders.map(o => parseFloat((o.shipping_cost || 0).toString())));
-          labelCostTotal = orders.reduce((sum, o) => sum + parseFloat((o.label_cost || 0).toString()), 0);
-          actualPayout = itemsTotal + shippingAmount - labelCostTotal;
-        }
 
         console.log(`[ESCROW] Payout calculation for group "${trackingKey}" (${isAutoShipped ? 'AUTO-SHIPPED' : 'MANUAL'}):`);
-        console.log(`  - Items total (${orders.length} orders): £${itemsTotal.toFixed(2)}`);
-        if (!isAutoShipped) {
-          console.log(`  - Shipping (once): £${shippingAmount.toFixed(2)}`);
-          console.log(`  - Label cost deducted: £${labelCostTotal.toFixed(2)}`);
-        }
-        console.log(`  - Actual transfer amount: £${actualPayout.toFixed(2)}`);
+        console.log(`  - Items total (${orders.length} orders): £${actualPayout.toFixed(2)}`);
+        console.log(`  - Seller receives (item price only): £${actualPayout.toFixed(2)}`);
 
         // Safety check: Don't transfer negative or zero amounts
         if (actualPayout <= 0) {
