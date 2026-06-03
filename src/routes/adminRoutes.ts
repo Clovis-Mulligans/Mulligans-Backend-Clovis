@@ -1904,11 +1904,16 @@ router.post('/orders/:id/full-refund', adminAuth, adminActionLimiter, async (req
       return res.status(400).json({ error: 'No payment intent found for this order' });
     }
 
-    // Calculate FULL refund amount: buyer_total (everything the buyer paid)
-    // Fallback chain: buyer_total → amount (for legacy orders where buyer_total wasn't tracked)
-    const fullRefundAmount = claimedOrder.buyer_total
-      ? parseFloat(claimedOrder.buyer_total.toString())
-      : parseFloat(claimedOrder.amount.toString());
+    // buyer_total holds the FULL buyer charge (item + shipping + fees).
+    // order.amount is ITEM PRICE ONLY — never use it for a "full refund including fees".
+    if (claimedOrder.buyer_total == null) {
+      return res.status(400).json({
+        error: 'Cannot compute full refund: buyer_total is not recorded for this order. ' +
+               'Process this refund manually via the Stripe dashboard (refund the full captured amount).',
+        code: 'buyer_total_missing',
+      });
+    }
+    const fullRefundAmount = parseFloat(claimedOrder.buyer_total.toString());
 
     if (fullRefundAmount <= 0) {
       return res.status(400).json({ error: 'Refund amount must be greater than zero' });

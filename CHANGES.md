@@ -3,81 +3,46 @@
 **Branch:** `task/admin-full-refund`
 **Base:** `upstream/main` (`e4b3e96`)
 
-## What this does
-
-Adds an admin-only endpoint to refund the buyer's ENTIRE payment (item + shipping + buyer-protection fee + service fee). The standard refund (item-only) is unchanged — this is a manual override for exceptional cases: chargebacks, platform-fault errors, legal requirements, high-value goodwill.
-
 ## Endpoint
 
 `POST /admin/orders/:id/full-refund`
 
-### Auth
-`adminAuth` middleware (same as all admin money actions). Requires `Authorization: Admin <password>` header. Non-admin → 403.
+Admin-only. Refunds the buyer's ENTIRE payment (item + shipping + buyer-protection fee + service fee). Standard item-only refund is unchanged.
 
-### Request body
-```json
-{ "reason": "Chargeback received - full refund required" }
-```
-`reason` is required (non-empty string). Missing/empty → 400.
+- **Auth:** `adminAuth` + `adminActionLimiter`. Non-admin → 403.
+- **Reason required.** Missing/empty → 400.
+- **Amount:** `buyer_total` (server-derived, never from request body). If `buyer_total` is null → 400 with `buyer_total_missing` code (admin handles manually via Stripe dashboard). We NEVER fall back to `order.amount` because that is the item price only and would silently under-refund.
+- **Concurrency:** Claim-the-row `FOR UPDATE` + Stripe idempotency key `admin_full_refund_${orderId}`. Double-call → 409.
+- **Audit:** `admin_audit_log` via `logAdminAction()` — action, reason, amount, stripe ID, previous status.
 
-### Response
-```json
-{
-  "success": true,
-  "data": {
-    "orderId": "...",
-    "refundAmount": 58.49,
-    "stripeRefundId": "re_...",
-    "reason": "Chargeback received - full refund required",
-    "message": "Full refund of £58.49 processed (includes all fees and shipping)."
-  }
-}
-```
+## Worked example
 
-## Full-amount calculation
+£50 item, buyer paid £58.49 (= £50 item + £4.99 shipping + £2.75 protection + £0.99 fee):
+- Full refund → £58.49 (from `buyer_total`)
+- If `buyer_total` is null → 400 error, admin processes manually via Stripe dashboard
+- Standard item-only refund (other flows) → £50 (unchanged)
 
-The refund amount = `buyer_total` (everything the buyer paid). Fallback to `amount` for legacy orders where `buyer_total` wasn't tracked. The amount is **derived server-side from the order** — NEVER from request body.
+## Fix: buyer_total null-guard (commit 2)
 
-**Worked example:** Buyer paid £58.49 = £50.00 item + £4.99 shipping + £2.75 protection (7.5%) + £0.99 service fee → full refund returns £58.49 (not £50.00).
+The original code fell back to `order.amount` when `buyer_total` was null. Since `order.amount` is the item price only (not the buyer total), this would silently under-refund — defeating the entire purpose of the endpoint. Fixed: if `buyer_total` is null, return 400 with a clear message instead of guessing.
 
-## Concurrency / idempotency
+**No rollback needed on early return:** The claim-the-row does `FOR UPDATE` SELECT + read only — no order mutation happens before the `buyer_total` check. Confirmed by code review.
 
-- **Claim-the-row:** `FOR UPDATE` lock on orders where `stripe_refund_id IS NULL AND status NOT IN ('refunded', 'cancelled')`. If already refunded → 409.
-- **Stripe idempotency key:** `admin_full_refund_${orderId}`. Double-call returns the same refund.
-- Cannot race with normal refund flow (3a return refund, dispute refund, auto-release) — all check `stripe_refund_id IS NULL` before creating a refund.
+## Dev test plan
 
-## Audit logging
+1. Order WITH `buyer_total` £58.49 (item £50) → full refund = £58.49
+2. Order with `buyer_total` = null → 400 `buyer_total_missing`, NO Stripe refund, order untouched
+3. Non-admin call → 403
+4. Missing reason → 400
+5. Double-call on valid order → second bails 409, no double refund
+6. Standard item-only refund (dispute/return flows) → still refunds item cost only, unaffected
 
-Uses the existing `admin_audit_log` table + `logAdminAction()` helper. Records:
-- `action: 'admin_full_refund'`
-- `target_type: 'order'`
-- `target_id: orderId`
-- `details`: reason, refund_amount, stripe_refund_id, buyer_total, item_amount, seller_payout, previous_status, includes_fees_and_shipping
+## Typecheck
 
-## Security
-
-- Auth: `adminAuth` middleware — cannot be bypassed by non-admin callers
-- Reason: enforced server-side (400 if missing)
-- Amount: derived from order data, never from request body — caller cannot manipulate
-- Audit: always written (via `logAdminAction`, fails silently to not block the refund)
-- Rate limited: `adminActionLimiter` (same as other admin money actions)
+`npx tsc --noEmit` → ZERO errors.
 
 ## Files changed
 
 | File | Change |
 |---|---|
-| `src/routes/adminRoutes.ts` | Added `POST /admin/orders/:id/full-refund` endpoint + crypto import |
-
-No schema changes. No migration.
-
-## Dev test plan
-
-1. **Non-admin call → 403:** Send request without admin auth header
-2. **Missing reason → 400:** Send with auth but empty/missing reason
-3. **Valid full refund → success:** Admin refunds order → buyer refunded `buyer_total`, audit record written, order status → `refunded`
-4. **Double call → 409:** Call again for same order → second call bails, no double refund
-5. **Standard refund unaffected:** Normal item-only refund (via dispute/return flow) still refunds `seller_payout` not `buyer_total`
-
-## Typecheck
-
-`npx prisma generate && npx tsc --noEmit` → ZERO errors.
+| `src/routes/adminRoutes.ts` | Full-refund endpoint + buyer_total null-guard fix |
