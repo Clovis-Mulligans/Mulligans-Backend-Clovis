@@ -53,3 +53,21 @@ src/lib/escrowDecisions.ts:18,120 — DIFFERENT function (imported from feeCalcu
 ```
 
 The `completeOrder` path now uses `order.seller_payout` directly. If `seller_payout` is null (shouldn't happen), the `if (seller.stripe_connect_id && sellerPayout)` guard at line 1723 prevents a transfer — safe.
+
+## Follow-up — 9 dangling references fixed
+
+After removing `itemsTotal`, `shippingAmount`, `labelCostTotal` from the payout calculation, 9 references to these variables remained in notifications, Stripe metadata, and email data. Fixed as follows:
+
+| Line | Variable | Resolution |
+|------|----------|-----------|
+| 609 | `labelCostTotal` in <=0 notification message | Replaced with generic "payout amount was zero" message (label cost is no longer seller's concern) |
+| 656 | `itemsTotal` in Stripe metadata `items_total` | Removed field (replaced by existing `actual_payout`) |
+| 657 | `shippingAmount` in Stripe metadata `shipping_included` | **Removed field** — seller's payout no longer "includes" shipping |
+| 658 | `labelCostTotal` in Stripe metadata `label_cost_deducted` | **Removed field** — no deduction from seller |
+| 709 | `labelCostTotal` in `if (labelCostTotal > 0)` conditional | **Removed entire conditional** — no label-cost deduction message |
+| 710 | `labelCostTotal` in notification "label cost deducted" | **Removed** — replaced by plain transfer message |
+| 740 | `itemsTotal` in email `salePrice` | Replaced with `actualPayout` (same value) |
+| 741 | `labelCostTotal` in email `fees` | Set to `'0.00'` — seller pays no fees from payout |
+| 748 | `itemsTotal` in email `itemPrice` | Replaced with `actualPayout` |
+
+**Grep confirms zero remaining references** to `itemsTotal`, `shippingAmount`, or `labelCostTotal` in escrowService.ts.

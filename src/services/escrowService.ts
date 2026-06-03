@@ -606,7 +606,7 @@ export async function autoReleaseEscrow(): Promise<void> {
               user_id: seller.id,
               type: 'payout',
               title: 'Order Completed - No Payout Due',
-              message: `Order completed but shipping label cost (£${labelCostTotal.toFixed(2)}) exceeded the payout amount.`,
+              message: 'Order completed but the payout amount was zero — no transfer created.',
               related_id: firstOrder.id,
             },
           });
@@ -653,9 +653,6 @@ export async function autoReleaseEscrow(): Promise<void> {
               tracking_number: trackingKey.startsWith('single_') ? 'none' : trackingKey,
               order_ids: orderIds,
               order_count: orders.length.toString(),
-              items_total: itemsTotal.toFixed(2),
-              shipping_included: shippingAmount.toFixed(2),
-              label_cost_deducted: labelCostTotal.toFixed(2),
               actual_payout: actualPayout.toFixed(2),
               released_at: now.toISOString(),
             },
@@ -708,10 +705,7 @@ export async function autoReleaseEscrow(): Promise<void> {
           itemDescription = `${orders.length} items`;
         }
 
-        let notificationMessage = `£${payoutAmount} for "${itemDescription}" has been transferred to your account.`;
-        if (labelCostTotal > 0) {
-          notificationMessage = `£${payoutAmount} for "${itemDescription}" has been transferred (£${labelCostTotal.toFixed(2)} label cost deducted).`;
-        }
+        const notificationMessage = `£${payoutAmount} for "${itemDescription}" has been transferred to your account.`;
 
         await prisma.notifications.create({
           data: {
@@ -743,15 +737,15 @@ export async function autoReleaseEscrow(): Promise<void> {
             await sendEscrowReleased(seller.email, {
               itemTitle: itemDescription,
               orderNumber: orders.length === 1 ? firstOrder.id : `${orders.length} orders`,
-              salePrice: itemsTotal.toFixed(2),
-              fees: labelCostTotal.toFixed(2),
+              salePrice: actualPayout.toFixed(2),
+              fees: '0.00',
               payoutAmount: payoutAmount,
               sellerName: seller.display_name || 'Seller',
               itemName: itemDescription,
               itemImageUrl: firstOrder.listings?.images?.[0]?.image_url || '',
               itemBrand: '',
               itemCondition: '',
-              itemPrice: `£${itemsTotal.toFixed(2)}`,
+              itemPrice: `£${actualPayout.toFixed(2)}`,
               earningsUrl: '#',
             });
             console.log('[ESCROW] Escrow released email sent to seller:', seller.email);
