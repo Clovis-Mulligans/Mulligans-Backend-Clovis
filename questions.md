@@ -132,3 +132,23 @@ The `paid_by` field has a FK to `users.id`. For forced returns, we set `paid_by:
 This endpoint accepted a seller-provided tracking number without Shippo verification. While it could theoretically serve "shipped with own label" sellers, the tracking number isn't monitored by Shippo webhooks, so the buyer gets no automatic delivery updates and the transition to `delivered` would never fire automatically. It's effectively self-attestation with a tracking number string.
 
 Removed along with shippingController.markAsShipped. If a "shipped outside system" flow is needed later, it should be built with carrier verification (e.g., Shippo universal tracking registration).
+
+---
+
+# Questions — Admin Full Refund Override
+
+## Audit mechanism — existing `admin_audit_log` table reused
+
+The `admin_audit_log` table + `logAdminAction()` helper already exist and are used for dispute resolution, user bans, report updates, etc. No new table needed. The full refund records action `'admin_full_refund'` with all relevant details in the JSON `details` field.
+
+## Refund amount — `buyer_total` field used
+
+`buyer_total` is set at all order creation paths (native payment, cart checkout). It captures the grand total the buyer paid (item + shipping + fees). For legacy orders where `buyer_total` is null, falls back to `amount`. The amount is ALWAYS derived server-side — the request body only carries `reason`, never an amount.
+
+## Security
+
+- Endpoint is behind `adminAuth` + `adminActionLimiter` (rate limited)
+- `reason` is required and recorded in audit log
+- Refund amount derived from order data, not request body
+- Claim-the-row prevents double-refund or race with other refund paths
+- Stripe idempotency key ensures at-most-once processing

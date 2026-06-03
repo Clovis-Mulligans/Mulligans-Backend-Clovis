@@ -20,6 +20,7 @@ import { logAdminAction, AUDIT_ACTIONS } from '../lib/auditLogger';
 import { restoreListingStock } from '../lib/stockUtils';
 import { INSPECTION_WINDOW_MS } from '../constants/inspection';
 
+import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 
 // Admin login rate limiter - 5 attempts per 15 minutes
@@ -1835,6 +1836,184 @@ router.get('/stuck-orders', adminAuth, async (req, res) => {
   } catch (error: any) {
     console.error('Failed to fetch stuck orders:', error);
     res.status(500).json({ error: 'Failed to fetch stuck orders' });
+  }
+});
+
+// ============================================
+// ADMIN: FULL REFUND INCLUDING FEES
+// Refunds the buyer's ENTIRE payment (item + shipping + protection fee + service fee).
+// Admin-only safety valve for chargebacks, platform-fault, legal, or goodwill.
+// ============================================
+router.post('/orders/:id/full-refund', adminAuth, adminActionLimiter, async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    const { reason } = req.body;
+
+    if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+      return res.status(400).json({ error: 'A reason is required for full refund override' });
+    }
+
+    const now = new Date();
+
+    // Claim-the-row: lock order + verify it hasn't already been refunded
+    const claimedOrder = await prisma.$transaction(async (tx) => {
+      const rows: any[] = await tx.$queryRaw`
+        SELECT id, status FROM orders
+        WHERE id = ${orderId}
+        AND stripe_refund_id IS NULL
+        AND status NOT IN ('refunded', 'cancelled')
+        FOR UPDATE`;
+      if (rows.length === 0) return null;
+
+      const previousStatus = (rows[0] as any).status;
+      return tx.orders.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          amount: true,
+          buyer_total: true,
+          shipping_cost: true,
+          seller_payout: true,
+          listing_title: true,
+          listing_image: true,
+          buyer_id: true,
+          seller_id: true,
+          stripe_payment_intent_id: true,
+          stripe_refund_id: true,
+          status: true,
+        },
+      }).then(order => order ? { ...order, _previousStatus: previousStatus } : null);
+    });
+
+    if (!claimedOrder) {
+      const existing = await prisma.orders.findUnique({
+        where: { id: orderId },
+        select: { status: true, stripe_refund_id: true },
+      });
+
+      if (existing?.stripe_refund_id) {
+        return res.status(409).json({ error: 'This order has already been refunded' });
+      }
+      if (existing?.status === 'refunded' || existing?.status === 'cancelled') {
+        return res.status(409).json({ error: `Order is already ${existing.status}` });
+      }
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    if (!claimedOrder.stripe_payment_intent_id) {
+      return res.status(400).json({ error: 'No payment intent found for this order' });
+    }
+
+    // Calculate FULL refund amount: buyer_total (everything the buyer paid)
+    // Fallback chain: buyer_total → amount (for legacy orders where buyer_total wasn't tracked)
+    const fullRefundAmount = claimedOrder.buyer_total
+      ? parseFloat(claimedOrder.buyer_total.toString())
+      : parseFloat(claimedOrder.amount.toString());
+
+    if (fullRefundAmount <= 0) {
+      return res.status(400).json({ error: 'Refund amount must be greater than zero' });
+    }
+
+    console.log(`[ADMIN-FULL-REFUND] Processing full refund for order ${orderId}`);
+    console.log(`  buyer_total: £${claimedOrder.buyer_total ? parseFloat(claimedOrder.buyer_total.toString()).toFixed(2) : 'N/A'}`);
+    console.log(`  amount (item): £${parseFloat(claimedOrder.amount.toString()).toFixed(2)}`);
+    console.log(`  Full refund: £${fullRefundAmount.toFixed(2)}`);
+    console.log(`  Reason: ${reason.trim()}`);
+
+    // Process Stripe refund
+    let refundId: string;
+    try {
+      const refund = await stripe.refunds.create({
+        payment_intent: claimedOrder.stripe_payment_intent_id,
+        amount: Math.round(fullRefundAmount * 100),
+        reason: 'requested_by_customer',
+        metadata: {
+          order_id: orderId,
+          resolution: 'admin_full_refund',
+          reason: reason.trim().slice(0, 500),
+          includes_fees: 'true',
+        },
+      }, {
+        idempotencyKey: `admin_full_refund_${orderId}`,
+      });
+
+      refundId = refund.id;
+      console.log(`[ADMIN-FULL-REFUND] ✅ Stripe refund ${refund.id}: £${fullRefundAmount.toFixed(2)}`);
+    } catch (refundErr: any) {
+      console.error(`[ADMIN-FULL-REFUND] ❌ Stripe refund failed:`, refundErr.message);
+      return res.status(500).json({ error: `Stripe refund failed: ${refundErr.message}` });
+    }
+
+    // Update order
+    await prisma.orders.update({
+      where: { id: orderId },
+      data: {
+        status: 'refunded',
+        refunded_at: now,
+        refund_amount: fullRefundAmount,
+        stripe_refund_id: refundId,
+        updated_at: now,
+      },
+    });
+
+    // Audit log
+    await logAdminAction(
+      'admin_full_refund',
+      'order',
+      orderId,
+      {
+        reason: reason.trim(),
+        refund_amount: fullRefundAmount,
+        stripe_refund_id: refundId,
+        buyer_total: claimedOrder.buyer_total ? parseFloat(claimedOrder.buyer_total.toString()) : null,
+        item_amount: parseFloat(claimedOrder.amount.toString()),
+        seller_payout: claimedOrder.seller_payout ? parseFloat(claimedOrder.seller_payout.toString()) : null,
+        previous_status: claimedOrder._previousStatus,
+        includes_fees_and_shipping: true,
+      },
+      req
+    );
+
+    // Notify buyer
+    const listingTitle = claimedOrder.listing_title || 'Your item';
+    try {
+      await prisma.notifications.create({
+        data: {
+          id: crypto.randomUUID(),
+          user_id: claimedOrder.buyer_id,
+          type: 'refund',
+          title: 'Full Refund Issued',
+          message: `A full refund of £${fullRefundAmount.toFixed(2)} for "${listingTitle}" has been issued to your original payment method.`,
+          image_url: claimedOrder.listing_image,
+          related_id: orderId,
+        },
+      });
+
+      await sendPushNotification(
+        claimedOrder.buyer_id,
+        'Full Refund Issued',
+        `£${fullRefundAmount.toFixed(2)} refund for "${listingTitle}" is on its way.`,
+        { type: 'refund', order_id: orderId }
+      );
+    } catch (notifErr) {
+      console.error('[ADMIN-FULL-REFUND] Notification failed (non-fatal):', notifErr);
+    }
+
+    console.log(`[ADMIN-FULL-REFUND] ✅ Complete — order ${orderId} fully refunded £${fullRefundAmount.toFixed(2)}`);
+
+    res.json({
+      success: true,
+      data: {
+        orderId,
+        refundAmount: fullRefundAmount,
+        stripeRefundId: refundId,
+        reason: reason.trim(),
+        message: `Full refund of £${fullRefundAmount.toFixed(2)} processed (includes all fees and shipping).`,
+      },
+    });
+  } catch (error: any) {
+    console.error('[ADMIN-FULL-REFUND] ❌ Error:', error);
+    res.status(500).json({ error: 'Failed to process full refund' });
   }
 });
 

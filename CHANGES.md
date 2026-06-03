@@ -1,82 +1,83 @@
-# CHANGES — Brief 3b: Forced Returns on High-Value Refunds
+# CHANGES — Admin "Full Refund Including Fees" Override
 
-**Branch:** `task/3b-forced-returns`
-**Base:** `upstream/main` (`f941aaa`)
+**Branch:** `task/admin-full-refund`
+**Base:** `upstream/main` (`e4b3e96`)
 
 ## What this does
 
-When a dispute refund of ≥70% of item cost is agreed (seller accepts, buyer accepts counter, or admin resolves), it triggers a **forced return**: the buyer must return the item before receiving a refund. On completion, the buyer is refunded **100% of item cost** (not the partial amount). The platform pays for the return label.
+Adds an admin-only endpoint to refund the buyer's ENTIRE payment (item + shipping + buyer-protection fee + service fee). The standard refund (item-only) is unchanged — this is a manual override for exceptional cases: chargebacks, platform-fault errors, legal requirements, high-value goodwill.
 
-## Components
+## Endpoint
 
-### 1. Forced return threshold + creation (`forcedReturnService.ts` — NEW)
-- `isForceReturnThreshold(refundAmount, itemCost)` — true if ≥70%
-- `resolveReturnLabelPayer()` — payer seam (returns `'platform'` for forced; future: seller-debit)
-- `createForcedReturn()` — creates return_request with `is_forced: true`, auto-purchases platform-paid return label via Shippo, notifies both parties, sets 5-day buyer ship deadline
+`POST /admin/orders/:id/full-refund`
 
-### 2. Dispute resolution intercepts (`disputeController.ts`)
-Three insertion points, all BEFORE the Stripe refund call:
-- **Seller accepts** (~line 850): if `requested_refund_amount ≥ 70%` → forced return
-- **Buyer accepts counter** (~line 1110): if `counter_offer_amount ≥ 70%` → forced return
-- **Admin resolves** (~line 1510): if `finalRefundAmount ≥ 70%` → forced return
+### Auth
+`adminAuth` middleware (same as all admin money actions). Requires `Authorization: Admin <password>` header. Non-admin → 403.
 
-When triggered: creates forced return, sets dispute `resolution_type: 'forced_return'`, does NOT process Stripe refund, does NOT transfer to seller, does NOT change order status. The blocking return prevents any money movement.
-
-### 3. Seller confirms receipt → 100% refund (`returnController.ts`)
-Modified `confirmReturnDelivered`: if `is_forced`, uses claim-the-row (FOR UPDATE → `refund_processing`), refunds 100% of item cost via Stripe with idempotency key, marks return completed + order returned. Reverts on failure.
-
-### 4a. Return delivery webhook (`shippingController.ts`)
-Extended `handleShippoWebhook` to check `return_requests.return_tracking_number` when no order matches. On DELIVERED status, sets `return_requests.delivered_at`.
-
-### 4b. Seller auto-confirm (`escrowService.ts`)
-`autoConfirmForcedReturns()` — added to `runEscrowJobs`. Auto-confirms forced returns where:
-- Carrier delivered + 3 days passed without seller confirmation
-- OR shipped 14+ days ago with no delivery signal (fallback)
-
-Uses same claim-the-row pattern as manual confirmation. Concurrency-safe with `confirmReturnDelivered`.
-
-### 5. Buyer-didn't-return timeout
-The existing `autoExpireReturns` already handles this — forced returns with `status: 'label_created'` past `return_ship_deadline` are cancelled. Order goes back to `delivered` → seller gets paid.
-
-## Schema change
-```prisma
-is_forced  Boolean  @default(false)  // on return_requests
+### Request body
+```json
+{ "reason": "Chargeback received - full refund required" }
 ```
-Migration: `prisma/migrations/forced_returns/migration.sql`
+`reason` is required (non-empty string). Missing/empty → 400.
 
-## Money safety
+### Response
+```json
+{
+  "success": true,
+  "data": {
+    "orderId": "...",
+    "refundAmount": 58.49,
+    "stripeRefundId": "re_...",
+    "reason": "Chargeback received - full refund required",
+    "message": "Full refund of £58.49 processed (includes all fees and shipping)."
+  }
+}
+```
 
-| Scenario | Guard |
-|---|---|
-| Double refund | Stripe idempotency key `forced_return_refund_${returnId}` |
-| Concurrent seller-confirm + auto-confirm | FOR UPDATE on `status = 'shipped'` — only one can claim |
-| Concurrent timeout + confirmation | Different status targets: timeout queries `label_created`, confirmation queries `shipped` |
-| Refund AND release to seller | BLOCKING_RETURN_STATUSES prevents escrow release while return active |
-| Claim revert on Stripe failure | Status reverted to `shipped` if Stripe call fails |
+## Full-amount calculation
 
-## Constants
-- `FORCED_RETURN_THRESHOLD = 0.70` (70%)
-- `FORCED_RETURN_SHIP_DEADLINE_DAYS = 5`
-- `FORCED_RETURN_SELLER_CONFIRM_DAYS = 3` (after delivery)
-- `FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS = 14` (after ship, no delivery signal)
+The refund amount = `buyer_total` (everything the buyer paid). Fallback to `amount` for legacy orders where `buyer_total` wasn't tracked. The amount is **derived server-side from the order** — NEVER from request body.
+
+**Worked example:** Buyer paid £58.49 = £50.00 item + £4.99 shipping + £2.75 protection (7.5%) + £0.99 service fee → full refund returns £58.49 (not £50.00).
+
+## Concurrency / idempotency
+
+- **Claim-the-row:** `FOR UPDATE` lock on orders where `stripe_refund_id IS NULL AND status NOT IN ('refunded', 'cancelled')`. If already refunded → 409.
+- **Stripe idempotency key:** `admin_full_refund_${orderId}`. Double-call returns the same refund.
+- Cannot race with normal refund flow (3a return refund, dispute refund, auto-release) — all check `stripe_refund_id IS NULL` before creating a refund.
+
+## Audit logging
+
+Uses the existing `admin_audit_log` table + `logAdminAction()` helper. Records:
+- `action: 'admin_full_refund'`
+- `target_type: 'order'`
+- `target_id: orderId`
+- `details`: reason, refund_amount, stripe_refund_id, buyer_total, item_amount, seller_payout, previous_status, includes_fees_and_shipping
+
+## Security
+
+- Auth: `adminAuth` middleware — cannot be bypassed by non-admin callers
+- Reason: enforced server-side (400 if missing)
+- Amount: derived from order data, never from request body — caller cannot manipulate
+- Audit: always written (via `logAdminAction`, fails silently to not block the refund)
+- Rate limited: `adminActionLimiter` (same as other admin money actions)
 
 ## Files changed
 
 | File | Change |
 |---|---|
-| `prisma/schema.prisma` | Added `is_forced` to `return_requests` |
-| `src/services/forcedReturnService.ts` | **NEW** — threshold check, payer seam, forced return creation + label purchase |
-| `src/controllers/disputeController.ts` | ≥70% intercept at 3 resolution paths |
-| `src/controllers/returnController.ts` | Forced return handling in `confirmReturnDelivered` |
-| `src/controllers/shippingController.ts` | Webhook handles return tracking DELIVERED |
-| `src/services/escrowService.ts` | `autoConfirmForcedReturns()` + wired into `runEscrowJobs` |
+| `src/routes/adminRoutes.ts` | Added `POST /admin/orders/:id/full-refund` endpoint + crypto import |
+
+No schema changes. No migration.
 
 ## Dev test plan
-1. ≥70% dispute → forced return created, no Stripe refund
-2. <70% dispute → normal immediate refund (unchanged)
-3. Platform-paid label generated, `paid_by: 'platform'`
-4. Seller confirms → buyer refunded 100% item cost, idempotent
-5. Concurrent confirm → second call gets 409
-6. Buyer doesn't ship → timeout cancels return, seller gets paid
-7. Seller doesn't confirm + carrier DELIVERED → auto-confirm after 3 days
-8. Seller doesn't confirm + no DELIVERED → fallback auto-confirm after 14 days
+
+1. **Non-admin call → 403:** Send request without admin auth header
+2. **Missing reason → 400:** Send with auth but empty/missing reason
+3. **Valid full refund → success:** Admin refunds order → buyer refunded `buyer_total`, audit record written, order status → `refunded`
+4. **Double call → 409:** Call again for same order → second call bails, no double refund
+5. **Standard refund unaffected:** Normal item-only refund (via dispute/return flow) still refunds `seller_payout` not `buyer_total`
+
+## Typecheck
+
+`npx prisma generate && npx tsc --noEmit` → ZERO errors.
