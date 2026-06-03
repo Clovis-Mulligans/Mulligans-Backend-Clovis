@@ -745,6 +745,13 @@ export async function autoReleaseEscrow(): Promise<void> {
         let transferId: string | null = null;
         const orderIds = orders.map(o => o.id).join(',');
 
+        // Belt-and-braces: sellerCanReceivePayout() already guarantees this is non-null,
+        // but guard the money path explicitly so TS narrows the type and future refactors stay safe.
+        if (!seller.stripe_connect_id) {
+          console.error(`[ESCROW] Unexpected: reached transfer with no stripe_connect_id for seller ${seller.id} — skipping`);
+          continue;
+        }
+
         try {
           const transfer = await stripe.transfers.create({
             amount: transferAmountPence,
