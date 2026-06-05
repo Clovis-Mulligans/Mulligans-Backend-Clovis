@@ -46,6 +46,7 @@ import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { getSaleNotificationCopy } from '../lib/saleNotificationCopy';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
@@ -905,7 +906,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       }
 
       // AUTO-SHIP: Purchase shipping label automatically
-      let autoLabelResult: { success: boolean; labelUrl?: string; trackingNumber?: string } = { success: false };
+      let autoLabelResult: { success: boolean; labelUrl?: string; trackingNumber?: string; skippedReason?: string } = { success: false };
       try {
         autoLabelResult = await autoPurchaseLabel(order.id);
       } catch (autoShipErr) {
@@ -930,11 +931,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
       // Notify seller — split on autoLabelResult.success
       const totalSaleValue = itemPrice.toFixed(2);
-      const sellerNotifType = autoLabelResult.success ? 'sale_label_ready' : 'sale_action_required';
-      const sellerNotifTitle = autoLabelResult.success ? 'Item sold!' : 'Item sold — action needed';
-      const sellerNotifBody = autoLabelResult.success
-        ? 'Your shipping label is ready. Tap to view your QR code.'
-        : 'Tap to complete shipping details for your sale.';
+      const { title: sellerNotifTitle, body: sellerNotifBody, type: sellerNotifType } = getSaleNotificationCopy(autoLabelResult.success, autoLabelResult.skippedReason);
       const notifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {

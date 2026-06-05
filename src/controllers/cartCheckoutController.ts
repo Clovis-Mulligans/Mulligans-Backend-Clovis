@@ -50,6 +50,7 @@ import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { getSaleNotificationCopy } from '../lib/saleNotificationCopy';
 import { validateShippingAddress } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
@@ -903,14 +904,14 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       }
 
       // AUTO-SHIP: Purchase shipping labels for each order
-      const autoLabelResults: Record<string, boolean> = {};
+      const autoLabelResults: Record<string, { success: boolean; skippedReason?: string }> = {};
       for (const order of createdOrders) {
         try {
           const result = await autoPurchaseLabel(order.id);
-          autoLabelResults[order.id] = result.success;
+          autoLabelResults[order.id] = { success: result.success, skippedReason: result.skippedReason };
         } catch (autoShipErr) {
           console.error(`[CART] Auto-label failed for order ${order.id} (non-fatal):`, autoShipErr);
-          autoLabelResults[order.id] = false;
+          autoLabelResults[order.id] = { success: false };
         }
       }
 
@@ -939,12 +940,9 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         const qtyText = sellerTotalQty > 1 ? ` (${sellerTotalQty} items)` : '';
 
         const sellerOrderIds = createdOrders.filter((o: any) => listing_ids.includes(o.listing_id)).map((o: any) => o.id);
-        const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]);
-        const sellerNotifType = allLabelsReady ? 'sale_label_ready' : 'sale_action_required';
-        const sellerNotifTitle = allLabelsReady ? 'Items sold!' : 'Items sold — action needed';
-        const sellerNotifBody = allLabelsReady
-          ? 'Your shipping labels are ready. Tap to view your QR codes.'
-          : 'Tap to complete shipping details for your sales.';
+        const allLabelsReady = sellerOrderIds.every((id: string) => autoLabelResults[id]?.success);
+        const firstFailedResult = sellerOrderIds.map((id: string) => autoLabelResults[id]).find(r => r && !r.success);
+        const { title: sellerNotifTitle, body: sellerNotifBody, type: sellerNotifType } = getSaleNotificationCopy(allLabelsReady, firstFailedResult?.skippedReason);
         const sellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         await prisma.notifications.create({
           data: {

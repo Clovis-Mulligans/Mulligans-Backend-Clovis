@@ -34,6 +34,7 @@ import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
+import { getSaleNotificationCopy } from '../lib/saleNotificationCopy';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
 import { logStockDecrement } from '../lib/stockUtils';
@@ -777,7 +778,7 @@ export class NativePaymentController {
     }
 
     // AUTO-SHIP: Purchase shipping label automatically
-    let autoLabelResult: { success: boolean; labelUrl?: string; trackingNumber?: string } = { success: false };
+    let autoLabelResult: { success: boolean; labelUrl?: string; trackingNumber?: string; skippedReason?: string } = { success: false };
     try {
       autoLabelResult = await autoPurchaseLabel(createdOrder.id);
     } catch (autoShipErr) {
@@ -814,11 +815,7 @@ export class NativePaymentController {
       console.error('[PAY] Push to buyer failed:', pushErr);
     }
 
-    const sellerNotifType = autoLabelResult.success ? 'sale_label_ready' : 'sale_action_required';
-    const sellerNotifTitle = autoLabelResult.success ? 'Item sold!' : 'Item sold — action needed';
-    const sellerNotifBody = autoLabelResult.success
-      ? 'Your shipping label is ready. Tap to view your QR code.'
-      : 'Tap to complete shipping details for your sale.';
+    const { title: sellerNotifTitle, body: sellerNotifBody, type: sellerNotifType } = getSaleNotificationCopy(autoLabelResult.success, autoLabelResult.skippedReason);
     const nativeSingleSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
@@ -1131,14 +1128,14 @@ export class NativePaymentController {
     }
 
     // AUTO-SHIP: Purchase shipping labels for each order
-    const autoLabelResults: Record<string, boolean> = {};
+    const autoLabelResults: Record<string, { success: boolean; skippedReason?: string }> = {};
     for (const order of orders) {
       try {
         const result = await autoPurchaseLabel(order.id);
-        autoLabelResults[order.id] = result.success;
+        autoLabelResults[order.id] = { success: result.success, skippedReason: result.skippedReason };
       } catch (autoShipErr) {
         console.error(`[PAY] Auto-label failed for order ${order.id} (non-fatal):`, autoShipErr);
-        autoLabelResults[order.id] = false;
+        autoLabelResults[order.id] = { success: false };
       }
     }
 
@@ -1187,12 +1184,9 @@ export class NativePaymentController {
       const sellerImage = sellerOrderList[0]?.listing?.images?.[0]?.image_url || null;
 
 
-const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]);
-      const sellerNotifType = allLabelsReady ? 'sale_label_ready' : 'sale_action_required';
-      const sellerNotifTitle = allLabelsReady ? 'Items sold!' : 'Items sold — action needed';
-      const sellerNotifBody = allLabelsReady
-        ? 'Your shipping labels are ready. Tap to view your QR codes.'
-        : 'Tap to complete shipping details for your sales.';
+const allLabelsReady = sellerOrderList.every(o => autoLabelResults[o.id]?.success);
+      const firstFailedResult = sellerOrderList.map(o => autoLabelResults[o.id]).find(r => r && !r.success);
+      const { title: sellerNotifTitle, body: sellerNotifBody, type: sellerNotifType } = getSaleNotificationCopy(allLabelsReady, firstFailedResult?.skippedReason);
       const nativeCartSellerNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.notifications.create({
         data: {
