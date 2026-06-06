@@ -50,7 +50,8 @@ export const createListingSchema = z.object({
       'Shoes',
       'Accessories',
       'Balls',
-      'Training Aids'
+      'Training Aids',
+      'Everything Else'
     ]),
     subcategory: z.string().min(1).max(100),
     location: z.string().min(1).max(200),
@@ -80,7 +81,8 @@ export const updateListingSchema = z.object({
       'Shoes',
       'Accessories',
       'Balls',
-      'Training Aids'
+      'Training Aids',
+      'Everything Else'
     ]).optional(),
     subcategory: z.string().min(1).max(100).optional(),
     location: z.string().min(1).max(200).optional(),
