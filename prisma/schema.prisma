@@ -184,6 +184,7 @@ model orders {
   listing_image                 String?
   listing_price                 Decimal?          @db.Decimal(10, 2)
   listing_title                 String?
+  parcel_size                   String?
   selected_size                 String?
   label_cost                    Decimal?          @db.Decimal(10, 2)
   lost_notification_sent_at     DateTime?

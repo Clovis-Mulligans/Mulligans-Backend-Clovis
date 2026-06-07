@@ -14,6 +14,7 @@ import { getSellerSendingAddress, SellerAddressResult } from '../lib/sellerAddre
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { sendDeliveryConfirmation } from '../services/emailService';
+import { autoPurchaseLabel } from '../services/autoShippingService';
 
 // ✅ FIXED: Initialize Shippo with correct API key format
 // The SDK expects "ShippoToken <your_api_key>" format
@@ -158,7 +159,7 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
     }
 
     // Get parcel size from listing
-    const parcelSize = order.listings?.parcel_size || 'medium';
+    const parcelSize = order.parcel_size || order.listings?.parcel_size || 'medium';
     const parcelConfig = PARCEL_SIZES[parcelSize as keyof typeof PARCEL_SIZES] || PARCEL_SIZES.medium;
 
     // Get seller's address info
@@ -325,22 +326,21 @@ export const getShippingRates = async (req: AuthenticatedRequest, res: Response)
 
 // ============================================
 // CREATE SHIPPING LABEL
-// Creates a label and returns PDF URL
-// ✅ NEW: Saves label_cost to order for escrow deduction
+// Delegates to autoPurchaseLabel with forcePurchase mode.
+// Rate selection uses Reading C rule (best tracked rate within buyer's budget).
 // POST /api/shipping/labels
 // ============================================
 export const createShippingLabel = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { orderId, rateId } = req.body;
+    const { orderId } = req.body;
 
-    if (!orderId || !rateId) {
+    if (!orderId) {
       return res.status(400).json({
         success: false,
-        error: 'Order ID and Rate ID are required',
+        error: 'Order ID is required',
       });
     }
 
-    // Get order
     const order = await prisma.orders.findUnique({
       where: { id: orderId },
       include: {
@@ -352,7 +352,6 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
             },
           },
         },
-        users_orders_seller_idTousers: true,
       },
     });
 
@@ -363,7 +362,6 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    // Check user is the seller
     if (order.seller_id !== req.user?.id) {
       return res.status(403).json({
         success: false,
@@ -371,7 +369,6 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    // Check order status
     if (order.status !== 'paid' && order.status !== 'to_ship') {
       return res.status(400).json({
         success: false,
@@ -379,7 +376,6 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    // Check if label already exists
     if (order.label_url) {
       return res.status(400).json({
         success: false,
@@ -388,126 +384,17 @@ export const createShippingLabel = async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    console.log('🏷️ Creating shipping label for order:', orderId, 'with rate:', rateId);
+    const result = await autoPurchaseLabel(orderId, { forcePurchase: true });
 
-   // ✅ First, fetch the rate to get the price AND carrier
-let labelCost = 0;
-let carrierName = 'Unknown';
-try {
-  const rate = await shippo.rates.get(rateId);
-  labelCost = parseFloat(rate.amount || '0');
-  carrierName = rate.provider || 'Unknown';
-  console.log('💰 Label cost from rate:', labelCost);
-  console.log('📦 Carrier from rate:', carrierName);
-} catch (rateError) {
-  console.warn('⚠️ Could not fetch rate details, will try to get from transaction');
-}
-
-    // Create transaction (purchase the label) using Shippo
-    const transaction = await shippo.transactions.create({
-      rate: rateId,
-      labelFileType: 'PDF',
-      async: false,
-    });
-
-    console.log('📋 Transaction result:', transaction.status, transaction.objectId);
-    console.log('📋 Full transaction object:', JSON.stringify(transaction, null, 2));
-
-    // Check if transaction was successful
-    if (transaction.status !== 'SUCCESS') {
-      console.error('❌ Shippo transaction failed:', transaction.messages);
+    if (!result.success) {
       return res.status(400).json({
         success: false,
-        error: 'Failed to create shipping label',
-        details: transaction.messages,
+        error: result.failureReason || result.skippedReason || 'Failed to create shipping label',
       });
     }
 
-    // Capture QR code URL and expiry (Evri ParcelShop support — F6.1)
-    const qrCodeUrl = (transaction as any).qrCodeUrl ?? (transaction as any).qr_code_url ?? null;
-
-    let qrCodeExpiresAt: Date | null = null;
-    if (Array.isArray((transaction as any).messages)) {
-      const expiryMessage = ((transaction as any).messages as any[]).find(
-        (m: any) => m.code === 'QrCodeExpirationDate'
-      );
-      if (expiryMessage?.text) {
-        const parsed = new Date(expiryMessage.text);
-        if (!isNaN(parsed.getTime())) {
-          qrCodeExpiresAt = parsed;
-        }
-      }
-    }
-
-    // ✅ NEW: Try to get label cost from transaction if we didn't get it from rate
-    if (labelCost === 0 && typeof transaction.rate === 'object' && transaction.rate !== null) {
-      const rateObj = transaction.rate as any;
-      labelCost = parseFloat(rateObj.amount || '0');
-      console.log('💰 Label cost from transaction.rate:', labelCost);
-    }
-
-    // Get carrier from rate info
-    // Use carrier from rate fetch, fallback to transaction
-const carrier = carrierName !== 'Unknown' 
-  ? carrierName 
-  : (typeof transaction.rate === 'object' ? (transaction.rate as any)?.provider || 'Unknown' : 'Unknown');
-
-    // ✅ UPDATED: Update order with tracking info, label URL, AND label_cost
-  await prisma.orders.update({
-      where: { id: orderId },
-      data: {
-        tracking_number: transaction.trackingNumber,
-        carrier: carrier,
-        label_url: transaction.labelUrl,
-        label_cost: labelCost,
-        shippo_transaction_id: transaction.objectId,
-        status: 'to_ship',
-        updated_at: new Date(),
-        qr_code_url: qrCodeUrl,
-        qr_code_expires_at: qrCodeExpiresAt,
-      },
-    });
-
-    // ✅ NEW: Also update ALL related orders from the same transaction (multi-item cart checkout)
-    // These orders share the same stripe_payment_intent_id and seller_id
-    if (order.stripe_payment_intent_id) {
-      const relatedOrdersResult = await prisma.orders.updateMany({
-        where: {
-          stripe_payment_intent_id: order.stripe_payment_intent_id,
-          seller_id: order.seller_id,
-          id: { not: orderId },
-          status: { in: ['paid', 'to_ship'] },
-        },
-        data: {
-          tracking_number: transaction.trackingNumber,
-          carrier: carrier,
-          label_url: transaction.labelUrl,
-          label_cost: 0,
-          shippo_transaction_id: transaction.objectId,
-          status: 'to_ship',
-          updated_at: new Date(),
-          qr_code_url: qrCodeUrl,
-          qr_code_expires_at: qrCodeExpiresAt,
-        },
-      });
-      
-      if (relatedOrdersResult.count > 0) {
-        console.log(`✅ Also updated ${relatedOrdersResult.count} related orders with same tracking info`);
-      }
-    }
-
-    console.log('✅ Shipping label created:', {
-      orderId,
-      trackingNumber: transaction.trackingNumber,
-      carrier,
-      labelUrl: transaction.labelUrl,
-      labelCost: labelCost,
-      qr: qrCodeUrl ? 'YES' : 'NO',
-    });
-
-    // Create notification for buyer
+    // Notify buyer
     const listingImage = order.listings?.images?.[0]?.image_url || null;
-    
     const labelCreatedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await prisma.notifications.create({
       data: {
@@ -515,18 +402,17 @@ const carrier = carrierName !== 'Unknown'
         user_id: order.buyer_id,
         type: 'shipping_label_created',
         title: 'Shipping Label Created',
-        message: `The seller has created a shipping label for your order. Tracking: ${transaction.trackingNumber}`,
+        message: `The seller has created a shipping label for your order. Tracking: ${result.trackingNumber}`,
         image_url: listingImage,
         related_id: orderId,
       },
     });
 
-    // PUSH: Notify buyer
     try {
       await sendPushNotification(
         order.buyer_id,
         'Shipping Label Created',
-        `The seller is preparing to ship your order. Tracking: ${transaction.trackingNumber}`,
+        `The seller is preparing to ship your order. Tracking: ${result.trackingNumber}`,
         { notification_id: labelCreatedNotifId, type: 'purchase_shipped', order_id: orderId }
       );
     } catch (pushErr) {
@@ -536,18 +422,15 @@ const carrier = carrierName !== 'Unknown'
     res.json({
       success: true,
       data: {
-        trackingNumber: transaction.trackingNumber,
-        trackingUrl: transaction.trackingUrlProvider,
-        labelUrl: transaction.labelUrl,
-        carrier: carrier,
-        transactionId: transaction.objectId,
-        labelCost: labelCost,
-        qr_code_url: qrCodeUrl,
+        trackingNumber: result.trackingNumber,
+        labelUrl: result.labelUrl,
+        carrier: result.carrier,
+        labelCost: result.labelCost,
+        qr_code_url: result.qrCodeUrl,
       },
     });
   } catch (error: any) {
     console.error('❌ Error creating shipping label:', error);
-    console.error('❌ Error details:', JSON.stringify(error, null, 2));
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to create shipping label',

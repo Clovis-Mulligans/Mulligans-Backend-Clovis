@@ -11,6 +11,7 @@ import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { getSellerSendingAddress } from '../lib/sellerAddress';
+import { PARCEL_SIZES } from './shippingController';
 import { sendPushNotification } from './pushNotificationController';
 import { 
   sendReturnAddressNeeded,
@@ -327,14 +328,8 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
     }
 
     // Get parcel size from original listing
-    const parcelSize = order.listings?.parcel_size || 'medium';
-    const parcelConfig = {
-      small: { length: '30', width: '20', height: '10', weight: '1' },
-      medium: { length: '45', width: '35', height: '20', weight: '5' },
-      large: { length: '130', width: '15', height: '15', weight: '3' },
-      extra_large: { length: '130', width: '40', height: '40', weight: '15' },
-      oversized: { length: '140', width: '50', height: '50', weight: '25' },
-    }[parcelSize] || { length: '45', width: '35', height: '20', weight: '5' };
+    const parcelSize = order.parcel_size || order.listings?.parcel_size || 'medium';
+    const parcelConfig = PARCEL_SIZES[parcelSize as keyof typeof PARCEL_SIZES] || PARCEL_SIZES.medium;
 
     console.log('📦 Getting return shipping rates');
     console.log('📍 From (buyer):', buyerAddress);

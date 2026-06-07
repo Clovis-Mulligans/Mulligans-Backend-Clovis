@@ -722,6 +722,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 quantity: true,
                 specifications: true,
                 title: true,
+                parcel_size: true,
                 images: {
                   take: 1,
                   orderBy: PRIMARY_IMAGE_ORDER,
@@ -799,6 +800,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 listing_title: listing.title,
                 listing_image: listingImage,
                 listing_price: effectivePrice,
+                parcel_size: listing.parcel_size,
                 currency: 'GBP',
                 stripe_payment_intent_id: session.payment_intent as string,
                 status: 'to_ship',

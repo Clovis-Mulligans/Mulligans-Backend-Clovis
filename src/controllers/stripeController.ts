@@ -778,6 +778,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               updated_at: new Date(),
               insurance_premium: insurancePremium,
               insured_value: insuredValue,
+              parcel_size: listing.parcel_size,
               // OFFER SYSTEM: Store offer details on the order
               offer_id: offerId || null,
               original_list_price: offerId ? originalListPrice : null,
