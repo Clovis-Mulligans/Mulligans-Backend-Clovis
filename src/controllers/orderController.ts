@@ -488,6 +488,8 @@ if (order.disputes) {
           subcategory: order.listings.subcategory,
           brand: order.listings.brand,
           price: parseFloat(order.listings.price.toString()),
+          parcel_size: order.listings.parcel_size || null,
+          shipping_cost: order.listings.shipping_cost ? parseFloat(order.listings.shipping_cost.toString()) : null,
           images: order.listings.images.map((img: any) => img.image_url),
         } : null,
         amount: parseFloat(order.amount.toString()),
