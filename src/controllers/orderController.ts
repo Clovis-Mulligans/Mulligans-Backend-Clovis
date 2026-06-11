@@ -474,6 +474,7 @@ if (order.disputes) {
           shipped_at: r.shipped_at?.toISOString() || null,
           delivered_at: r.delivered_at?.toISOString() || null,
           escrow_release_at: r.escrow_release_at?.toISOString() || null,
+          return_ship_deadline: r.return_ship_deadline?.toISOString() || null,
           created_at: r.created_at?.toISOString() || null,
         };
       }

@@ -571,6 +571,10 @@ export class DisputeController {
           dispute_images: {
             orderBy: { created_at: 'asc' },
           },
+          return_requests: {
+            orderBy: { created_at: 'desc' },
+            take: 1,
+          },
         },
       });
 
@@ -580,6 +584,28 @@ export class DisputeController {
 
       // Check if user is buyer or seller
       const isBuyer = dispute.buyer_id === userId;
+
+      // ✅ Format linked return request (same shape as GET /orders/:id return_request)
+      let returnRequestData = null;
+      if (dispute.return_requests && dispute.return_requests.length > 0) {
+        const r = dispute.return_requests[0];
+        returnRequestData = {
+          id: r.id,
+          status: r.status,
+          reason: r.reason,
+          refund_amount: r.refund_amount ? parseFloat(r.refund_amount.toString()) : null,
+          return_label_url: r.return_label_url,
+          return_tracking_number: r.return_tracking_number,
+          return_carrier: r.return_carrier,
+          label_cost: r.label_cost ? parseFloat(r.label_cost.toString()) : null,
+          shipping_deducted: r.shipping_deducted ? parseFloat(r.shipping_deducted.toString()) : null,
+          shipped_at: r.shipped_at?.toISOString() || null,
+          delivered_at: r.delivered_at?.toISOString() || null,
+          escrow_release_at: r.escrow_release_at?.toISOString() || null,
+          return_ship_deadline: r.return_ship_deadline?.toISOString() || null,
+          created_at: r.created_at?.toISOString() || null,
+        };
+      }
 
       // Calculate time remaining for seller response
       let timeRemaining = null;
@@ -670,6 +696,9 @@ export class DisputeController {
             created_at: img.created_at.toISOString(),
           })),
           
+          // ✅ Linked return request (same shape as GET /orders/:id return_request)
+          return_request: returnRequestData,
+
           // User context
           is_buyer: isBuyer,
           is_seller: !isBuyer,
