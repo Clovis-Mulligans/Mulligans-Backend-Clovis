@@ -27,7 +27,7 @@ import {
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { calculateSellerPayout as calcPayout, BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
-import { isForceReturnThreshold, createForcedReturn } from '../services/forcedReturnService';
+import { isForceReturnThreshold, createForcedReturn, FORCED_RETURN_SHIP_DEADLINE_DAYS } from '../services/forcedReturnService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -874,6 +874,33 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
       const listingImage = dispute.orders.listing_image;
 
+      // Buyer in-app + push for the seller's response — shared by the
+      // forced-return path and the normal path below
+      const notifyBuyerOfResponse = async (title: string, message: string) => {
+        const notifId = crypto.randomUUID();
+        await prisma.notifications.create({
+          data: {
+            id: notifId,
+            user_id: buyer.id,
+            type: 'dispute_update',
+            title,
+            message,
+            image_url: listingImage,
+            related_id: disputeId,
+          },
+        });
+        try {
+          await sendPushNotification(
+            buyer.id,
+            title,
+            message,
+            { notification_id: notifId, type: 'dispute_opened', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: true }
+          );
+        } catch (pushErr) {
+          console.error('[DISPUTE] Push notification failed:', pushErr);
+        }
+      };
+
       // If seller accepted, check forced return threshold before refunding
       if (responseType === 'accept' && resolutionAmount !== null && dispute.orders.stripe_payment_intent_id) {
         // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
@@ -902,6 +929,14 @@ export class DisputeController {
               updated_at: now,
             },
           });
+
+          // Resolution notification — refund is conditional on the return,
+          // so the copy must not promise an immediate refund
+          await notifyBuyerOfResponse(
+            '✅ Dispute Resolved',
+            `The seller accepted your dispute for "${listingTitle}". Your £${resolutionAmount.toFixed(2)} refund will be processed once you return the item — ship within ${FORCED_RETURN_SHIP_DEADLINE_DAYS} days.`
+          );
+          // TODO(C3): enable email sends once templates have working CTAs (sendDisputeResolved → buyer + seller)
 
           return res.json({
             success: true,
@@ -971,30 +1006,7 @@ export class DisputeController {
         notificationMessage = `The seller has rejected your claim for "${listingTitle}". Mulligans will now review and make a decision.`;
       }
 
-      const sellerRespondedNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: sellerRespondedNotifId,
-          user_id: buyer.id,
-          type: 'dispute_update',
-          title: notificationTitle,
-          message: notificationMessage,
-          image_url: listingImage,
-          related_id: disputeId,
-        },
-      });
-
-      // ✅ PUSH: Notify buyer of seller response
-      try {
-        await sendPushNotification(
-          buyer.id,
-          notificationTitle,
-          notificationMessage,
-          { notification_id: sellerRespondedNotifId, type: 'dispute_opened', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: true }
-        );
-      } catch (pushErr) {
-        console.error('[DISPUTE] Push notification failed:', pushErr);
-      }
+      await notifyBuyerOfResponse(notificationTitle, notificationMessage);
 
       // Send branded email to buyer
       if (buyer.email && (responseType === 'counter' || responseType === 'reject')) {
@@ -1145,6 +1157,33 @@ export class DisputeController {
       const listingTitle = dispute.orders.listing_title || 'Your item';
       const listingImage = dispute.orders.listing_image;
 
+      // Seller in-app + push for the buyer's acceptance — shared by the
+      // forced-return path and the normal path below
+      const notifySellerCounterAccepted = async (inAppMessage: string, pushMessage: string) => {
+        const notifId = crypto.randomUUID();
+        await prisma.notifications.create({
+          data: {
+            id: notifId,
+            user_id: seller.id,
+            type: 'dispute_resolved',
+            title: '✅ Dispute Resolved',
+            message: inAppMessage,
+            image_url: listingImage,
+            related_id: disputeId,
+          },
+        });
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Dispute Resolved',
+            pushMessage,
+            { notification_id: notifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: false }
+          );
+        } catch (pushErr) {
+          console.error('[DISPUTE] Push notification failed:', pushErr);
+        }
+      };
+
       // ≥70% of item cost → forced return (buyer must return item first)
       if (isForceReturnThreshold(counterOfferAmount, itemCost)) {
         console.log(`[FORCED-RETURN] Buyer accepted counter ≥70% (£${counterOfferAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
@@ -1170,6 +1209,13 @@ export class DisputeController {
             updated_at: now,
           },
         });
+
+        // Resolution notification — no payout/refund has happened yet on this path
+        await notifySellerCounterAccepted(
+          `The buyer accepted your counter proposal for "${listingTitle}". The item is being returned to you — the buyer's refund of £${counterOfferAmount.toFixed(2)} is processed after the return.`,
+          `The buyer accepted your counter proposal for "${listingTitle}". The item is being returned to you.`
+        );
+        // TODO(C3): enable email sends once templates have working CTAs (sendDisputeResolved → buyer + seller)
 
         return res.json({
           success: true,
@@ -1245,30 +1291,10 @@ export class DisputeController {
       });
 
       // Notify seller
-      const counterAcceptedNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: counterAcceptedNotifId,
-          user_id: seller.id,
-          type: 'dispute_resolved',
-          title: '✅ Dispute Resolved',
-          message: `The buyer accepted your counter proposal of £${counterOfferAmount.toFixed(2)} for "${listingTitle}".${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`,
-          image_url: dispute.orders.listing_image,
-          related_id: disputeId,
-        },
-      });
-
-      // ✅ PUSH: Notify seller of resolution
-      try {
-        await sendPushNotification(
-          seller.id,
-          'Dispute Resolved',
-          `The buyer accepted your counter proposal for "${listingTitle}".`,
-          { notification_id: counterAcceptedNotifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: false }
-        );
-      } catch (pushErr) {
-        console.error('[DISPUTE] Push notification failed:', pushErr);
-      }
+      await notifySellerCounterAccepted(
+        `The buyer accepted your counter proposal of £${counterOfferAmount.toFixed(2)} for "${listingTitle}".${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`,
+        `The buyer accepted your counter proposal for "${listingTitle}".`
+      );
 
       // Send branded resolution emails to both parties
       if (buyer.email) {
@@ -1541,14 +1567,41 @@ export class DisputeController {
       // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
       const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
 
+      const buyer = dispute.users_disputes_buyer;
+      const seller = dispute.users_disputes_seller;
+      const listingTitle = dispute.orders.listing_title || 'Your item';
+      const listingImage = dispute.orders.listing_image;
+
+      // Resolution in-app + push per party — shared by the forced-return
+      // path and the normal path below
+      const notifyResolution = async (partyUserId: string, isBuyerParty: boolean, message: string) => {
+        const notifId = crypto.randomUUID();
+        await prisma.notifications.create({
+          data: {
+            id: notifId,
+            user_id: partyUserId,
+            type: 'dispute_resolved',
+            title: '⚖️ Dispute Resolved',
+            message,
+            image_url: listingImage,
+            related_id: disputeId,
+          },
+        });
+        try {
+          await sendPushNotification(
+            partyUserId,
+            'Dispute Resolved',
+            message,
+            { notification_id: notifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: isBuyerParty }
+          );
+        } catch (pushErr) {
+          console.error('[DISPUTE] Push notification failed:', pushErr);
+        }
+      };
+
       // ≥70% of item cost → forced return (buyer must return item first)
       if (finalRefundAmount > 0 && isForceReturnThreshold(finalRefundAmount, itemCost)) {
         console.log(`[FORCED-RETURN] Admin resolved ≥70% refund (£${finalRefundAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
-
-        const buyer = dispute.users_disputes_buyer;
-        const seller = dispute.users_disputes_seller;
-        const listingTitle = dispute.orders.listing_title || 'Your item';
-        const listingImage = dispute.orders.listing_image;
 
         const forcedReturn = await createForcedReturn({
           orderId: dispute.order_id,
@@ -1572,6 +1625,20 @@ export class DisputeController {
             updated_at: new Date(),
           },
         });
+
+        // Resolution notifications — refund is conditional on the return,
+        // so the copy must not promise an immediate refund
+        await notifyResolution(
+          buyer.id,
+          true,
+          `After reviewing all evidence, we've approved a refund of £${finalRefundAmount.toFixed(2)} for "${listingTitle}". Return the item within ${FORCED_RETURN_SHIP_DEADLINE_DAYS} days to receive it.`
+        );
+        await notifyResolution(
+          seller.id,
+          false,
+          `The dispute for "${listingTitle}" has been resolved. The item is being returned to you — the buyer's refund of £${finalRefundAmount.toFixed(2)} is processed after the return.`
+        );
+        // TODO(C3): enable email sends once templates have working CTAs (sendDisputeResolved → buyer + seller)
 
         return res.json({
           success: true,
@@ -1650,10 +1717,6 @@ export class DisputeController {
         },
       });
 
-      const buyer = dispute.users_disputes_buyer;
-      const seller = dispute.users_disputes_seller;
-      const listingTitle = dispute.orders.listing_title || 'Your item';
-
       // Build notification messages
       let buyerMessage: string;
       let sellerMessage: string;
@@ -1669,57 +1732,9 @@ export class DisputeController {
         sellerMessage = `The dispute for "${listingTitle}" has been resolved. A partial refund of £${finalRefundAmount.toFixed(2)} was issued to the buyer.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`;
       }
 
-      // Buyer notification
-      const adminResolvedBuyerNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: adminResolvedBuyerNotifId,
-          user_id: buyer.id,
-          type: 'dispute_resolved',
-          title: '⚖️ Dispute Resolved',
-          message: buyerMessage,
-          image_url: dispute.orders.listing_image,
-          related_id: disputeId,
-        },
-      });
-
-      // Seller notification
-      const adminResolvedSellerNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: adminResolvedSellerNotifId,
-          user_id: seller.id,
-          type: 'dispute_resolved',
-          title: '⚖️ Dispute Resolved',
-          message: sellerMessage,
-          image_url: dispute.orders.listing_image,
-          related_id: disputeId,
-        },
-      });
-
-      // ✅ PUSH: Notify buyer of resolution
-      try {
-        await sendPushNotification(
-          buyer.id,
-          'Dispute Resolved',
-          buyerMessage,
-          { notification_id: adminResolvedBuyerNotifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: true }
-        );
-      } catch (pushErr) {
-        console.error('[DISPUTE] Push notification failed:', pushErr);
-      }
-
-      // ✅ PUSH: Notify seller of resolution
-      try {
-        await sendPushNotification(
-          seller.id,
-          'Dispute Resolved',
-          sellerMessage,
-          { notification_id: adminResolvedSellerNotifId, type: 'dispute_resolved', dispute_id: disputeId, order_id: dispute.order_id, is_buyer: false }
-        );
-      } catch (pushErr) {
-        console.error('[DISPUTE] Push notification failed:', pushErr);
-      }
+      // Buyer + seller notifications
+      await notifyResolution(buyer.id, true, buyerMessage);
+      await notifyResolution(seller.id, false, sellerMessage);
 
       // Send branded emails to both parties
       if (buyer.email) {
