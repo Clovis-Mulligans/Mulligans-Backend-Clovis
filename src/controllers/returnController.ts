@@ -11,6 +11,7 @@ import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { getSellerSendingAddress } from '../lib/sellerAddress';
+import { RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { 
   sendReturnAddressNeeded,
@@ -521,7 +522,7 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       console.warn(`[RETURN] Label cost (£${labelCost.toFixed(2)}) exceeds refund (£${originalRefund.toFixed(2)}) — refund zeroed out`);
     }
 
-    const returnShipDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    const returnShipDeadline = new Date(Date.now() + RETURN_SHIPPING_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
 
     // Update return request
     await prisma.return_requests.update({
@@ -752,7 +753,7 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       labelCost = parseFloat((transaction.rate as any).amount || '0');
     }
 
-    const returnShipDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    const returnShipDeadline = new Date(Date.now() + RETURN_SHIPPING_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
 
     // Update return request (refund amount stays the same since seller paid)
     await prisma.return_requests.update({

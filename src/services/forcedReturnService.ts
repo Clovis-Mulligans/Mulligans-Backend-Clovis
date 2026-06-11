@@ -7,6 +7,7 @@ import { Shippo } from 'shippo';
 import { getSellerSendingAddress } from '../lib/sellerAddress';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { PARCEL_SIZES } from '../controllers/shippingController';
+import { RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import crypto from 'crypto';
 
 const shippo = new Shippo({
@@ -17,7 +18,8 @@ const shippo = new Shippo({
 // CONSTANTS
 // ============================================
 export const FORCED_RETURN_THRESHOLD = 0.70;
-export const FORCED_RETURN_SHIP_DEADLINE_DAYS = 5;
+// Single source of truth for the ship deadline — same constant as non-forced returns
+export const FORCED_RETURN_SHIP_DEADLINE_DAYS = RETURN_SHIPPING_DEADLINE_DAYS;
 export const FORCED_RETURN_SELLER_CONFIRM_DAYS = 3;
 export const FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS = 14;
 
