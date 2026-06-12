@@ -1,6 +1,10 @@
 // src/services/forcedReturnService.ts
-// Forced return logic for high-value dispute refunds (≥70% of item cost).
+// Forced return logic for high-value dispute refunds (>60% of item cost).
 // The buyer must return the item before receiving a 100% refund.
+// Refund model (June 2026): partial refunds cap at 60% and are money-only;
+// any resolution above that is a full refund with mandatory return, so this
+// threshold is a backstop — with validation in place it is only reachable by
+// legacy/edge paths.
 
 import { prisma } from '../lib/prisma';
 import { Shippo } from 'shippo';
@@ -8,6 +12,7 @@ import { getSellerSendingAddress } from '../lib/sellerAddress';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { PARCEL_SIZES } from '../controllers/shippingController';
 import { RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { MAX_PARTIAL_FRACTION } from '../lib/refundPolicy';
 import crypto from 'crypto';
 
 const shippo = new Shippo({
@@ -17,7 +22,9 @@ const shippo = new Shippo({
 // ============================================
 // CONSTANTS
 // ============================================
-export const FORCED_RETURN_THRESHOLD = 0.70;
+// Backstop: any resolution STRICTLY ABOVE the max partial fraction (60%) of
+// item cost must be a full refund with return — partial-with-return no longer exists.
+export const FORCED_RETURN_THRESHOLD = MAX_PARTIAL_FRACTION;
 // Single source of truth for the ship deadline — same constant as non-forced returns
 export const FORCED_RETURN_SHIP_DEADLINE_DAYS = RETURN_SHIPPING_DEADLINE_DAYS;
 export const FORCED_RETURN_SELLER_CONFIRM_DAYS = 3;
@@ -28,7 +35,8 @@ export const FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS = 14;
 // ============================================
 export function isForceReturnThreshold(refundAmount: number, itemCost: number): boolean {
   if (itemCost <= 0) return false;
-  return refundAmount >= itemCost * FORCED_RETURN_THRESHOLD;
+  // Strict >: exactly 60% is the largest allowed money-only partial refund.
+  return refundAmount > itemCost * FORCED_RETURN_THRESHOLD;
 }
 
 // ============================================
@@ -136,6 +144,8 @@ export async function createForcedReturn(params: CreateForcedReturnParams): Prom
       reason: 'forced_return_high_value_refund',
       status: 'approved',
       is_forced: true,
+      // Full item cost by design: above the 60% backstop the only outcome is
+      // 100%-refund-with-return — partial-with-return does not exist in the model.
       refund_amount: itemCost,
       shipping_deducted: 0,
       created_at: now,

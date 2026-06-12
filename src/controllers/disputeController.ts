@@ -28,6 +28,15 @@ import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { calculateSellerPayout as calcPayout, BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
 import { isForceReturnThreshold, createForcedReturn, FORCED_RETURN_SHIP_DEADLINE_DAYS } from '../services/forcedReturnService';
+import {
+  isAllowedBuyerRefundPercent,
+  isAllowedCounterPercent,
+  isAllowedAdminPartialAmount,
+  isFullItemCostAmount,
+  adminPartialRuleError,
+  PARTIAL_REFUND_RULE_ERROR,
+  COUNTER_OFFER_RULE_ERROR,
+} from '../lib/refundPolicy';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -292,9 +301,10 @@ export class DisputeController {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Validate refund percentage
-      if (requestedRefundPercent < 10 || requestedRefundPercent > 100 || requestedRefundPercent % 10 !== 0) {
-        return res.status(400).json({ error: 'Invalid refund percentage. Must be 10, 20, 30, 40, 50, 60, 70, 80, 90, or 100' });
+      // Validate refund percentage — allowlist: 10–60 in 10% steps (money-only,
+      // buyer keeps the item) or 100 (full refund with return). 70–90 no longer exist.
+      if (!isAllowedBuyerRefundPercent(requestedRefundPercent)) {
+        return res.status(400).json({ error: PARTIAL_REFUND_RULE_ERROR });
       }
 
       // Find the order
@@ -813,9 +823,10 @@ export class DisputeController {
         resolutionType = dispute.requested_refund_percent === 100 ? 'full_refund' : 'partial_refund';
         resolutionAmount = parseFloat(dispute.requested_refund_amount.toString());
       } else if (responseType === 'counter') {
-        // Seller makes counter-offer
-        if (!counterOfferPercent || counterOfferPercent < 10 || counterOfferPercent > 100 || counterOfferPercent % 10 !== 0) {
-          return res.status(400).json({ error: 'Invalid counter proposal percentage' });
+        // Seller makes counter-offer — allowlist: 10–60 in 10% steps.
+        // A seller wanting to give a full refund accepts the dispute instead.
+        if (!counterOfferPercent || !isAllowedCounterPercent(counterOfferPercent)) {
+          return res.status(400).json({ error: COUNTER_OFFER_RULE_ERROR });
         }
         newStatus = 'counter_offered';
         counterOfferAmount = (orderAmount * counterOfferPercent) / 100;
@@ -906,9 +917,9 @@ export class DisputeController {
         // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
         const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
 
-        // ≥70% of item cost → forced return (buyer must return item first)
+        // >60% of item cost → backstop: full refund with forced return
         if (isForceReturnThreshold(resolutionAmount, itemCost)) {
-          console.log(`[FORCED-RETURN] Seller accepted ≥70% refund (£${resolutionAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
+          console.log(`[FORCED-RETURN] Seller accepted >60% refund (£${resolutionAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
 
           const forcedReturn = await createForcedReturn({
             orderId: dispute.order_id,
@@ -942,11 +953,11 @@ export class DisputeController {
             success: true,
             forcedReturn: true,
             returnId: forcedReturn.returnId,
-            message: `Refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
+            message: `Refunds above 60% are a full refund with return. Buyer must return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
           });
         }
 
-        // <70% — normal immediate refund
+        // ≤60% — money-only partial refund; the buyer keeps the item
         const refundAmountPence = Math.round(resolutionAmount * 100);
 
         try {
@@ -997,7 +1008,7 @@ export class DisputeController {
 
       if (responseType === 'accept') {
         notificationTitle = '✅ Dispute Resolved';
-        notificationMessage = `The seller has accepted your request. £${resolutionAmount?.toFixed(2)} will be refunded to your account.`;
+        notificationMessage = `The seller has accepted your request. £${resolutionAmount?.toFixed(2)} will be refunded to your account — you keep the item.`;
       } else if (responseType === 'counter') {
         notificationTitle = '💬 Counter Offer Received';
         notificationMessage = `The seller has made a counter proposal of £${counterOfferAmount?.toFixed(2)} (${counterOfferPercent}%) for "${listingTitle}". Please review and respond.`;
@@ -1184,9 +1195,9 @@ export class DisputeController {
         }
       };
 
-      // ≥70% of item cost → forced return (buyer must return item first)
+      // >60% of item cost → backstop: full refund with forced return (legacy counters only)
       if (isForceReturnThreshold(counterOfferAmount, itemCost)) {
-        console.log(`[FORCED-RETURN] Buyer accepted counter ≥70% (£${counterOfferAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
+        console.log(`[FORCED-RETURN] Buyer accepted counter >60% (£${counterOfferAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
 
         const forcedReturn = await createForcedReturn({
           orderId: dispute.order_id,
@@ -1221,11 +1232,11 @@ export class DisputeController {
           success: true,
           forcedReturn: true,
           returnId: forcedReturn.returnId,
-          message: `Counter-offer of ≥70% triggers a forced return. Return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
+          message: `Counter-offers above 60% are a full refund with return. Return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
         });
       }
 
-      // <70% — normal immediate refund
+      // ≤60% — money-only partial refund; the buyer keeps the item
       // 1. Process refund to buyer
       if (dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(counterOfferAmount * 100);
@@ -1292,7 +1303,7 @@ export class DisputeController {
 
       // Notify seller
       await notifySellerCounterAccepted(
-        `The buyer accepted your counter proposal of £${counterOfferAmount.toFixed(2)} for "${listingTitle}".${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`,
+        `The buyer accepted your counter proposal of £${counterOfferAmount.toFixed(2)} for "${listingTitle}" and keeps the item.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`,
         `The buyer accepted your counter proposal for "${listingTitle}".`
       );
 
@@ -1545,6 +1556,8 @@ export class DisputeController {
       }
 
       const orderAmount = parseFloat(dispute.orders.amount.toString());
+      // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
+      const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
       let finalRefundAmount = 0;
       const now = new Date();
 
@@ -1558,14 +1571,17 @@ export class DisputeController {
         if (resolutionAmount > orderAmount) {
           return res.status(400).json({ error: `Resolution amount (£${resolutionAmount.toFixed(2)}) cannot exceed order amount (£${orderAmount.toFixed(2)})` });
         }
+        // Refund model: partials are ≤60% of item cost (money-only). An amount equal
+        // to the full item cost is allowed and routes to the forced-return backstop;
+        // anything in between is rejected so the admin UI surfaces the rule.
+        if (!isAllowedAdminPartialAmount(resolutionAmount, itemCost) && !isFullItemCostAmount(resolutionAmount, itemCost)) {
+          return res.status(400).json({ error: adminPartialRuleError(itemCost) });
+        }
         finalRefundAmount = resolutionAmount;
       }
 
       console.log(`   Order amount: £${orderAmount.toFixed(2)}`);
       console.log(`   Final refund: £${finalRefundAmount.toFixed(2)}`);
-
-      // Item cost = seller_payout (item price only), NOT orderAmount (buyer total incl. fees/shipping)
-      const itemCost = parseFloat((dispute.orders.seller_payout ?? dispute.orders.amount).toString());
 
       const buyer = dispute.users_disputes_buyer;
       const seller = dispute.users_disputes_seller;
@@ -1599,9 +1615,9 @@ export class DisputeController {
         }
       };
 
-      // ≥70% of item cost → forced return (buyer must return item first)
+      // >60% of item cost → backstop: full refund with forced return
       if (finalRefundAmount > 0 && isForceReturnThreshold(finalRefundAmount, itemCost)) {
-        console.log(`[FORCED-RETURN] Admin resolved ≥70% refund (£${finalRefundAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
+        console.log(`[FORCED-RETURN] Admin resolved >60% refund (£${finalRefundAmount.toFixed(2)} / £${itemCost.toFixed(2)} item cost) — triggering forced return`);
 
         const forcedReturn = await createForcedReturn({
           orderId: dispute.order_id,
@@ -1644,11 +1660,11 @@ export class DisputeController {
           success: true,
           forcedReturn: true,
           returnId: forcedReturn.returnId,
-          message: `Admin refund of ≥70% triggers a forced return. Buyer must return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
+          message: `Refunds above 60% of item cost are a full refund with return. Buyer must return the item to receive a full refund of £${itemCost.toFixed(2)}.`,
         });
       }
 
-      // <70% or no-refund — normal immediate refund/transfer
+      // ≤60% or no-refund — money-only resolution; the buyer keeps the item
       // 1. Process refund if needed
       if (finalRefundAmount > 0 && dispute.orders.stripe_payment_intent_id) {
         const refundAmountPence = Math.round(finalRefundAmount * 100);
@@ -1728,8 +1744,8 @@ export class DisputeController {
         buyerMessage = `After reviewing all evidence, we've issued a full refund of £${finalRefundAmount.toFixed(2)} for "${listingTitle}".`;
         sellerMessage = `The dispute for "${listingTitle}" has been resolved. A full refund of £${finalRefundAmount.toFixed(2)} was issued to the buyer.`;
       } else {
-        buyerMessage = `After reviewing all evidence, we've issued a partial refund of £${finalRefundAmount.toFixed(2)} for "${listingTitle}".`;
-        sellerMessage = `The dispute for "${listingTitle}" has been resolved. A partial refund of £${finalRefundAmount.toFixed(2)} was issued to the buyer.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`;
+        buyerMessage = `After reviewing all evidence, we've issued a partial refund of £${finalRefundAmount.toFixed(2)} for "${listingTitle}" — you keep the item.`;
+        sellerMessage = `The dispute for "${listingTitle}" has been resolved. A partial refund of £${finalRefundAmount.toFixed(2)} was issued to the buyer, who keeps the item.${transferResult.success ? ` £${transferResult.amount?.toFixed(2)} has been transferred to your account.` : ''}`;
       }
 
       // Buyer + seller notifications
