@@ -1,20 +1,17 @@
 #!/usr/bin/env node
-/* scripts/regression-return-flow.js
+/* scripts/regression-return-flow.js  (v2)
  * Self-contained regression for the refund-model validation (60% cap) + C1
  * return_request API exposure. Run on the dev EC2 from the app directory:
  *
  *     node scripts/regression-return-flow.js
  *
- * No arguments. Reads .env itself (DATABASE_URL, JWT_SECRET), finds a real
- * buyer in the dev DB, mints a JWT the same way auth.ts verifies it, and
- * exercises the API on localhost:3001. Writes NOTHING: validation tests use a
- * fake order id (the percent check fires before the order lookup).
+ * v2: correct dispute route (POST /api/disputes), tightened assertions so
+ * "Route not found" can never satisfy an "order not found" expectation.
  */
 
 const fs = require('fs');
 const path = require('path');
 
-// --- load .env (no dotenv dependency assumptions) ---
 const envText = fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8');
 const env = {};
 for (const line of envText.split('\n')) {
@@ -46,24 +43,28 @@ async function api(method, route, token, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  let json = null; try { json = JSON.parse(text); } catch {}
-  return { status: res.status, text, json };
+  return { status: res.status, text };
 }
 
-async function tryDispute(token, percent) {
-  const body = {
+// Correct route: POST /api/disputes (openDispute). Superset of plausible
+// body field names so missing-field checks are satisfied regardless of casing.
+async function openDispute(token, percent) {
+  return api('POST', '/disputes', token, {
+    orderId: FAKE_ORDER,
+    order_id: FAKE_ORDER,
     reason: 'wrong_item',
     description: 'automated regression test',
     requestedRefundPercent: percent,
+    requested_refund_percent: percent,
     willingToReturn: true,
-  };
-  // Route shape A
-  let r = await api('POST', `/orders/${FAKE_ORDER}/dispute`, token, body);
-  if (/cannot post|<html/i.test(r.text)) {
-    // Route shape B
-    r = await api('POST', `/disputes`, token, { ...body, orderId: FAKE_ORDER, order_id: FAKE_ORDER });
-  }
-  return r;
+    willing_to_return: true,
+  });
+}
+
+const RULE_MSG = /Partial refunds can be up to 60/i;
+// "order ... not found" but explicitly NOT the router's "Route not found"
+function isOrderNotFound(text) {
+  return /not found/i.test(text) && !/route not found/i.test(text);
 }
 
 (async () => {
@@ -72,54 +73,43 @@ async function tryDispute(token, percent) {
     orderBy: { created_at: 'desc' },
     select: { id: true, buyer_id: true, status: true },
   });
-  if (!order) { console.error('No orders in dev DB at all — cannot proceed.'); process.exit(1); }
+  if (!order) { console.error('No orders in dev DB — cannot proceed.'); process.exit(1); }
   const user = await prisma.users.findUnique({ where: { id: order.buyer_id }, select: { id: true, email: true } });
   console.log(`Using buyer ${user.email || user.id}, order ${order.id} (${order.status})`);
 
-  // Mint a token with a superset of common payload fields so whatever
-  // auth.ts reads (userId / sub / id) is present.
   const token = jwt.sign(
     { userId: user.id, sub: user.id, id: user.id, email: user.email || undefined },
     env.JWT_SECRET,
     { expiresIn: '1h' },
   );
 
-  // Sanity: token works at all
   const me = await api('GET', `/orders/${order.id}`, token);
   if (me.status === 401 || me.status === 403) {
-    console.error(`Minted token rejected (${me.status}). auth.ts payload shape differs — paste this to Claude:`);
-    console.error(me.text.slice(0, 300));
+    console.error(`Minted token rejected (${me.status}):`); console.error(me.text.slice(0, 300));
     process.exit(1);
   }
   console.log('Token accepted.\n');
 
   console.log('== Refund-model validation (writes nothing; fake order id) ==');
-  let r = await tryDispute(token, 70);
-  check('70% rejected with rule message',
-    /Partial refunds can be up to 60/i.test(r.text),
-    `status ${r.status}: ${r.text.slice(0, 200)}`);
+  let r = await openDispute(token, 70);
+  check('70% rejected with rule message', RULE_MSG.test(r.text), `status ${r.status}: ${r.text.slice(0, 250)}`);
 
-  r = await tryDispute(token, 65);
-  check('65% (off-step) rejected with rule message',
-    /Partial refunds can be up to 60/i.test(r.text),
-    `status ${r.status}: ${r.text.slice(0, 200)}`);
+  r = await openDispute(token, 65);
+  check('65% (off-step) rejected with rule message', RULE_MSG.test(r.text), `status ${r.status}: ${r.text.slice(0, 250)}`);
 
-  r = await tryDispute(token, 60);
-  check('60% passes validation (dies at order lookup, NOT at the percent gate)',
-    /not found/i.test(r.text) && !/Partial refunds/i.test(r.text),
-    `status ${r.status}: ${r.text.slice(0, 200)}`);
+  r = await openDispute(token, 60);
+  check('60% passes validation (dies at ORDER lookup, not percent gate)',
+    isOrderNotFound(r.text) && !RULE_MSG.test(r.text),
+    `status ${r.status}: ${r.text.slice(0, 250)}`);
 
-  r = await tryDispute(token, 100);
-  check('100 passes validation (dies at order lookup)',
-    /not found/i.test(r.text) && !/Partial refunds/i.test(r.text),
-    `status ${r.status}: ${r.text.slice(0, 200)}`);
+  r = await openDispute(token, 100);
+  check('100 passes validation (dies at ORDER lookup)',
+    isOrderNotFound(r.text) && !RULE_MSG.test(r.text),
+    `status ${r.status}: ${r.text.slice(0, 250)}`);
 
   console.log('\n== C1: return_request exposure on order detail ==');
-  check(`GET /orders/:id contains return_request key`,
-    /"return_request"/.test(me.text),
-    me.text.slice(0, 300));
+  check('GET /orders/:id contains return_request key', /"return_request"/.test(me.text), me.text.slice(0, 300));
 
-  // If any return exists in dev, check the C1 fields are serialized on its order
   const ret = await prisma.return_requests.findFirst({
     orderBy: { created_at: 'desc' },
     select: { id: true, order_id: true, status: true, return_ship_deadline: true },
@@ -128,19 +118,16 @@ async function tryDispute(token, percent) {
     const retOrder = await prisma.orders.findUnique({ where: { id: ret.order_id }, select: { buyer_id: true } });
     const retToken = jwt.sign({ userId: retOrder.buyer_id, sub: retOrder.buyer_id, id: retOrder.buyer_id }, env.JWT_SECRET, { expiresIn: '1h' });
     const rd = await api('GET', `/orders/${ret.order_id}`, retToken);
-    check('order-with-return exposes return_ship_deadline field',
-      /"return_ship_deadline"/.test(rd.text),
-      rd.text.slice(0, 300));
+    check('order-with-return exposes return_ship_deadline field', /"return_ship_deadline"/.test(rd.text), rd.text.slice(0, 300));
     console.log(`      (return ${ret.id}, status ${ret.status}, deadline ${ret.return_ship_deadline})`);
   } else {
-    console.log('SKIP  no return rows in dev DB — field check on a with-return order not possible');
+    console.log('SKIP  no return rows in dev DB');
   }
 
-  console.log('\n== Constants check: 5-day deadline ==');
-  // Read the compiled constant rather than trusting source: what the running code uses
+  console.log('\n== Constants check: 5-day deadline (compiled) ==');
   const compiled = fs.readFileSync(path.join(__dirname, '..', 'dist', 'config', 'constants.js'), 'utf8');
   const m = compiled.match(/RETURN_SHIPPING_DEADLINE_DAYS\s*=\s*(\d+)/);
-  check('compiled RETURN_SHIPPING_DEADLINE_DAYS === 5', m && m[1] === '5', m ? `found ${m[1]}` : 'constant not found in dist/config/constants.js');
+  check('compiled RETURN_SHIPPING_DEADLINE_DAYS === 5', m && m[1] === '5', m ? `found ${m[1]}` : 'constant not found');
 
   console.log('\n==============================');
   console.log(`Result: ${pass} passed, ${fail} failed`);
