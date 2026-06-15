@@ -13,7 +13,7 @@ import { normalizeCarrierName } from '../utils/carrierName';
 import { getSellerSendingAddress, SellerAddressResult } from '../lib/sellerAddress';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
 import { generateEmailActionToken } from '../routes/emailActionRoutes';
-import { sendDeliveryConfirmation } from '../services/emailService';
+import { sendDeliveryConfirmation, sendShipmentRecoveredBuyer, sendShipmentRecoveredSeller } from '../services/emailService';
 
 // ✅ FIXED: Initialize Shippo with correct API key format
 // The SDK expects "ShippoToken <your_api_key>" format
@@ -873,7 +873,18 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
                   { type: 'shipment_recovered', order_id: firstOrder.id });
               } catch (pushErr) { console.error('[SHIPPO] Recovery push to seller failed:', pushErr); }
 
-              // Email sends are wired in Commit 6
+              // Recovery emails
+              const recEmailData = {
+                orderNumber: firstOrder.id,
+                itemTitle: recoveryTitle,
+                itemPrice: `£${parseFloat(firstOrder.amount?.toString() || '0').toFixed(2)}`,
+                itemImageUrl: recoveryImage || '',
+                buyerName: buyerName,
+                sellerName: sellerName,
+              };
+              try { if (buyerEmail) await sendShipmentRecoveredBuyer(buyerEmail, recEmailData); } catch (e) { console.error('[SHIPPO] Recovery email to buyer failed:', e); }
+              try { if (sellerEmail) await sendShipmentRecoveredSeller(sellerEmail, recEmailData); } catch (e) { console.error('[SHIPPO] Recovery email to seller failed:', e); }
+
               console.log(`[SHIPPO] Shipment-deadline recovery: ${gracedOrders.length} order(s) recovered for tracking ${trackingNumber}`);
             }
           } catch (recoveryErr) {

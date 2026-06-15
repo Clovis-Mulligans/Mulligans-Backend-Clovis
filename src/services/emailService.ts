@@ -1185,3 +1185,85 @@ export async function sendDeletionAdminNotification(
 
   console.log(`[ACCOUNT-DELETION] Admin notification sent for user ${data.userId}`);
 }
+
+// ============================================
+// SHIPMENT DEADLINE EMAILS
+// ============================================
+
+export async function sendShipmentReviewBuyer(buyerEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('shipment-review-buyer', data);
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Shipping Update — Order #${shortId(data.orderNumber)}`,
+    html,
+  });
+  if (error) { console.error('[EMAIL] Failed to send shipment review (buyer):', error); throw new Error(error.message); }
+  console.log(`[EMAIL] Shipment review email (buyer) sent to ${buyerEmail}`);
+}
+
+export async function sendShipmentReviewSeller(sellerEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('shipment-review-seller', data);
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Shipping Update — Order #${shortId(data.orderNumber)}`,
+    html,
+  });
+  if (error) { console.error('[EMAIL] Failed to send shipment review (seller):', error); throw new Error(error.message); }
+  console.log(`[EMAIL] Shipment review email (seller) sent to ${sellerEmail}`);
+}
+
+export async function sendShipmentRecoveredBuyer(buyerEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('shipment-recovered-buyer', data);
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Good News — Order #${shortId(data.orderNumber)} Is On Its Way`,
+    html,
+  });
+  if (error) { console.error('[EMAIL] Failed to send shipment recovered (buyer):', error); throw new Error(error.message); }
+  console.log(`[EMAIL] Shipment recovered email (buyer) sent to ${buyerEmail}`);
+}
+
+export async function sendShipmentRecoveredSeller(sellerEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('shipment-recovered-seller', data);
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Good News — Order #${shortId(data.orderNumber)} Is On Its Way`,
+    html,
+  });
+  if (error) { console.error('[EMAIL] Failed to send shipment recovered (seller):', error); throw new Error(error.message); }
+  console.log(`[EMAIL] Shipment recovered email (seller) sent to ${sellerEmail}`);
+}
+
+export async function sendShipmentEscalatedBuyer(buyerEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('shipment-escalated-buyer', data);
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: buyerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Order Update — #${shortId(data.orderNumber)} Escalated to Support`,
+    html,
+  });
+  if (error) { console.error('[EMAIL] Failed to send shipment escalated (buyer):', error); throw new Error(error.message); }
+  console.log(`[EMAIL] Shipment escalated email (buyer) sent to ${buyerEmail}`);
+}
+
+export async function sendShipmentEscalatedSeller(sellerEmail: string, data: Record<string, string>): Promise<void> {
+  const html = loadTemplate('shipment-escalated-seller', data);
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to: sellerEmail,
+    replyTo: REPLY_TO_CUSTOMER,
+    subject: `Sale Update — Order #${shortId(data.orderNumber)} Escalated to Support`,
+    html,
+  });
+  if (error) { console.error('[EMAIL] Failed to send shipment escalated (seller):', error); throw new Error(error.message); }
+  console.log(`[EMAIL] Shipment escalated email (seller) sent to ${sellerEmail}`);
+}

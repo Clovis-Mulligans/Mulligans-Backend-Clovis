@@ -21,7 +21,7 @@ import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
-import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
+import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation, sendShipmentReviewBuyer, sendShipmentReviewSeller, sendShipmentRecoveredBuyer, sendShipmentRecoveredSeller, sendShipmentEscalatedBuyer, sendShipmentEscalatedSeller } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendInspectionReminders } from './inspectionReminder';
@@ -1902,7 +1902,18 @@ export async function checkShipmentNotScanned(): Promise<void> {
             { type: 'shipment_under_review', order_id: firstOrder.id });
         } catch (pushErr) { console.error('[ESCROW] Grace push to seller failed:', pushErr); }
 
-        // Email sends are wired in Commit 6
+        // Emails
+        const emailData = {
+          orderNumber: firstOrder.id,
+          itemTitle: listingTitle,
+          itemPrice: `£${parseFloat(firstOrder.amount.toString()).toFixed(2)}`,
+          itemImageUrl: listingImage || '',
+          buyerName: buyer.display_name || 'there',
+          sellerName: seller.display_name || 'there',
+        };
+        try { if (buyer.email) await sendShipmentReviewBuyer(buyer.email, emailData); } catch (e) { console.error('[ESCROW] Grace email to buyer failed:', e); }
+        try { if (seller.email) await sendShipmentReviewSeller(seller.email, emailData); } catch (e) { console.error('[ESCROW] Grace email to seller failed:', e); }
+
         console.log(`[ESCROW] Grace notification sent for tracking ${trackingKey} (${orders.length} order(s))`);
       } catch (graceErr: any) {
         console.error(`[ESCROW] ❌ Grace notification failed for tracking ${trackingKey}:`, graceErr.message);
@@ -2019,6 +2030,18 @@ export async function checkShipmentNotScanned(): Promise<void> {
                   { type: 'shipment_recovered', order_id: firstOrder.id });
               } catch (pushErr) { console.error('[ESCROW] Recovery push to seller failed:', pushErr); }
 
+              // Recovery emails
+              const recEmailData = {
+                orderNumber: firstOrder.id,
+                itemTitle: listingTitle,
+                itemPrice: `£${parseFloat(firstOrder.amount.toString()).toFixed(2)}`,
+                itemImageUrl: listingImage || '',
+                buyerName: buyer.display_name || 'there',
+                sellerName: seller.display_name || 'there',
+              };
+              try { if (buyer.email) await sendShipmentRecoveredBuyer(buyer.email, recEmailData); } catch (e) { console.error('[ESCROW] Recovery email to buyer failed:', e); }
+              try { if (seller.email) await sendShipmentRecoveredSeller(seller.email, recEmailData); } catch (e) { console.error('[ESCROW] Recovery email to seller failed:', e); }
+
               continue;
             }
           } catch (pollErr: any) {
@@ -2093,7 +2116,18 @@ export async function checkShipmentNotScanned(): Promise<void> {
             { type: 'shipment_escalated', order_id: firstOrder.id });
         } catch (pushErr) { console.error('[ESCROW] Escalation push to seller failed:', pushErr); }
 
-        // Email sends are wired in Commit 6
+        // Emails
+        const escEmailData = {
+          orderNumber: firstOrder.id,
+          itemTitle: listingTitle,
+          itemPrice: `£${parseFloat(firstOrder.amount.toString()).toFixed(2)}`,
+          itemImageUrl: listingImage || '',
+          buyerName: buyer.display_name || 'there',
+          sellerName: seller.display_name || 'there',
+        };
+        try { if (buyer.email) await sendShipmentEscalatedBuyer(buyer.email, escEmailData); } catch (e) { console.error('[ESCROW] Escalation email to buyer failed:', e); }
+        try { if (seller.email) await sendShipmentEscalatedSeller(seller.email, escEmailData); } catch (e) { console.error('[ESCROW] Escalation email to seller failed:', e); }
+
         console.log(`[ESCROW] ⚠️ Escalated tracking ${trackingKey} (${orders.length} order(s)) — admin ticket created`);
       } catch (escErr: any) {
         console.error(`[ESCROW] ❌ Escalation failed for tracking ${trackingKey}:`, escErr.message);
