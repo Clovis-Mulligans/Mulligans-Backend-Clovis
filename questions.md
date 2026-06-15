@@ -220,3 +220,73 @@ Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbo
 - **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
 - **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
 - **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.
+
+---
+
+# Questions — Shipment Deadline Implementation
+
+## Two-path mutual-exclusivity proof
+
+The `autoCancelUnshippedOrders` and `checkShipmentNotScanned` cron checks are mutually exclusive:
+
+| Check | Query filter | Fires for |
+|-------|-------------|-----------|
+| `autoCancelUnshippedOrders` | `status='to_ship'` AND `auto_cancel_at <= now` | No-label orders (auto_cancel_at is SET, shippo_transaction_id is NULL) |
+| `checkShipmentNotScanned` | `status='to_ship'` AND `shipment_deadline_at <= now` AND `shippo_transaction_id IS NOT NULL` | Labelled orders only |
+
+**Why no overlap:**
+- No-label orders: `auto_cancel_at` is set at creation and never cleared (no tracking events occur). `shippo_transaction_id` is NULL. Caught by `autoCancelUnshippedOrders` only.
+- Labelled orders: PRE_TRANSIT webhook clears `auto_cancel_at` to NULL (shippingController.ts:709), so `autoCancelUnshippedOrders` filter (`auto_cancel_at <= now`) excludes them. `shippo_transaction_id` is set, so `checkShipmentNotScanned` can find them.
+- No order can simultaneously have `auto_cancel_at <= now` AND `shippo_transaction_id IS NOT NULL` (the PRE_TRANSIT event that sets shippo_transaction_id also clears auto_cancel_at).
+
+## shipment_deadline_at is never cleared
+
+Confirmed: `shipment_deadline_at` does NOT appear in the `updateMany` data at shippingController.ts:702-712. The PRE_TRANSIT webhook clears `auto_cancel_at: null` but omits `shipment_deadline_at`, so the new field survives label creation. Grep of the entire codebase confirms `shipment_deadline_at` is only written at order creation (3 checkout controllers) and by the cron/webhook recovery (`grace_notified_at`, `grace_recovered_at`, `shipment_escalated_at` updates). The deadline itself is never cleared or modified after creation.
+
+## Idempotency guarantees
+
+| Transition | Guard | Set in same update | Effect of repeated run |
+|-----------|-------|-------------------|----------------------|
+| Grace entry (day 5) | `grace_notified_at IS NULL` | `grace_notified_at = now` | Already-notified orders excluded by filter |
+| Recovery (TRANSIT during/after grace) | `grace_recovered_at IS NULL` | `grace_recovered_at = now` | Already-recovered orders excluded by filter |
+| Escalation (day 8) | `shipment_escalated_at IS NULL` AND `grace_recovered_at IS NULL` | `shipment_escalated_at = now` | Already-escalated excluded; recovered excluded |
+| Support ticket | `findFirst` by `order_id + type='shipment_not_scanned'` | Creates only if not found | Duplicate ticket prevented |
+
+## Shippo-poll-failure behaviour
+
+On `shippo.trackingStatus.get()` failure (network error, API error, invalid carrier/tracking):
+- The catch block logs the error and calls `continue` — **skipping escalation for this order**.
+- The order retains `shipment_escalated_at = NULL`, so the next cron run will retry the poll.
+- A failed poll NEVER results in escalation — the cron defers rather than acting on incomplete data.
+- A failed poll NEVER results in recovery — no status change occurs.
+
+This is intentional: a transient Shippo outage should not cause a wave of false escalations or false recoveries.
+
+## State table
+
+| Scenario | Day 5 | Day 8 |
+|----------|-------|-------|
+| **No label** (seller never acted) | `autoCancelUnshippedOrders` fires: auto-cancel + refund | N/A (already cancelled) |
+| **Label, no scan** | Grace entry: "under review" comms to both parties | Shippo poll → still PRE_TRANSIT → admin ticket + "escalated" comms |
+| **Label + carrier scan** (happy path) | N/A (order is `in_transit` by then) | N/A |
+| **Label + scan DURING grace** (days 5-8) | Already notified "under review" | TRANSIT webhook → `grace_recovered_at` set → "all good" comms → no escalation |
+| **Label + scan AFTER escalation** (day 9+) | Already notified | Already escalated → TRANSIT webhook still sets `grace_recovered_at` + moves to `in_transit` → admin sees recovery, closes ticket manually |
+| **Shippo poll finds TRANSIT at day 8** | Already notified | Poll recovery: status updated, "all good" comms, NO escalation |
+| **Shippo poll FAILS at day 8** | Already notified | Deferred: no action, retry next cron run |
+| **Order cancelled before deadline** | `cancelled_at IS NULL` filter excludes | Excluded |
+| **Order refunded before deadline** | `refunded_at IS NULL` filter excludes | Excluded |
+
+## Security confirmation
+
+- **Shippo poll:** Errors are caught and logged; poll failure defers (no action on bad data). Carrier name is lowercased per Shippo SDK requirement. No PII sent to Shippo beyond what they already have (tracking number + carrier).
+- **Support ticket message:** Contains seller name, email, buyer name, order amount, tracking number, carrier, Shippo transaction ID. All fields admin already has access to. No passwords, tokens, or payment details included.
+- **Email template variables:** All interpolated via the existing `loadTemplate()` `{{key}}` pattern, which replaces placeholders with the provided string values. Values are item title, price, order number, buyer/seller names, image URL — all from database records, not user input. No HTML injection risk from these fields.
+- **No automated money movement.** The cron creates a support ticket and flags the order. A human admin decides all outcomes. No Stripe refund/cancel/transfer calls in the shipment-not-scanned path.
+
+## Dev/test steps for Harry
+
+1. **Schema:** Run `npx prisma migrate deploy` on dev (creates 4 columns + index). Confirm with `\d orders` in psql.
+2. **Grace entry test:** Create a test order, set `shipment_deadline_at` to the past via SQL (`UPDATE orders SET shipment_deadline_at = NOW() - INTERVAL '1 day', shippo_transaction_id = 'test_tx' WHERE id = '...'`). Run cron (`runEscrowJobs()`). Confirm `grace_notified_at` is set and buyer/seller received notification + email.
+3. **Escalation test:** Set `grace_notified_at` to 4 days ago. Run cron. The Shippo poll will likely fail for a fake transaction ID (expected). Confirm the order is deferred (not escalated) due to poll failure. For a real test, use an order with a genuine tracking number.
+4. **Recovery test:** Create a grace-notified order (step 2), then call the Shippo webhook endpoint with a TRANSIT event for that tracking number. Confirm `grace_recovered_at` is set and recovery comms sent.
+5. **Email templates:** Check `src/email-templates/shipment-*.html` render correctly in a browser. All 6 follow the existing template structure with brand colours (#1C4670, #1DC690, #278AB0).
