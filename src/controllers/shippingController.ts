@@ -790,6 +790,97 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
           console.log(`📅 Escrow release scheduled for order ${order.id}: ${escrowReleaseAt?.toISOString()}`);
         }
 
+        // Shipment-deadline recovery: if TRANSIT fires on orders that were flagged
+        // during the grace window, send "all good" comms to both parties.
+        if (status === 'TRANSIT') {
+          try {
+            const gracedOrders = await prisma.orders.findMany({
+              where: {
+                tracking_number: trackingNumber,
+                grace_notified_at: { not: null },
+                grace_recovered_at: null,
+              },
+              include: {
+                listings: {
+                  select: {
+                    title: true,
+                    images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
+                  },
+                },
+                users_orders_buyer_idTousers: {
+                  select: { id: true, email: true, display_name: true },
+                },
+                users_orders_seller_idTousers: {
+                  select: { id: true, email: true, display_name: true },
+                },
+              },
+            });
+
+            if (gracedOrders.length > 0) {
+              const now = new Date();
+              const firstOrder = gracedOrders[0];
+              const recoveryTitle = firstOrder.listings?.title || 'Your item';
+              const recoveryImage = firstOrder.listings?.images?.[0]?.image_url || null;
+              const buyerId = firstOrder.buyer_id;
+              const sellerId = firstOrder.seller_id;
+              const buyerName = firstOrder.users_orders_buyer_idTousers?.display_name || 'there';
+              const sellerName = firstOrder.users_orders_seller_idTousers?.display_name || 'there';
+              const buyerEmail = firstOrder.users_orders_buyer_idTousers?.email;
+              const sellerEmail = firstOrder.users_orders_seller_idTousers?.email;
+
+              await prisma.orders.updateMany({
+                where: {
+                  tracking_number: trackingNumber,
+                  grace_notified_at: { not: null },
+                  grace_recovered_at: null,
+                },
+                data: { grace_recovered_at: now, updated_at: now },
+              });
+
+              // In-app notifications
+              await prisma.notifications.create({
+                data: {
+                  id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  user_id: buyerId,
+                  type: 'shipment_recovered',
+                  title: 'Good News — Your Order Is On Its Way',
+                  message: `"${recoveryTitle}" has been scanned by the carrier and is now in transit.`,
+                  image_url: recoveryImage,
+                  related_id: firstOrder.id,
+                },
+              });
+              await prisma.notifications.create({
+                data: {
+                  id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  user_id: sellerId,
+                  type: 'shipment_recovered',
+                  title: 'Good News — Your Sale Is On Its Way',
+                  message: `"${recoveryTitle}" has been scanned by the carrier and is now in transit.`,
+                  image_url: recoveryImage,
+                  related_id: firstOrder.id,
+                },
+              });
+
+              // Push notifications
+              try {
+                await sendPushNotification(buyerId, 'Your Order Is On Its Way',
+                  `"${recoveryTitle}" has been scanned and is now in transit.`,
+                  { type: 'shipment_recovered', order_id: firstOrder.id });
+              } catch (pushErr) { console.error('[SHIPPO] Recovery push to buyer failed:', pushErr); }
+              try {
+                await sendPushNotification(sellerId, 'Your Sale Is On Its Way',
+                  `"${recoveryTitle}" has been scanned and is now in transit.`,
+                  { type: 'shipment_recovered', order_id: firstOrder.id });
+              } catch (pushErr) { console.error('[SHIPPO] Recovery push to seller failed:', pushErr); }
+
+              // Email sends are wired in Commit 6
+              console.log(`[SHIPPO] Shipment-deadline recovery: ${gracedOrders.length} order(s) recovered for tracking ${trackingNumber}`);
+            }
+          } catch (recoveryErr) {
+            console.error('[SHIPPO] Shipment-deadline recovery failed (non-fatal):', recoveryErr);
+          }
+        }
+
         console.log(`✅ Updated order ${order.id} status to ${newStatus}`);
       } else {
         // Check if this is a RETURN label tracking number
