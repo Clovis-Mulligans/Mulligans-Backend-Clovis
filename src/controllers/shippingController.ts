@@ -795,14 +795,68 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         // Check if this is a RETURN label tracking number
         const returnRequest = await prisma.return_requests.findFirst({
           where: { return_tracking_number: trackingNumber },
-          select: { id: true, status: true, delivered_at: true },
+          select: {
+            id: true,
+            status: true,
+            shipped_at: true,
+            delivered_at: true,
+            orders: {
+              select: {
+                id: true,
+                seller_id: true,
+                listings: {
+                  select: {
+                    title: true,
+                    images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
+                  },
+                },
+              },
+            },
+          },
         });
 
         if (returnRequest) {
-          if (status === 'DELIVERED' && !returnRequest.delivered_at) {
+          const now = new Date();
+
+          if (status === 'TRANSIT' && !returnRequest.shipped_at) {
             await prisma.return_requests.update({
               where: { id: returnRequest.id },
-              data: { delivered_at: new Date(), updated_at: new Date() },
+              data: { status: 'shipped', shipped_at: now, updated_at: now },
+            });
+            console.log(`📦 Return ${returnRequest.id} shipped (carrier scan, tracking: ${trackingNumber})`);
+
+            // Notify seller that return is on its way
+            const listingTitle = returnRequest.orders?.listings?.title || 'an item';
+            const listingImage = returnRequest.orders?.listings?.images?.[0]?.image_url || null;
+            const sellerId = returnRequest.orders?.seller_id;
+            if (sellerId) {
+              try {
+                const returnShippedNotifId = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                await prisma.notifications.create({
+                  data: {
+                    id: returnShippedNotifId,
+                    user_id: sellerId,
+                    type: 'return_shipped',
+                    title: 'Return Shipped',
+                    message: `The return for "${listingTitle}" has been scanned by the carrier and is on its way to you.`,
+                    image_url: listingImage,
+                    related_id: returnRequest.id,
+                  },
+                });
+                await sendPushNotification(
+                  sellerId,
+                  'Return Shipped',
+                  `The return for "${listingTitle}" is on its way to you.`,
+                  { type: 'return_shipped', return_id: returnRequest.id, order_id: returnRequest.orders?.id }
+                ).catch(err => console.error('[SHIP] Return push to seller failed:', err));
+              } catch (notifErr) {
+                console.error('[SHIP] Return shipped notification failed:', notifErr);
+              }
+            }
+          } else if (status === 'DELIVERED' && !returnRequest.delivered_at) {
+            await prisma.return_requests.update({
+              where: { id: returnRequest.id },
+              data: { delivered_at: now, updated_at: now },
             });
             console.log(`📬 Return ${returnRequest.id} delivered to seller (tracking: ${trackingNumber})`);
           } else {
