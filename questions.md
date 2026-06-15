@@ -152,3 +152,71 @@ The `admin_audit_log` table + `logAdminAction()` helper already exist and are us
 - Refund amount derived from order data, not request body
 - Claim-the-row prevents double-refund or race with other refund paths
 - Stripe idempotency key ensures at-most-once processing
+
+---
+
+# Questions — Brief 3c: Return-Seller Backend (A1, A2, B1, D1)
+
+## Phase 1 Plan
+
+### A1: `total_purchases` increment — three completion paths, all mutually exclusive
+
+**Confirmed dead:** `total_purchases` is never incremented anywhere. Only reads/selects exist.
+
+**Three completion paths** (each requires `status: 'delivered'`, sets `status: 'completed'` — mutually exclusive by claim-the-row):
+
+| Path | File:line | Trigger | buyer_id source | Increment |
+|------|-----------|---------|-----------------|-----------|
+| Escrow auto-release | `escrowService.ts:784-805` | Cron after escrow period | `orders[0].buyer_id` (all orders in group share buyer) | `orders.length` (batch) |
+| Buyer confirm-receipt | `orderController.ts:795-814` | `PUT /orders/:id/confirm-receipt` | `order.buyer_id` (line 727 select) | 1 |
+| Manual complete | `orderController.ts:1610-1629` | `PUT /orders/:id/complete` | needs `buyer_id` added to query | 1 |
+
+**Exactly-once guarantee:** All three paths require `status: 'delivered'` to find the order, then set `status: 'completed'`. Once completed, no path can find the order again. The escrow path has an additional idempotency key (`escrow_release_group_${trackingKey}`). Confirm-receipt has a `stripe_transfer_id` short-circuit. These are the same guards that protect `total_sales` — the increment mirrors the existing pattern.
+
+**Note on `completeOrder`:** The current query does NOT select `buyer_id`. Need to add it to the `include` or use the order object directly (Prisma `include` returns all scalar fields by default).
+
+**Money paths untouched:** The increment is placed AFTER the order status update and Stripe transfer, using the same `now` timestamp. No change to transfer amounts, escrow timing, or payout logic.
+
+### A2: `total_sales` — confirmed LIVE, three increment points
+
+`total_sales` is incremented at all three completion paths (escrowService.ts:799-804, orderController.ts:808-813, orderController.ts:1623-1628). It is real data.
+
+**Change:** Add `total_sales: true` to the seller select at `orderController.ts:385-393` and map it at line 539. Two lines, strictly additive. Auth unchanged — the endpoint already returns the seller object to both buyer and seller.
+
+### B1: Return TRANSIT → shipped via webhook
+
+**Outbound pattern (to mirror):** `shippingController.ts:680-683` — on `TRANSIT`, sets `newStatus = 'in_transit'` and `shippedAt = new Date()`.
+
+**Return webhook:** `shippingController.ts:795-813` — currently only handles `DELIVERED` for returns. All other events logged and ignored.
+
+**Tracking registration confirmed:** Return labels are created via `shippo.transactions.create()` which auto-registers tracking with Shippo. The webhook handler already matches return tracking numbers against `return_requests.return_tracking_number`.
+
+**Change:** Add `TRANSIT` handling to the return branch: update `return_requests.status = 'shipped'` and `shipped_at = new Date()`, guarded by `!returnRequest.shipped_at` (same idempotency pattern as outbound). Add notification to seller that return is in transit.
+
+**Manual endpoint preserved:** `POST /returns/mark-shipped` stays — brief says don't remove it yet. The manual endpoint and webhook now write the same fields (`status: 'shipped'`, `shipped_at`), so they don't diverge.
+
+### D1: Return QR codes — migration + three code changes
+
+**Outbound QR pattern:** `shippingController.ts:225` adds `qrCodeRequested: true` to extras. Lines 426-440 extract `qrCodeUrl` and `qrCodeExpiresAt` from the transaction response.
+
+**Schema change needed:** `return_requests` has no `qr_code_url` or `qr_code_expires_at` columns. Need a Prisma migration to add both (nullable, additive).
+
+**Migration name:** `20260615000000_return_qr_codes` (follows lexicographic convention after `20260603200000_forced_returns`).
+
+**Three `shippo.transactions.create()` calls to modify:**
+1. `returnController.ts:498` — buyer-pays label
+2. `returnController.ts:730` — seller-pays label
+3. `forcedReturnService.ts:347` — forced return (platform-pays)
+
+Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbound pattern at lines 426-440), storing to the new `return_requests` columns.
+
+**GET exposure:** The `getReturnRequest` endpoint (`returnController.ts:1199-1257`) uses `...returnRequest` spread, so the new columns will automatically appear in the response. No additional mapping needed.
+
+**Money paths untouched:** QR is a label display feature. No change to label cost, Shippo charges, or Stripe flows.
+
+## Security confirmation (all commits)
+
+- **A1:** No auth change. No amount change. Increment is additive metadata on user profile.
+- **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
+- **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
+- **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.

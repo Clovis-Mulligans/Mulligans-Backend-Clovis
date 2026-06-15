@@ -804,6 +804,15 @@ export async function autoReleaseEscrow(): Promise<void> {
           },
         });
 
+        // Update buyer's total_purchases count
+        await prisma.users.update({
+          where: { id: firstOrder.buyer_id },
+          data: {
+            total_purchases: { increment: orders.length },
+            updated_at: now,
+          },
+        });
+
         // ============================================
         // NOTIFY SELLER
         // ============================================

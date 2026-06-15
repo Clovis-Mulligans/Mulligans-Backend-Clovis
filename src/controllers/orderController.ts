@@ -813,6 +813,15 @@ if (order.disputes) {
         },
       });
 
+      // Update buyer's total_purchases
+      await prisma.users.update({
+        where: { id: order.buyer_id },
+        data: {
+          total_purchases: { increment: 1 },
+          updated_at: now,
+        },
+      });
+
       // Notify seller
       const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
@@ -1624,6 +1633,15 @@ if (isBuyerCancelling) {
         where: { id: seller.id },
         data: {
           total_sales: { increment: 1 },
+          updated_at: now,
+        },
+      });
+
+      // Update buyer's total_purchases
+      await prisma.users.update({
+        where: { id: order.buyer_id },
+        data: {
+          total_purchases: { increment: 1 },
           updated_at: now,
         },
       });
