@@ -329,6 +329,7 @@ async function purchaseReturnLabelPlatform(
       weight: parcelConfig.weight,
       massUnit: 'kg',
     }],
+    extra: { qrCodeRequested: true },
     async: false,
   });
 
@@ -355,6 +356,19 @@ async function purchaseReturnLabelPlatform(
     return { purchased: false, error: `shippo_transaction_failed: ${JSON.stringify(transaction.messages)}` };
   }
 
+  // Extract QR code URL and expiry (mirrors outbound pattern)
+  const qrCodeUrl = (transaction as any).qrCodeUrl ?? (transaction as any).qr_code_url ?? null;
+  let qrCodeExpiresAt: Date | null = null;
+  if (Array.isArray((transaction as any).messages)) {
+    const expiryMsg = ((transaction as any).messages as any[]).find(
+      (m: any) => m.code === 'QrCodeExpirationDate'
+    );
+    if (expiryMsg?.text) {
+      const parsed = new Date(expiryMsg.text);
+      if (!isNaN(parsed.getTime())) qrCodeExpiresAt = parsed;
+    }
+  }
+
   let labelCost = selectedRate.price;
   if (labelCost === 0 && typeof transaction.rate === 'object' && transaction.rate !== null) {
     labelCost = parseFloat((transaction.rate as any).amount || '0');
@@ -374,6 +388,8 @@ async function purchaseReturnLabelPlatform(
       shippo_transaction_id: transaction.objectId,
       status: 'label_created',
       return_ship_deadline: returnShipDeadline,
+      qr_code_url: qrCodeUrl,
+      qr_code_expires_at: qrCodeExpiresAt,
       updated_at: new Date(),
     },
   });

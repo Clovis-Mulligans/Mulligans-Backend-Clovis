@@ -537,6 +537,8 @@ model return_requests {
   return_ship_deadline   DateTime?
   reminder_sent_at       DateTime?
   stripe_refund_id       String?
+  qr_code_url            String?
+  qr_code_expires_at     DateTime?
   is_forced              Boolean   @default(false)
   disputes               disputes? @relation(fields: [dispute_id], references: [id])
   orders                 orders    @relation(fields: [order_id], references: [id])

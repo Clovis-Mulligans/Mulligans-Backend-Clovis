@@ -368,6 +368,7 @@ export const getReturnShippingRates = async (req: AuthenticatedRequest, res: Res
         weight: parcelConfig.weight,
         massUnit: 'kg',
       }],
+      extra: { qrCodeRequested: true },
       async: false,
     });
 
@@ -510,6 +511,19 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
       });
     }
 
+    // Extract QR code URL and expiry (mirrors outbound pattern at shippingController.ts:426-440)
+    const qrCodeUrl = (transaction as any).qrCodeUrl ?? (transaction as any).qr_code_url ?? null;
+    let qrCodeExpiresAt: Date | null = null;
+    if (Array.isArray((transaction as any).messages)) {
+      const expiryMsg = ((transaction as any).messages as any[]).find(
+        (m: any) => m.code === 'QrCodeExpirationDate'
+      );
+      if (expiryMsg?.text) {
+        const parsed = new Date(expiryMsg.text);
+        if (!isNaN(parsed.getTime())) qrCodeExpiresAt = parsed;
+      }
+    }
+
     // Get label cost from transaction if not from rate
     if (labelCost === 0 && typeof transaction.rate === 'object') {
       labelCost = parseFloat((transaction.rate as any).amount || '0');
@@ -538,6 +552,8 @@ export const purchaseReturnLabelBuyer = async (req: AuthenticatedRequest, res: R
         refund_amount: newRefundAmount,
         status: 'label_created',
         return_ship_deadline: returnShipDeadline,
+        qr_code_url: qrCodeUrl,
+        qr_code_expires_at: qrCodeExpiresAt,
         updated_at: new Date(),
       },
     });
@@ -739,13 +755,26 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
         payment_intent: paymentIntent.id,
         reason: 'requested_by_customer',
       });
-      
+
       console.error('❌ Shippo transaction failed, seller refunded:', transaction.messages);
       return res.status(400).json({
         success: false,
         error: 'Failed to create return shipping label. Payment has been refunded.',
         details: transaction.messages,
       });
+    }
+
+    // Extract QR code URL and expiry (mirrors outbound pattern at shippingController.ts:426-440)
+    const qrCodeUrl = (transaction as any).qrCodeUrl ?? (transaction as any).qr_code_url ?? null;
+    let qrCodeExpiresAt: Date | null = null;
+    if (Array.isArray((transaction as any).messages)) {
+      const expiryMsg = ((transaction as any).messages as any[]).find(
+        (m: any) => m.code === 'QrCodeExpirationDate'
+      );
+      if (expiryMsg?.text) {
+        const parsed = new Date(expiryMsg.text);
+        if (!isNaN(parsed.getTime())) qrCodeExpiresAt = parsed;
+      }
     }
 
     // Get label cost from transaction if not from rate
@@ -768,6 +797,8 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
         shipping_deducted: 0, // Seller paid, so nothing deducted from buyer's refund
         status: 'label_created',
         return_ship_deadline: returnShipDeadline,
+        qr_code_url: qrCodeUrl,
+        qr_code_expires_at: qrCodeExpiresAt,
         updated_at: new Date(),
       },
     });
