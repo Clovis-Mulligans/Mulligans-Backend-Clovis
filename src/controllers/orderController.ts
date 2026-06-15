@@ -573,6 +573,10 @@ if (order.disputes) {
         insurance_premium: order.insurance_premium ? parseFloat(order.insurance_premium.toString()) : null,
         insured_value: order.insured_value ? parseFloat(order.insured_value.toString()) : null,
         insurance_claim_id: order.insurance_claim_id || null,
+        shipment_deadline_at: order.shipment_deadline_at?.toISOString() || null,
+        grace_notified_at: order.grace_notified_at?.toISOString() || null,
+        grace_recovered_at: order.grace_recovered_at?.toISOString() || null,
+        shipment_escalated_at: order.shipment_escalated_at?.toISOString() || null,
       };
 
       res.json({ order: formattedOrder });
