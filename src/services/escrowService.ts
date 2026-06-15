@@ -1925,6 +1925,7 @@ export async function checkShipmentNotScanned(): Promise<void> {
       where: {
         status: 'to_ship',
         grace_notified_at: { lte: graceThreshold },
+        shippo_transaction_id: { not: null },
         shipment_escalated_at: null,
         grace_recovered_at: null,
         refunded_at: null,
@@ -1964,94 +1965,97 @@ export async function checkShipmentNotScanned(): Promise<void> {
         const buyer = firstOrder.users_orders_buyer_idTousers;
         const seller = firstOrder.users_orders_seller_idTousers;
 
-        // Poll Shippo to check for missed webhooks before escalating
-        if (firstOrder.tracking_number && firstOrder.carrier) {
-          try {
-            const tracking = await shippo.trackingStatus.get(
-              firstOrder.carrier.toLowerCase(),
-              firstOrder.tracking_number,
-            );
-
-            const shippoStatus = tracking.trackingStatus?.status;
-            if (shippoStatus === 'TRANSIT' || shippoStatus === 'DELIVERED') {
-              console.log(`[ESCROW] Shippo poll recovered tracking ${trackingKey} (status: ${shippoStatus}) — skipping escalation`);
-
-              const recoveryStatus = shippoStatus === 'DELIVERED' ? 'delivered' : 'in_transit';
-              const recoveryData: any = {
-                status: recoveryStatus,
-                grace_recovered_at: now,
-                shipped_at: firstOrder.shipped_at || now,
-                updated_at: now,
-              };
-              if (shippoStatus === 'DELIVERED') {
-                recoveryData.delivered_at = now;
-                const escrowRelease = new Date(now);
-                escrowRelease.setDate(escrowRelease.getDate() + ESCROW_RELEASE_DAYS);
-                recoveryData.escrow_release_at = escrowRelease;
-              }
-
-              await prisma.orders.updateMany({
-                where: { id: { in: orders.map(o => o.id) } },
-                data: recoveryData,
-              });
-
-              // Send recovery comms
-              await prisma.notifications.create({
-                data: {
-                  id: crypto.randomUUID(),
-                  user_id: buyer.id,
-                  type: 'shipment_recovered',
-                  title: 'Good News — Your Order Is On Its Way',
-                  message: `"${listingTitle}" has been confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'} by the carrier.`,
-                  image_url: listingImage,
-                  related_id: firstOrder.id,
-                },
-              });
-              await prisma.notifications.create({
-                data: {
-                  id: crypto.randomUUID(),
-                  user_id: seller.id,
-                  type: 'shipment_recovered',
-                  title: 'Good News — Your Sale Is On Its Way',
-                  message: `"${listingTitle}" has been confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'} by the carrier.`,
-                  image_url: listingImage,
-                  related_id: firstOrder.id,
-                },
-              });
-
-              try {
-                await sendPushNotification(buyer.id, 'Your Order Is On Its Way',
-                  `"${listingTitle}" is confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'}.`,
-                  { type: 'shipment_recovered', order_id: firstOrder.id });
-              } catch (pushErr) { console.error('[ESCROW] Recovery push to buyer failed:', pushErr); }
-              try {
-                await sendPushNotification(seller.id, 'Your Sale Is On Its Way',
-                  `"${listingTitle}" is confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'}.`,
-                  { type: 'shipment_recovered', order_id: firstOrder.id });
-              } catch (pushErr) { console.error('[ESCROW] Recovery push to seller failed:', pushErr); }
-
-              // Recovery emails
-              const recEmailData = {
-                orderNumber: firstOrder.id,
-                itemTitle: listingTitle,
-                itemPrice: `£${parseFloat(firstOrder.amount.toString()).toFixed(2)}`,
-                itemImageUrl: listingImage || '',
-                buyerName: buyer.display_name || 'there',
-                sellerName: seller.display_name || 'there',
-              };
-              try { if (buyer.email) await sendShipmentRecoveredBuyer(buyer.email, recEmailData); } catch (e) { console.error('[ESCROW] Recovery email to buyer failed:', e); }
-              try { if (seller.email) await sendShipmentRecoveredSeller(seller.email, recEmailData); } catch (e) { console.error('[ESCROW] Recovery email to seller failed:', e); }
-
-              continue;
-            }
-          } catch (pollErr: any) {
-            // On poll failure, defer — do NOT escalate on bad data
-            console.error(`[ESCROW] ⚠️ Shippo poll failed for ${trackingKey} — deferring escalation:`, pollErr.message);
-            continue;
-          }
+        // Mandatory Shippo poll before escalation — never escalate unverified
+        if (!firstOrder.tracking_number || !firstOrder.carrier) {
+          console.error(`[ESCROW] ⚠️ Cannot poll Shippo for ${trackingKey} — missing tracking_number or carrier. Deferring escalation.`);
+          continue;
         }
 
-        // Shippo confirmed still PRE_TRANSIT (or no tracking info) — escalate
+        try {
+          const tracking = await shippo.trackingStatus.get(
+            firstOrder.carrier.toLowerCase(),
+            firstOrder.tracking_number,
+          );
+
+          const shippoStatus = tracking.trackingStatus?.status;
+          if (shippoStatus === 'TRANSIT' || shippoStatus === 'DELIVERED') {
+            console.log(`[ESCROW] Shippo poll recovered tracking ${trackingKey} (status: ${shippoStatus}) — skipping escalation`);
+
+            const recoveryStatus = shippoStatus === 'DELIVERED' ? 'delivered' : 'in_transit';
+            const recoveryData: any = {
+              status: recoveryStatus,
+              grace_recovered_at: now,
+              shipped_at: firstOrder.shipped_at || now,
+              updated_at: now,
+            };
+            if (shippoStatus === 'DELIVERED') {
+              recoveryData.delivered_at = now;
+              const escrowRelease = new Date(now);
+              escrowRelease.setDate(escrowRelease.getDate() + ESCROW_RELEASE_DAYS);
+              recoveryData.escrow_release_at = escrowRelease;
+            }
+
+            await prisma.orders.updateMany({
+              where: { id: { in: orders.map(o => o.id) } },
+              data: recoveryData,
+            });
+
+            // Send recovery comms
+            await prisma.notifications.create({
+              data: {
+                id: crypto.randomUUID(),
+                user_id: buyer.id,
+                type: 'shipment_recovered',
+                title: 'Good News — Your Order Is On Its Way',
+                message: `"${listingTitle}" has been confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'} by the carrier.`,
+                image_url: listingImage,
+                related_id: firstOrder.id,
+              },
+            });
+            await prisma.notifications.create({
+              data: {
+                id: crypto.randomUUID(),
+                user_id: seller.id,
+                type: 'shipment_recovered',
+                title: 'Good News — Your Sale Is On Its Way',
+                message: `"${listingTitle}" has been confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'} by the carrier.`,
+                image_url: listingImage,
+                related_id: firstOrder.id,
+              },
+            });
+
+            try {
+              await sendPushNotification(buyer.id, 'Your Order Is On Its Way',
+                `"${listingTitle}" is confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'}.`,
+                { type: 'shipment_recovered', order_id: firstOrder.id });
+            } catch (pushErr) { console.error('[ESCROW] Recovery push to buyer failed:', pushErr); }
+            try {
+              await sendPushNotification(seller.id, 'Your Sale Is On Its Way',
+                `"${listingTitle}" is confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'}.`,
+                { type: 'shipment_recovered', order_id: firstOrder.id });
+            } catch (pushErr) { console.error('[ESCROW] Recovery push to seller failed:', pushErr); }
+
+            // Recovery emails
+            const recEmailData = {
+              orderNumber: firstOrder.id,
+              itemTitle: listingTitle,
+              itemPrice: `£${parseFloat(firstOrder.amount.toString()).toFixed(2)}`,
+              itemImageUrl: listingImage || '',
+              buyerName: buyer.display_name || 'there',
+              sellerName: seller.display_name || 'there',
+            };
+            try { if (buyer.email) await sendShipmentRecoveredBuyer(buyer.email, recEmailData); } catch (e) { console.error('[ESCROW] Recovery email to buyer failed:', e); }
+            try { if (seller.email) await sendShipmentRecoveredSeller(seller.email, recEmailData); } catch (e) { console.error('[ESCROW] Recovery email to seller failed:', e); }
+
+            continue;
+          }
+        } catch (pollErr: any) {
+          // On poll failure, defer — do NOT escalate on bad data
+          console.error(`[ESCROW] ⚠️ Shippo poll failed for ${trackingKey} — deferring escalation:`, pollErr.message);
+          continue;
+        }
+
+        // Shippo polled and confirmed still PRE_TRANSIT — escalate
         await prisma.orders.updateMany({
           where: { id: { in: orders.map(o => o.id) } },
           data: { shipment_escalated_at: now, updated_at: now },
