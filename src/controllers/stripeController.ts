@@ -774,6 +774,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               status: 'to_ship',
               paid_at: new Date(),
               auto_cancel_at: autoCancelAt,
+              shipment_deadline_at: autoCancelAt,
               shipping_address: shippingAddressJson ?? Prisma.JsonNull,
               updated_at: new Date(),
               insurance_premium: insurancePremium,
