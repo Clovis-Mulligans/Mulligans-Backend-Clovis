@@ -42,6 +42,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 const LOST_IN_TRANSIT_DAYS = 14;         // Flag as potentially lost after 14 days
 const PAYOUT_REMINDER_INTERVAL_DAYS = 3; // Re-remind seller every 3 days while payout blocked
 const PAYOUT_ADMIN_ESCALATION_DAYS = 14; // Escalate to admin after 14 days blocked
+const GRACE_WINDOW_DAYS = 3;             // Days after deadline before admin escalation
 
 // Forced return auto-confirm deadlines (imported from forcedReturnService for reference)
 import { FORCED_RETURN_SELLER_CONFIRM_DAYS, FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS } from './forcedReturnService';
@@ -1799,6 +1800,313 @@ export async function autoConfirmForcedReturns(): Promise<void> {
 }
 
 // ============================================
+// CHECK SHIPMENT NOT SCANNED
+// Runs daily — flags orders where label was created but carrier
+// never scanned the parcel (no TRANSIT webhook).
+// Sub-check A: grace entry (~day 5) — notify both parties.
+// Sub-check B: escalation (~day 8) — poll Shippo, then admin ticket.
+// ============================================
+export async function checkShipmentNotScanned(): Promise<void> {
+  console.log('[ESCROW] Running shipment-not-scanned check...');
+
+  try {
+    const now = new Date();
+    const graceThreshold = new Date(now.getTime() - GRACE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+
+    // ── Sub-check A: Grace entry (deadline elapsed, label exists, not yet notified) ──
+    const graceEntryOrders = await prisma.orders.findMany({
+      where: {
+        status: 'to_ship',
+        shipment_deadline_at: { lte: now },
+        shippo_transaction_id: { not: null },
+        grace_notified_at: null,
+        refunded_at: null,
+        cancelled_at: null,
+      },
+      include: {
+        listings: {
+          select: {
+            title: true,
+            images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
+          },
+        },
+        users_orders_buyer_idTousers: {
+          select: { id: true, email: true, display_name: true },
+        },
+        users_orders_seller_idTousers: {
+          select: { id: true, email: true, display_name: true },
+        },
+      },
+    });
+
+    console.log(`[ESCROW] Found ${graceEntryOrders.length} orders entering shipment grace period`);
+
+    // Group by tracking_number for multi-item shipments
+    const graceByTracking = new Map<string, typeof graceEntryOrders>();
+    for (const order of graceEntryOrders) {
+      const key = order.tracking_number || order.id;
+      if (!graceByTracking.has(key)) graceByTracking.set(key, []);
+      graceByTracking.get(key)!.push(order);
+    }
+
+    for (const [trackingKey, orders] of graceByTracking) {
+      try {
+        const firstOrder = orders[0];
+        const listingTitle = firstOrder.listings?.title || 'Your item';
+        const listingImage = firstOrder.listings?.images?.[0]?.image_url || null;
+        const buyer = firstOrder.users_orders_buyer_idTousers;
+        const seller = firstOrder.users_orders_seller_idTousers;
+
+        // Set grace_notified_at on all orders in this shipment
+        await prisma.orders.updateMany({
+          where: { id: { in: orders.map(o => o.id) } },
+          data: { grace_notified_at: now, updated_at: now },
+        });
+
+        // Buyer notification
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: buyer.id,
+            type: 'shipment_under_review',
+            title: 'Shipping Update — Under Review',
+            message: `We've noticed your order for "${listingTitle}" hasn't been scanned by the carrier yet. Our team is reviewing it — we aim to get back to you within a few days.`,
+            image_url: listingImage,
+            related_id: firstOrder.id,
+          },
+        });
+
+        // Seller notification
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: seller.id,
+            type: 'shipment_under_review',
+            title: 'Shipping Update — Under Review',
+            message: `Your sale of "${listingTitle}" hasn't been scanned by the carrier yet. Our team is reviewing it. If you've already posted the item, no action is needed — carrier scans can sometimes take a day or two to register.`,
+            image_url: listingImage,
+            related_id: firstOrder.id,
+          },
+        });
+
+        // Push notifications
+        try {
+          await sendPushNotification(buyer.id, 'Shipping Under Review',
+            `Your order for "${listingTitle}" is being reviewed by our team.`,
+            { type: 'shipment_under_review', order_id: firstOrder.id });
+        } catch (pushErr) { console.error('[ESCROW] Grace push to buyer failed:', pushErr); }
+
+        try {
+          await sendPushNotification(seller.id, 'Shipping Under Review',
+            `Your sale of "${listingTitle}" is being reviewed by our team.`,
+            { type: 'shipment_under_review', order_id: firstOrder.id });
+        } catch (pushErr) { console.error('[ESCROW] Grace push to seller failed:', pushErr); }
+
+        // Email sends are wired in Commit 6
+        console.log(`[ESCROW] Grace notification sent for tracking ${trackingKey} (${orders.length} order(s))`);
+      } catch (graceErr: any) {
+        console.error(`[ESCROW] ❌ Grace notification failed for tracking ${trackingKey}:`, graceErr.message);
+      }
+    }
+
+    // ── Sub-check B: Escalation (grace elapsed, still no scan) ──
+    const escalationOrders = await prisma.orders.findMany({
+      where: {
+        status: 'to_ship',
+        grace_notified_at: { lte: graceThreshold },
+        shipment_escalated_at: null,
+        grace_recovered_at: null,
+        refunded_at: null,
+        cancelled_at: null,
+      },
+      include: {
+        listings: {
+          select: {
+            title: true,
+            images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
+          },
+        },
+        users_orders_buyer_idTousers: {
+          select: { id: true, email: true, display_name: true },
+        },
+        users_orders_seller_idTousers: {
+          select: { id: true, email: true, display_name: true },
+        },
+      },
+    });
+
+    console.log(`[ESCROW] Found ${escalationOrders.length} orders to potentially escalate`);
+
+    // Group by tracking_number
+    const escByTracking = new Map<string, typeof escalationOrders>();
+    for (const order of escalationOrders) {
+      const key = order.tracking_number || order.id;
+      if (!escByTracking.has(key)) escByTracking.set(key, []);
+      escByTracking.get(key)!.push(order);
+    }
+
+    for (const [trackingKey, orders] of escByTracking) {
+      try {
+        const firstOrder = orders[0];
+        const listingTitle = firstOrder.listings?.title || 'Your item';
+        const listingImage = firstOrder.listings?.images?.[0]?.image_url || null;
+        const buyer = firstOrder.users_orders_buyer_idTousers;
+        const seller = firstOrder.users_orders_seller_idTousers;
+
+        // Poll Shippo to check for missed webhooks before escalating
+        if (firstOrder.tracking_number && firstOrder.carrier) {
+          try {
+            const tracking = await shippo.trackingStatus.get(
+              firstOrder.carrier.toLowerCase(),
+              firstOrder.tracking_number,
+            );
+
+            const shippoStatus = tracking.trackingStatus?.status;
+            if (shippoStatus === 'TRANSIT' || shippoStatus === 'DELIVERED') {
+              console.log(`[ESCROW] Shippo poll recovered tracking ${trackingKey} (status: ${shippoStatus}) — skipping escalation`);
+
+              const recoveryStatus = shippoStatus === 'DELIVERED' ? 'delivered' : 'in_transit';
+              const recoveryData: any = {
+                status: recoveryStatus,
+                grace_recovered_at: now,
+                shipped_at: firstOrder.shipped_at || now,
+                updated_at: now,
+              };
+              if (shippoStatus === 'DELIVERED') {
+                recoveryData.delivered_at = now;
+                const escrowRelease = new Date(now);
+                escrowRelease.setDate(escrowRelease.getDate() + ESCROW_RELEASE_DAYS);
+                recoveryData.escrow_release_at = escrowRelease;
+              }
+
+              await prisma.orders.updateMany({
+                where: { id: { in: orders.map(o => o.id) } },
+                data: recoveryData,
+              });
+
+              // Send recovery comms
+              await prisma.notifications.create({
+                data: {
+                  id: crypto.randomUUID(),
+                  user_id: buyer.id,
+                  type: 'shipment_recovered',
+                  title: 'Good News — Your Order Is On Its Way',
+                  message: `"${listingTitle}" has been confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'} by the carrier.`,
+                  image_url: listingImage,
+                  related_id: firstOrder.id,
+                },
+              });
+              await prisma.notifications.create({
+                data: {
+                  id: crypto.randomUUID(),
+                  user_id: seller.id,
+                  type: 'shipment_recovered',
+                  title: 'Good News — Your Sale Is On Its Way',
+                  message: `"${listingTitle}" has been confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'} by the carrier.`,
+                  image_url: listingImage,
+                  related_id: firstOrder.id,
+                },
+              });
+
+              try {
+                await sendPushNotification(buyer.id, 'Your Order Is On Its Way',
+                  `"${listingTitle}" is confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'}.`,
+                  { type: 'shipment_recovered', order_id: firstOrder.id });
+              } catch (pushErr) { console.error('[ESCROW] Recovery push to buyer failed:', pushErr); }
+              try {
+                await sendPushNotification(seller.id, 'Your Sale Is On Its Way',
+                  `"${listingTitle}" is confirmed ${shippoStatus === 'DELIVERED' ? 'delivered' : 'in transit'}.`,
+                  { type: 'shipment_recovered', order_id: firstOrder.id });
+              } catch (pushErr) { console.error('[ESCROW] Recovery push to seller failed:', pushErr); }
+
+              continue;
+            }
+          } catch (pollErr: any) {
+            // On poll failure, defer — do NOT escalate on bad data
+            console.error(`[ESCROW] ⚠️ Shippo poll failed for ${trackingKey} — deferring escalation:`, pollErr.message);
+            continue;
+          }
+        }
+
+        // Shippo confirmed still PRE_TRANSIT (or no tracking info) — escalate
+        await prisma.orders.updateMany({
+          where: { id: { in: orders.map(o => o.id) } },
+          data: { shipment_escalated_at: now, updated_at: now },
+        });
+
+        // Create support ticket (idempotency: check for existing)
+        const existingTicket = await prisma.support_tickets.findFirst({
+          where: { order_id: firstOrder.id, type: 'shipment_not_scanned' },
+        });
+
+        if (!existingTicket) {
+          const daysSinceOrder = Math.floor((now.getTime() - firstOrder.created_at.getTime()) / (24 * 60 * 60 * 1000));
+          await prisma.support_tickets.create({
+            data: {
+              id: crypto.randomUUID(),
+              user_id: seller.id,
+              type: 'shipment_not_scanned',
+              order_id: firstOrder.id,
+              subject: `[SHIPMENT NOT SCANNED] Order ${firstOrder.id.substring(0, 14)} — no carrier scan after ${daysSinceOrder} days`,
+              message: `Order ${firstOrder.id} has a label but the carrier has not scanned the parcel.\n\nSeller: ${seller.display_name || 'Unknown'} (${seller.id})\nSeller email: ${seller.email || 'N/A'}\nBuyer: ${buyer.display_name || 'Unknown'} (${buyer.id})\nTracking: ${firstOrder.tracking_number || 'N/A'}\nCarrier: ${firstOrder.carrier || 'N/A'}\nOrder amount: £${parseFloat(firstOrder.amount.toString()).toFixed(2)}\nOrder created: ${firstOrder.created_at.toISOString()}\nLabel created (Shippo TX): ${firstOrder.shippo_transaction_id}\nItems in shipment: ${orders.length}\n\nShippo poll confirmed parcel is still PRE_TRANSIT. Manual admin review required — decide whether to grant an extension, contact the seller, or refund the buyer.`,
+              status: 'open',
+              priority: 'high',
+              created_at: now,
+            },
+          });
+        }
+
+        // Notify buyer
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: buyer.id,
+            type: 'shipment_escalated',
+            title: 'Order Escalated to Support',
+            message: `Your order for "${listingTitle}" has been escalated to our team for review. We'll be in touch — no action needed from you.`,
+            image_url: listingImage,
+            related_id: firstOrder.id,
+          },
+        });
+
+        // Notify seller
+        await prisma.notifications.create({
+          data: {
+            id: crypto.randomUUID(),
+            user_id: seller.id,
+            type: 'shipment_escalated',
+            title: 'Sale Escalated to Support',
+            message: `Your sale of "${listingTitle}" has been escalated to our team because the carrier hasn't scanned the parcel. If you've posted the item, please check with the carrier.`,
+            image_url: listingImage,
+            related_id: firstOrder.id,
+          },
+        });
+
+        try {
+          await sendPushNotification(buyer.id, 'Order Escalated to Support',
+            `Your order for "${listingTitle}" is being handled by our team.`,
+            { type: 'shipment_escalated', order_id: firstOrder.id });
+        } catch (pushErr) { console.error('[ESCROW] Escalation push to buyer failed:', pushErr); }
+        try {
+          await sendPushNotification(seller.id, 'Sale Escalated to Support',
+            `Your sale of "${listingTitle}" has been escalated — carrier hasn't scanned.`,
+            { type: 'shipment_escalated', order_id: firstOrder.id });
+        } catch (pushErr) { console.error('[ESCROW] Escalation push to seller failed:', pushErr); }
+
+        // Email sends are wired in Commit 6
+        console.log(`[ESCROW] ⚠️ Escalated tracking ${trackingKey} (${orders.length} order(s)) — admin ticket created`);
+      } catch (escErr: any) {
+        console.error(`[ESCROW] ❌ Escalation failed for tracking ${trackingKey}:`, escErr.message);
+      }
+    }
+
+    console.log('[ESCROW] Shipment-not-scanned check complete');
+  } catch (error: any) {
+    console.error('[ESCROW] Shipment-not-scanned check failed:', error.message);
+  }
+}
+
+// ============================================
 // RUN ALL ESCROW JOBS
 // Called by cron scheduler
 // ============================================
@@ -1816,6 +2124,7 @@ export async function runEscrowJobs(): Promise<void> {
   await autoConfirmForcedReturns();
   await autoEscalateDisputes();
   await checkLostInTransit();
+  await checkShipmentNotScanned();
 
   console.log('═══════════════════════════════════════════');
   console.log('[ESCROW] All escrow jobs completed');
@@ -1831,5 +2140,6 @@ export default {
   autoConfirmForcedReturns,
   autoEscalateDisputes,
   checkLostInTransit,
+  checkShipmentNotScanned,
   runEscrowJobs,
 };
