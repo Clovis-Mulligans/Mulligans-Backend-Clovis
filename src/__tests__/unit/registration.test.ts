@@ -55,9 +55,12 @@ jest.mock('../../services/emailService', () => mockEmail);
 
 // Passthrough rate limiter so we can test handler logic without IP throttling.
 // G-series tests verify the configuration was passed correctly.
-const mockRateLimitFactory = jest.fn(
-  () => (_req: any, _res: any, next: any) => next(),
-);
+// Capture configs at module-load time (before beforeEach clears mocks).
+const rateLimitConfigs: any[] = [];
+const mockRateLimitFactory = jest.fn((config: any) => {
+  rateLimitConfigs.push(config);
+  return (_req: any, _res: any, next: any) => next();
+});
 jest.mock('express-rate-limit', () => ({
   __esModule: true,
   default: mockRateLimitFactory,
@@ -107,7 +110,7 @@ async function post(path: string, body: any, headers: Record<string, string> = {
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => null);
+  const json: any = await res.json().catch(() => null);
   return { status: res.status, body: json, headers: res.headers };
 }
 
@@ -117,7 +120,7 @@ async function postRaw(path: string, rawBody: string, contentType = 'text/plain'
     headers: { 'Content-Type': contentType },
     body: rawBody,
   });
-  const json = await res.json().catch(() => null);
+  const json: any = await res.json().catch(() => null);
   return { status: res.status, body: json };
 }
 
@@ -1217,12 +1220,9 @@ describe('F: Failure modes', () => {
 /* ================================================================== */
 describe('G: Rate limiting', () => {
   test('G-01 / G-04: Signup rate limiter configured with correct params', () => {
-    // express-rate-limit was called during module load to create signupLimiter
-    const signupCall = mockRateLimitFactory.mock.calls.find(
-      (args: any[]) => args[0]?.max === 3,
-    );
-    expect(signupCall).toBeDefined();
-    expect(signupCall![0]).toMatchObject({
+    const signupConfig = rateLimitConfigs.find((c) => c.max === 3);
+    expect(signupConfig).toBeDefined();
+    expect(signupConfig).toMatchObject({
       windowMs: 60 * 60 * 1000,
       max: 3,
       standardHeaders: true,
@@ -1231,11 +1231,9 @@ describe('G: Rate limiting', () => {
   });
 
   test('G-01 (cont): Login rate limiter configured separately', () => {
-    const loginCall = mockRateLimitFactory.mock.calls.find(
-      (args: any[]) => args[0]?.max === 5,
-    );
-    expect(loginCall).toBeDefined();
-    expect(loginCall![0]).toMatchObject({
+    const loginConfig = rateLimitConfigs.find((c) => c.max === 5);
+    expect(loginConfig).toBeDefined();
+    expect(loginConfig).toMatchObject({
       windowMs: 15 * 60 * 1000,
       max: 5,
     });
