@@ -59,10 +59,6 @@ const S3_BUCKET = process.env.AWS_S3_BUCKET || 'mulligans-golf-images-mvp';
 const SELLER_RESPONSE_DEADLINE_HOURS = 72;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'info@mulligans.uk.com';
 
-// ✅ Buyer Protection Fee: 7.5% + £0.99
-const PLATFORM_FEE_PERCENT = 0.075;
-const PLATFORM_FEE_FIXED = 0.99;
-
 // ============================================
 // HELPER FUNCTIONS
 // ============================================

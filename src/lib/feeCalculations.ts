@@ -153,6 +153,15 @@ export function calculateSellerPayout(
 }
 
 /**
+ * Estimate the buyer-facing price for a single item (quantity 1, no shipping).
+ * Used for display contexts (e.g. Chip Caddy) where the full cart breakdown
+ * isn't available. Includes 7.5% buyer protection + £0.99 service fee.
+ */
+export function estimateBuyerPrice(itemPrice: number): number {
+  return itemPrice * (1 + BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
+}
+
+/**
  * Validate an offer amount against a listing price.
  * Returns null if the offer is valid, or a human-readable reason string if not.
  * Mirrors offerController.ts:159-172.

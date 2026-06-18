@@ -2,6 +2,7 @@ import {
   calculateBuyerFees,
   calculateSellerPayout,
   validateOfferAmount,
+  estimateBuyerPrice,
   BUYER_PROTECTION_RATE,
   SERVICE_FEE_PER_ITEM,
   INSURANCE_RATE,
@@ -213,6 +214,26 @@ describe('financial integrity invariants', () => {
   test.each(samples)('platformFee === buyerProtectionFee + serviceFee', (...items) => {
     const fees = calculateBuyerFees(items);
     expect(fees.platformFee).toBeCloseTo(fees.buyerProtectionFee + fees.serviceFee, 6);
+  });
+});
+
+describe('estimateBuyerPrice — single-item display estimate', () => {
+  test('£100 item → £108.49 (7.5% + £0.99)', () => {
+    expect(estimateBuyerPrice(100)).toBeCloseTo(108.49, 2);
+  });
+
+  test('£50 item → £54.74', () => {
+    expect(estimateBuyerPrice(50)).toBeCloseTo(54.74, 2);
+  });
+
+  test('matches manual formula: price * (1 + rate) + fixed', () => {
+    const price = 73.50;
+    const expected = price * (1 + BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
+    expect(estimateBuyerPrice(price)).toBeCloseTo(expected, 6);
+  });
+
+  test('£0 item → £0.99 (just the fixed fee)', () => {
+    expect(estimateBuyerPrice(0)).toBeCloseTo(0.99, 2);
   });
 });
 

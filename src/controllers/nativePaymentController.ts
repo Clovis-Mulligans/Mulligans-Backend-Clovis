@@ -28,7 +28,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -44,9 +44,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 
-// Platform fee calculation (same as cart checkout)
-const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
-const PLATFORM_FEE_FIXED = 0.99; // £0.99 per item
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
@@ -249,7 +246,7 @@ export class NativePaymentController {
       const baseShipping = shippingCost;
       const insurancePremium = itemTotal * INSURANCE_RATE;
       const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
-      const platformFee = (itemTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * orderQuantity);
+      const platformFee = (itemTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * orderQuantity);
       // [Issue #24] Grand total now includes shipping
       const grandTotal = itemTotal + shippingTotal + platformFee;
 
@@ -421,7 +418,7 @@ export class NativePaymentController {
       const shippingTotal = parseFloat((baseShippingTotal + insurancePremium).toFixed(2));
 
       const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
-      const platformFee = (itemsTotal * PLATFORM_FEE_PERCENT) + (PLATFORM_FEE_FIXED * totalQuantity);
+      const platformFee = (itemsTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * totalQuantity);
       const grandTotal = itemsTotal + shippingTotal + platformFee;
       const totalAmountPence = Math.round(grandTotal * 100);
 

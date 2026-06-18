@@ -10,16 +10,13 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
 import { AuthenticatedRequest } from '../middleware/auth';
 
 // Cart expiry time: 72 hours in milliseconds
 const CART_EXPIRY_HOURS = 72;
 const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 
-// Buyer protection fee
-const BUYER_PROTECTION_PERCENTAGE = 0.075; // 7.5%
-const BUYER_PROTECTION_FIXED = 0.99; // £0.99
 // ============================================
 // HELPER: Get available stock for a specific size
 // ============================================
@@ -251,7 +248,7 @@ items: [],
       const insuredShippingTotal = baseShippingTotal + insurancePremium;
 
       // FIXED: £0.99 fee applies PER ITEM, not per cart
-      const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_PERCENTAGE) + (BUYER_PROTECTION_FIXED * totalItemCount);
+      const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * totalItemCount);
       const grandTotal = itemsTotal + insuredShippingTotal + buyerProtectionFee;
 
       // Generate warnings for items in multiple carts

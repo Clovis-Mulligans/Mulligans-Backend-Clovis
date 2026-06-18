@@ -39,7 +39,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
@@ -272,10 +272,8 @@ export class StripeController {
 
       // Calculate prices with quantity (using effective price which may be offer price)
       const itemPrice = effectiveUnitPrice * orderQuantity;  // Total for all items
-      const platformFeePercent = 0.075;
-      const platformFeeFixed = 0.99;
       // FIXED: 0.99 fee applies PER ITEM (multiplied by quantity)
-      const platformFee = (itemPrice * platformFeePercent) + (platformFeeFixed * orderQuantity);
+      const platformFee = (itemPrice * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * orderQuantity);
 
       // [Issue #24] Calculate shipping cost
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');

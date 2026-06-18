@@ -43,7 +43,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
@@ -67,9 +67,6 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
-// Platform fee calculation
-const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
-const PLATFORM_FEE_FIXED = 0.99; // £0.99
 // Escrow constants
 
 // SIZE VARIANT: Helper to get stock for a specific size
@@ -336,7 +333,7 @@ export class CartCheckoutController {
       );
 
       // FIXED: £0.99 fee applies PER ITEM, always (not per seller)
-      const platformFee = itemsTotal * PLATFORM_FEE_PERCENT + (PLATFORM_FEE_FIXED * totalQuantity);
+      const platformFee = itemsTotal * BUYER_PROTECTION_RATE + (SERVICE_FEE_PER_ITEM * totalQuantity);
       const grandTotal = itemsTotal + insuredShippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);

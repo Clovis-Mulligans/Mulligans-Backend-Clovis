@@ -4,6 +4,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
 
 
 export class AdminStatsController {
@@ -396,8 +397,7 @@ export class AdminStatsController {
       const orderCount = orderCountResult;
       const avgOrderValue = orderCount > 0 ? totalGMV / orderCount : 0;
 
-      // Fee calculation: 7.5% of GMV + £0.99 per order
-      const estimatedFees = (totalGMV * 0.075) + (orderCount * 0.99);
+      const estimatedFees = (totalGMV * BUYER_PROTECTION_RATE) + (orderCount * SERVICE_FEE_PER_ITEM);
 
       // Shipping margin estimate: charged shipping - label cost
       const totalShippingCharged = Number(shippingResult._sum.shipping_cost || 0);

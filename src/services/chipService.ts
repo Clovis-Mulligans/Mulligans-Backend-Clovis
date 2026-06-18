@@ -22,6 +22,7 @@ import {
   REJECTION_MESSAGES,
   CHIP_PROMPT_VERSION,
 } from './chipSecurity';
+import { estimateBuyerPrice } from '../lib/feeCalculations';
 
 // ============================================
 // CLAUDE CLIENT (singleton)
@@ -247,7 +248,7 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
     savedItems = activeFavs
       .map((f) => {
         const l = f.listings;
-        const buyerPrice = (Number(l.price) * 1.075 + 0.99).toFixed(2);
+        const buyerPrice = estimateBuyerPrice(Number(l.price)).toFixed(2);
         return `${l.title} — £${buyerPrice} (${l.brand || ''} ${l.model || ''})`.trim();
       })
       .join('\n');
@@ -261,7 +262,7 @@ async function buildUserContext(userId: string, listingId?: string | null): Prom
       .join(', ');
     currentListing = [
       `Title: ${listing.title}`,
-      `Price: £${(Number(listing.price) * 1.075 + 0.99).toFixed(2)}`,
+      `Price: £${estimateBuyerPrice(Number(listing.price)).toFixed(2)}`,
       `Category: ${listing.category}`,
       listing.brand ? `Brand: ${listing.brand}` : '',
       listing.model ? `Model: ${listing.model}` : '',
@@ -368,7 +369,7 @@ async function fetchMatchingListingsForContext(
   });
 
   return listings.map((l) => {
-    const buyerPrice = (Number(l.price) * 1.075 + 0.99).toFixed(2);
+    const buyerPrice = estimateBuyerPrice(Number(l.price)).toFixed(2);
     const specs = l.listing_attributes
       ?.map((a: { key: string; value: string }) => `${a.key}: ${a.value}`)
       .join(', ') || '';
@@ -596,7 +597,7 @@ async function fetchListingCards(listingIds: string[]): Promise<RecommendedListi
   return listings.map((l) => ({
     id: l.id,
     title: l.title,
-    price: `£${(Number(l.price) * 1.075 + 0.99).toFixed(2)}`,
+    price: `£${estimateBuyerPrice(Number(l.price)).toFixed(2)}`,
     brand: l.brand,
     model: l.model,
     image_url: l.images?.[0]?.image_url || null,
