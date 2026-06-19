@@ -173,6 +173,14 @@ model orders {
   disputed_at                   DateTime?
   seller_payout                 Decimal?          @db.Decimal(10, 2)
   buyer_total                   Decimal?          @db.Decimal(10, 2)
+  fee_model                     String?
+  fee_payer                     String?
+  fee_percent                   Decimal?          @db.Decimal(5, 4)
+  fee_fixed                     Decimal?          @db.Decimal(5, 2)
+  platform_fee_amount           Decimal?          @db.Decimal(10, 2)
+  seller_is_pro_at_sale         Boolean?          @default(false)
+  insurance_charged             Boolean?          @default(true)
+  checkout_group_ref            String?
   label_url                     String?
   shipping_cost                 Decimal?          @db.Decimal(10, 2)
   shippo_shipment_id            String?
