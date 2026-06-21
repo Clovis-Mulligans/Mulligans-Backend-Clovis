@@ -534,6 +534,7 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
               id: true,
               amount: true,
               quantity: true,
+              selected_size: true,
               stripe_payment_intent_id: true,
               listing_id: true,
             },
@@ -621,6 +622,7 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
         claimedReturn.orders.listing_id,
         claimedReturn.orders.quantity || 1,
         'return_refund',
+        claimedReturn.orders.selected_size,
       );
     }
 

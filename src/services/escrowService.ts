@@ -1042,9 +1042,9 @@ export async function autoProcessReturnRefunds(): Promise<void> {
           }
         }
 
-        // Final state: persist refund ID on both tables
-        await prisma.$transaction([
-          prisma.return_requests.update({
+        // Final state: persist refund ID + restore stock atomically
+        await prisma.$transaction(async (tx) => {
+          await tx.return_requests.update({
             where: { id: returnRequest.id },
             data: {
               status: 'completed',
@@ -1052,8 +1052,8 @@ export async function autoProcessReturnRefunds(): Promise<void> {
               stripe_refund_id: refundId,
               updated_at: now,
             },
-          }),
-          prisma.orders.update({
+          });
+          await tx.orders.update({
             where: { id: order.id },
             data: {
               status: 'returned',
@@ -1062,20 +1062,18 @@ export async function autoProcessReturnRefunds(): Promise<void> {
               stripe_refund_id: refundId,
               updated_at: now,
             },
-          }),
-        ]);
-
-        // Relist the item (seller can sell it again)
-        if (order.listing_id) {
-          await prisma.listings.update({
-            where: { id: order.listing_id },
-            data: {
-              status: 'active',
-              updated_at: now,
-            },
           });
-          console.log(`[ESCROW] Relisted item: ${order.listing_id}`);
-        }
+
+          if (order.listing_id) {
+            await restoreListingStock(
+              tx,
+              order.listing_id,
+              order.quantity || 1,
+              'return_refund',
+              order.selected_size,
+            );
+          }
+        });
 
         // Notify buyer - refund processed
         await prisma.notifications.create({
@@ -1675,6 +1673,8 @@ export async function autoConfirmForcedReturns(): Promise<void> {
           select: {
             id: true,
             amount: true,
+            quantity: true,
+            selected_size: true,
             buyer_id: true,
             seller_id: true,
             listing_id: true,
@@ -1742,25 +1742,27 @@ export async function autoConfirmForcedReturns(): Promise<void> {
           continue;
         }
 
-        // Finalise
-        await prisma.$transaction([
-          prisma.return_requests.update({
+        // Finalise + restore stock atomically
+        await prisma.$transaction(async (tx) => {
+          await tx.return_requests.update({
             where: { id: returnRequest.id },
             data: { status: 'completed', completed_at: now, stripe_refund_id: refundId, updated_at: now },
-          }),
-          prisma.orders.update({
+          });
+          await tx.orders.update({
             where: { id: order.id },
             data: { status: 'returned', refunded_at: now, refund_amount: refundAmount, stripe_refund_id: refundId, updated_at: now },
-          }),
-        ]);
+          });
 
-        // Relist item
-        if (order.listing_id) {
-          await prisma.listings.update({
-            where: { id: order.listing_id },
-            data: { status: 'active', updated_at: now },
-          }).catch(err => console.error('[ESCROW] Relist failed:', err));
-        }
+          if (order.listing_id) {
+            await restoreListingStock(
+              tx,
+              order.listing_id,
+              order.quantity || 1,
+              'return_refund',
+              order.selected_size,
+            );
+          }
+        });
 
         // Notify seller
         const listingTitle = order.listing_title || 'Item';

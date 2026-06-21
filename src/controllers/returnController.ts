@@ -20,6 +20,7 @@ import {
   sendReturnRefundProcessed,
 } from '../services/emailService';
 import { normalizeCarrierName } from '../utils/carrierName';
+import { restoreListingStock } from '../lib/stockUtils';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -1091,25 +1092,27 @@ export const confirmReturnDelivered = async (req: AuthenticatedRequest, res: Res
         return res.status(500).json({ success: false, error: 'Stripe refund failed' });
       }
 
-      // Finalise atomically
-      await prisma.$transaction([
-        prisma.return_requests.update({
+      // Finalise + restore stock atomically
+      await prisma.$transaction(async (tx) => {
+        await tx.return_requests.update({
           where: { id: returnId },
           data: { status: 'completed', completed_at: now, stripe_refund_id: refundId, updated_at: now },
-        }),
-        prisma.orders.update({
+        });
+        await tx.orders.update({
           where: { id: returnRequest.order_id },
           data: { status: 'returned', refunded_at: now, refund_amount: refundAmount, stripe_refund_id: refundId, updated_at: now },
-        }),
-      ]);
+        });
 
-      // Relist the item
-      if (returnRequest.orders.listing_id) {
-        await prisma.listings.update({
-          where: { id: returnRequest.orders.listing_id },
-          data: { status: 'active', updated_at: now },
-        }).catch(err => console.error('[FORCED-RETURN] Relist failed:', err));
-      }
+        if (returnRequest.orders.listing_id) {
+          await restoreListingStock(
+            tx,
+            returnRequest.orders.listing_id,
+            returnRequest.orders.quantity || 1,
+            'return_refund',
+            returnRequest.orders.selected_size,
+          );
+        }
+      });
 
       // Notify buyer
       await prisma.notifications.create({
