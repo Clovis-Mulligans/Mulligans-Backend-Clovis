@@ -246,7 +246,7 @@ export class NativePaymentController {
       const baseShipping = shippingCost;
       const insurancePremium = itemTotal * INSURANCE_RATE;
       const shippingTotal = parseFloat((baseShipping + insurancePremium).toFixed(2));
-      const platformFee = (itemTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * orderQuantity);
+      const platformFee = (itemTotal * BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
       // [Issue #24] Grand total now includes shipping
       const grandTotal = itemTotal + shippingTotal + platformFee;
 
@@ -417,8 +417,8 @@ export class NativePaymentController {
       const insurancePremium = itemsTotal * INSURANCE_RATE;
       const shippingTotal = parseFloat((baseShippingTotal + insurancePremium).toFixed(2));
 
-      const totalQuantity = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
-      const platformFee = (itemsTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * totalQuantity);
+      const sellerCount = Object.keys(sellerMaxShipping).length;
+      const platformFee = (itemsTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * sellerCount);
       const grandTotal = itemsTotal + shippingTotal + platformFee;
       const totalAmountPence = Math.round(grandTotal * 100);
 

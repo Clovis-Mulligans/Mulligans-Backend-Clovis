@@ -52,15 +52,15 @@ describe('calculateBuyerFees — worked examples from business-logic.md', () => 
     expect(fees.grandTotal).toBeCloseTo(96.92, 2);
   });
 
-  test('2 items same seller (£80+£120), shipping £5.99 → grand total £225.47', () => {
+  test('2 items same seller (£80+£120), shipping £5.99 → grand total £224.48', () => {
     const fees = calculateBuyerFees([
       item({ sellerId: 's1', listingPrice: 80, shippingCost: 5.99 }),
       item({ sellerId: 's1', listingPrice: 120, shippingCost: 5.99 }),
     ]);
     expect(fees.itemsTotal).toBeCloseTo(200, 2);
     expect(fees.baseShipping).toBeCloseTo(5.99, 2);
-    expect(fees.serviceFee).toBeCloseTo(1.98, 2);
-    expect(fees.grandTotal).toBeCloseTo(225.47, 2);
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
+    expect(fees.grandTotal).toBeCloseTo(224.48, 2);
   });
 });
 
@@ -94,10 +94,10 @@ describe('calculateBuyerFees — multi-seller and edge cases', () => {
     expect(fees.grandTotal).toBeCloseTo(reconstructed, 6);
   });
 
-  test('quantity of 3 at £25 → service fee = £2.97 (scales per item, not per line)', () => {
+  test('quantity of 3 at £25 from one seller → service fee = £0.99 (per seller-order, not per item)', () => {
     const fees = calculateBuyerFees([item({ listingPrice: 25, quantity: 3, shippingCost: 0 })]);
     expect(fees.totalQuantity).toBe(3);
-    expect(fees.serviceFee).toBeCloseTo(2.97, 2);
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
   });
 
   test('empty cart → all zeros', () => {
@@ -273,5 +273,89 @@ describe('fee constants — tripwires', () => {
   });
   test('MAX_OFFERS_PER_LISTING is 3', () => {
     expect(MAX_OFFERS_PER_LISTING).toBe(3);
+  });
+});
+
+describe('SB-06: £0.99 service fee is per seller-order, not per item', () => {
+  test('1 seller, 1 item → £0.99', () => {
+    const fees = calculateBuyerFees([item({ listingPrice: 50, shippingCost: 3.49 })]);
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
+  });
+
+  test('1 seller, 5 units of one item → £0.99 (not £4.95)', () => {
+    const fees = calculateBuyerFees([item({ listingPrice: 20, quantity: 5, shippingCost: 3.49 })]);
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
+    expect(fees.totalQuantity).toBe(5);
+  });
+
+  test('1 seller, multiple distinct items → £0.99 once', () => {
+    const fees = calculateBuyerFees([
+      item({ sellerId: 's1', listingPrice: 30, shippingCost: 3.49 }),
+      item({ sellerId: 's1', listingPrice: 50, shippingCost: 5.99 }),
+      item({ sellerId: 's1', listingPrice: 25, shippingCost: 2.49 }),
+    ]);
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
+    expect(fees.itemCount).toBe(3);
+  });
+
+  test('2 sellers → £1.98 (one £0.99 each)', () => {
+    const fees = calculateBuyerFees([
+      item({ sellerId: 's1', listingPrice: 40, shippingCost: 3.49 }),
+      item({ sellerId: 's2', listingPrice: 60, shippingCost: 5.99 }),
+    ]);
+    expect(fees.serviceFee).toBeCloseTo(1.98, 2);
+  });
+
+  test('3 sellers → £2.97', () => {
+    const fees = calculateBuyerFees([
+      item({ sellerId: 's1', listingPrice: 30, shippingCost: 3.49 }),
+      item({ sellerId: 's2', listingPrice: 50, shippingCost: 5.99 }),
+      item({ sellerId: 's3', listingPrice: 70, shippingCost: 4.99 }),
+    ]);
+    expect(fees.serviceFee).toBeCloseTo(2.97, 2);
+  });
+
+  test('accepted offer → £0.99 once (same as normal purchase)', () => {
+    const fees = calculateBuyerFees([
+      item({ listingPrice: 100, offerPrice: 85, shippingCost: 3.49 }),
+    ]);
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
+  });
+
+  test('7.5% unchanged: single item £100 → buyerProtectionFee = £7.50', () => {
+    const fees = calculateBuyerFees([item({ listingPrice: 100, shippingCost: 0 })]);
+    expect(fees.buyerProtectionFee).toBeCloseTo(7.50, 2);
+  });
+
+  test('7.5% unchanged: 5 units × £20 from one seller → buyerProtectionFee = £7.50', () => {
+    const fees = calculateBuyerFees([item({ listingPrice: 20, quantity: 5, shippingCost: 0 })]);
+    expect(fees.buyerProtectionFee).toBeCloseTo(7.50, 2);
+  });
+
+  test('7.5% unchanged: multi-seller basket → buyerProtectionFee on total items value', () => {
+    const fees = calculateBuyerFees([
+      item({ sellerId: 's1', listingPrice: 40, shippingCost: 0 }),
+      item({ sellerId: 's2', listingPrice: 60, shippingCost: 0 }),
+    ]);
+    expect(fees.buyerProtectionFee).toBeCloseTo(100 * 0.075, 2);
+  });
+
+  test('display estimate matches: estimateBuyerPrice for single item', () => {
+    const displayPrice = estimateBuyerPrice(50);
+    const feeBreakdown = calculateBuyerFees([item({ listingPrice: 50, shippingCost: 0 })]);
+    expect(displayPrice).toBeCloseTo(
+      feeBreakdown.itemsTotal + feeBreakdown.platformFee,
+      2,
+    );
+  });
+
+  test('worked example: 3-item single-seller order saves £1.98 vs old per-item fee', () => {
+    const fees = calculateBuyerFees([
+      item({ sellerId: 's1', listingPrice: 30, quantity: 3, shippingCost: 3.49 }),
+    ]);
+    const oldServiceFee = 0.99 * 3;
+    const newServiceFee = fees.serviceFee;
+    expect(newServiceFee).toBeCloseTo(0.99, 2);
+    expect(oldServiceFee - newServiceFee).toBeCloseTo(1.98, 2);
   });
 });

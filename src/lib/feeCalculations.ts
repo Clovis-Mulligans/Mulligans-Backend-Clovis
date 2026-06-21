@@ -6,7 +6,7 @@
 // If this module diverges from the controllers, the controllers are wrong.
 
 export const BUYER_PROTECTION_RATE = 0.075;           // 7.5%
-export const SERVICE_FEE_PER_ITEM = 0.99;             // £0.99 per item
+export const SERVICE_FEE_PER_ITEM = 0.99;             // £0.99 per seller-order (not per item)
 export const INSURANCE_RATE = 0.0125;                 // 1.25% of item value
 
 export const MIN_OFFER_PERCENT = 0.5;                 // offer floor
@@ -99,7 +99,8 @@ export function calculateBuyerFees(items: CartItem[]): FeeBreakdown {
   const insuredShipping = baseShipping + insurancePremium;
 
   const buyerProtectionFee = itemsTotal * BUYER_PROTECTION_RATE;
-  const serviceFee = SERVICE_FEE_PER_ITEM * totalQuantity;
+  const sellerCount = Object.keys(sellerMaxShipping).length;
+  const serviceFee = SERVICE_FEE_PER_ITEM * sellerCount;
   const platformFee = buyerProtectionFee + serviceFee;
 
   const grandTotal = itemsTotal + insuredShipping + platformFee;

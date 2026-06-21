@@ -2,7 +2,7 @@
 // OFFER SYSTEM CHANGES (5 Feb 2026)
 // ==========================================
 // - Line ~283-286: itemsTotal now uses offer_price when available
-// - Line ~301-302: FIXED £0.99 fee from PER SELLER to PER ITEM
+// - Line ~301-302: £0.99 fee charged per seller-order (not per item)
 // - Line ~333: unit_amount now uses offer_price when available
 // - Line ~395-406: Added offer_id/offer_price to Stripe metadata
 // - Line ~658-661: Added offer_id/original_list_price/discount_amount to order creation
@@ -332,8 +332,8 @@ export class CartCheckoutController {
         0
       );
 
-      // FIXED: £0.99 fee applies PER ITEM, always (not per seller)
-      const platformFee = itemsTotal * BUYER_PROTECTION_RATE + (SERVICE_FEE_PER_ITEM * totalQuantity);
+      const sellerCount = Object.keys(sellerGroups).length;
+      const platformFee = itemsTotal * BUYER_PROTECTION_RATE + (SERVICE_FEE_PER_ITEM * sellerCount);
       const grandTotal = itemsTotal + insuredShippingTotal + platformFee;
 
       const grandTotalPence = Math.round(grandTotal * 100);

@@ -247,8 +247,8 @@ items: [],
       const insurancePremium = itemsTotal * INSURANCE_RATE;
       const insuredShippingTotal = baseShippingTotal + insurancePremium;
 
-      // FIXED: £0.99 fee applies PER ITEM, not per cart
-      const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * totalItemCount);
+      const sellerCount = sellers.length;
+      const buyerProtectionFee = (itemsTotal * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * sellerCount);
       const grandTotal = itemsTotal + insuredShippingTotal + buyerProtectionFee;
 
       // Generate warnings for items in multiple carts

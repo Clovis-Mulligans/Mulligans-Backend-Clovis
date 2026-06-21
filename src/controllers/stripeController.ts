@@ -9,7 +9,7 @@
 // ==========================================
 // - Line ~77: Added offer_id to request body
 // - Line ~126: Added offer validation and price override
-// - Line ~204: FIXED 0.99 fee from flat to PER ITEM
+// - Line ~204: £0.99 fee charged per seller-order (not per item)
 // - Line ~243: Added offer_id to PaymentIntent metadata
 // - Line ~520: Mark offer as PURCHASED in fulfillOrder webhook
 // ==========================================
@@ -272,8 +272,7 @@ export class StripeController {
 
       // Calculate prices with quantity (using effective price which may be offer price)
       const itemPrice = effectiveUnitPrice * orderQuantity;  // Total for all items
-      // FIXED: 0.99 fee applies PER ITEM (multiplied by quantity)
-      const platformFee = (itemPrice * BUYER_PROTECTION_RATE) + (SERVICE_FEE_PER_ITEM * orderQuantity);
+      const platformFee = (itemPrice * BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
 
       // [Issue #24] Calculate shipping cost
       const shippingCost = parseFloat((listing as any).shipping_cost?.toString() || '0');
