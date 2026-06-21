@@ -205,27 +205,11 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
       try {
         console.log(`[ESCROW] Processing auto-cancel for order ${order.id}`);
 
-        // ✅ SAFETY: Re-verify status hasn't changed
-        const freshOrder = await prisma.orders.findUnique({
-          where: { id: order.id },
-          select: { status: true, refunded_at: true, stripe_refund_id: true },
-        });
-
-        if (freshOrder?.status !== 'to_ship') {
-          console.log(`[ESCROW] ⚠️ Order ${order.id} status changed to ${freshOrder?.status}, skipping`);
-          continue;
-        }
-
-        if (freshOrder?.refunded_at || freshOrder?.stripe_refund_id) {
-          console.log(`[ESCROW] ⚠️ Order ${order.id} already refunded, skipping`);
-          continue;
-        }
-
         console.log(`[ESCROW] Auto-cancelling order ${order.id} - seller didn't ship within ${SHIPPING_DEADLINE_DAYS} days`);
 
         let refundId: string | null = null;
 
-        // 1. Refund the buyer via Stripe
+        // 1. Refund the buyer via Stripe (idempotent via idempotencyKey)
         if (order.stripe_payment_intent_id) {
           try {
             const refund = await stripe.refunds.create({
@@ -239,7 +223,7 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
             }, {
               idempotencyKey: `auto_cancel_refund_${order.id}`, // ✅ Prevent double refund
             });
-            
+
             refundId = refund.id;
             console.log(`[ESCROW] ✅ Refund created: ${refund.id} for order ${order.id}`);
           } catch (refundError: any) {
@@ -253,8 +237,29 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
           }
         }
 
-        // 2. Update order + restore stock atomically
-        await prisma.$transaction(async (tx) => {
+        // 2. Re-check status + update order + restore stock — all inside one transaction.
+        // Row lock prevents two concurrent cron runs from both passing the check.
+        const skipped = await prisma.$transaction(async (tx) => {
+          await (tx as any).$queryRawUnsafe(
+            `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+            order.id,
+          );
+
+          const freshOrder = await tx.orders.findUnique({
+            where: { id: order.id },
+            select: { status: true, refunded_at: true, stripe_refund_id: true },
+          });
+
+          if (freshOrder?.status !== 'to_ship') {
+            console.log(`[ESCROW] ⚠️ Order ${order.id} status changed to ${freshOrder?.status}, skipping`);
+            return true;
+          }
+
+          if (freshOrder?.refunded_at || freshOrder?.stripe_refund_id) {
+            console.log(`[ESCROW] ⚠️ Order ${order.id} already refunded, skipping`);
+            return true;
+          }
+
           await tx.orders.update({
             where: { id: order.id },
             data: {
@@ -277,7 +282,11 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
               order.selected_size,
             );
           }
+
+          return false;
         });
+
+        if (skipped) continue;
 
         // 2b. Fire-and-forget Shippo label refund if a label was purchased
         if (order.shippo_transaction_id) {
