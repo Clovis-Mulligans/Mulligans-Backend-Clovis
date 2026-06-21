@@ -25,6 +25,7 @@ import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } 
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendInspectionReminders } from './inspectionReminder';
+import { restoreListingStock } from '../lib/stockUtils';
 import crypto from 'crypto';
 
 const shippo = new Shippo({
@@ -252,18 +253,30 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
           }
         }
 
-        // 2. Update order status (ONLY after successful refund)
-        await prisma.orders.update({
-          where: { id: order.id },
-          data: {
-            status: 'cancelled',
-            cancelled_at: now,
-            cancel_reason: 'auto_cancelled_not_shipped',
-            refunded_at: now,
-            refund_amount: order.amount,
-            stripe_refund_id: refundId,
-            updated_at: now,
-          },
+        // 2. Update order + restore stock atomically
+        await prisma.$transaction(async (tx) => {
+          await tx.orders.update({
+            where: { id: order.id },
+            data: {
+              status: 'cancelled',
+              cancelled_at: now,
+              cancel_reason: 'auto_cancelled_not_shipped',
+              refunded_at: now,
+              refund_amount: order.amount,
+              stripe_refund_id: refundId,
+              updated_at: now,
+            },
+          });
+
+          if (order.listing_id) {
+            await restoreListingStock(
+              tx,
+              order.listing_id,
+              order.quantity || 1,
+              'order_cancelled',
+              order.selected_size,
+            );
+          }
         });
 
         // 2b. Fire-and-forget Shippo label refund if a label was purchased
@@ -289,18 +302,6 @@ export async function autoCancelUnshippedOrders(): Promise<void> {
                 trigger: 'auto_cancel',
               }));
             });
-        }
-
-        // 3. Relist the item
-        if (order.listing_id) {
-          await prisma.listings.update({
-            where: { id: order.listing_id },
-            data: {
-              status: 'active',
-              updated_at: now,
-            },
-          });
-          console.log(`[ESCROW] Relisted item: ${order.listing_id}`);
         }
 
         // 4. Increment seller's shipping strikes

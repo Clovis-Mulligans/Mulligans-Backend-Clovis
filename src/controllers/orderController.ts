@@ -1241,6 +1241,7 @@ if (isBuyerCancelling) {
             order.listing_id,
             order.quantity || 1,
             'order_cancelled',
+            order.selected_size,
           );
         }
 
