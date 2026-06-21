@@ -23,12 +23,20 @@ export type StockChangeCause =
  * it is returned to 'active'. Listings with status 'deleted' are
  * left deleted — stock is restored but status is not overridden.
  *
- * Uses atomic increment for plain-quantity listings.
- * For size-variant listings, reads then writes within the caller's
- * transaction — same approach as the decrement path at checkout.
+ * Plain-quantity path: uses atomic `{ increment }` — inherently race-safe.
  *
- * Accepts either a Prisma transaction client or the base PrismaClient.
- * Pass `tx` when called inside `$transaction`; pass `prisma` outside.
+ * Size-variant path: uses SELECT ... FOR UPDATE within the caller's
+ * transaction to acquire a row lock before reading sizeQuantities,
+ * then writes the updated buckets + recalculated total. This prevents
+ * concurrent restore/decrement operations from interleaving reads and
+ * clobbering each other. Callers MUST pass a transaction client (`tx`)
+ * when restoring size-variant listings — passing the base PrismaClient
+ * would make the lock meaningless (no enclosing transaction to hold it).
+ *
+ * For size-variant listings, the per-size buckets (specifications.sizeQuantities)
+ * are the source of truth; the top-level `quantity` is always recalculated
+ * as the sum of all buckets. This is intentional — it corrects any drift
+ * between the two representations.
  */
 export async function restoreListingStock(
   tx: Prisma.TransactionClient | PrismaClient,
@@ -56,11 +64,37 @@ export async function restoreListingStock(
   const newStatus = listing.status === 'deleted' ? 'deleted' : 'active';
 
   if (hasSizeVariants) {
-    const currentSizeQty: number = specs.sizeQuantities[selectedSize!] || 0;
+    // Row lock: prevent concurrent read-modify-write races on JSON sizeQuantities.
+    // The lock is held until the enclosing transaction commits or rolls back.
+    await (tx as any).$queryRawUnsafe(
+      `SELECT id FROM listings WHERE id = $1 FOR UPDATE`,
+      listingId,
+    );
+
+    // Re-read after acquiring lock — another transaction may have committed
+    // changes between our initial findUnique and the lock acquisition.
+    const locked = await tx.listings.findUnique({
+      where: { id: listingId },
+      select: { quantity: true, status: true, specifications: true },
+    });
+
+    if (!locked) {
+      console.error(
+        `[STOCK] RESTORE_FAILED listing=${listingId} reason=listing_deleted_during_lock cause=${cause}`,
+      );
+      return;
+    }
+
+    const lockedSpecs = locked.specifications as any;
+    const lockedStatus = locked.status as string;
+    const lockedPrevQty = locked.quantity;
+    const lockedNewStatus = lockedStatus === 'deleted' ? 'deleted' : 'active';
+
+    const currentSizeQty: number = lockedSpecs.sizeQuantities[selectedSize!] || 0;
     const updatedSpecs = {
-      ...specs,
+      ...lockedSpecs,
       sizeQuantities: {
-        ...specs.sizeQuantities,
+        ...lockedSpecs.sizeQuantities,
         [selectedSize!]: currentSizeQty + quantity,
       },
     };
@@ -72,13 +106,13 @@ export async function restoreListingStock(
       data: {
         quantity: newTotalStock,
         specifications: updatedSpecs,
-        status: newStatus,
+        status: lockedNewStatus,
         updated_at: new Date(),
       },
     });
 
     console.log(
-      `[STOCK] INCREMENT listing=${listingId} size=${selectedSize} prev=${prevQty} sizeQty=${currentSizeQty}→${currentSizeQty + quantity} total=${newTotalStock} cause=${cause}`,
+      `[STOCK] INCREMENT listing=${listingId} size=${selectedSize} prev=${lockedPrevQty} sizeQty=${currentSizeQty}→${currentSizeQty + quantity} total=${newTotalStock} cause=${cause}`,
     );
   } else {
     await tx.listings.update({

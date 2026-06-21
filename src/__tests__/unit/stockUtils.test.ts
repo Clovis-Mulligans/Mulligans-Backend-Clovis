@@ -9,6 +9,7 @@ let mockListing: {
 } | null = null;
 
 let lastUpdate: { where: any; data: any } | null = null;
+let queryRawCalls: string[] = [];
 
 const makeTx = () => ({
   listings: {
@@ -27,11 +28,16 @@ const makeTx = () => ({
       return mockListing;
     }),
   },
+  $queryRawUnsafe: jest.fn(async (sql: string, ..._params: any[]) => {
+    queryRawCalls.push(sql);
+    return [{ id: mockListing?.id }];
+  }),
 });
 
 beforeEach(() => {
   mockListing = null;
   lastUpdate = null;
+  queryRawCalls = [];
   jest.spyOn(console, 'log').mockImplementation(() => {});
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -50,6 +56,15 @@ describe('restoreListingStock — plain quantity (no size variants)', () => {
     expect(tx.listings.update).toHaveBeenCalledTimes(1);
     const data = lastUpdate!.data;
     expect(data.quantity).toEqual({ increment: 2 });
+  });
+
+  test('does NOT acquire row lock for plain quantity', async () => {
+    mockListing = { id: 'L1', quantity: 3, status: 'active', specifications: null };
+    const tx = makeTx();
+
+    await restoreListingStock(tx as any, 'L1', 2, 'order_cancelled');
+
+    expect(tx.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   test('sets status to active when listing was sold', async () => {
@@ -116,7 +131,42 @@ describe('restoreListingStock — size variants', () => {
     expect(lastUpdate!.data.quantity).toBe(3);
   });
 
-  test('sets total quantity as sum of all size buckets', async () => {
+  test('acquires FOR UPDATE row lock before reading sizeQuantities', async () => {
+    mockListing = {
+      id: 'L2',
+      quantity: 2,
+      status: 'active',
+      specifications: {
+        sizeQuantities: { S: 1, M: 1 },
+      },
+    };
+    const tx = makeTx();
+
+    await restoreListingStock(tx as any, 'L2', 1, 'order_cancelled', 'M');
+
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    expect(queryRawCalls[0]).toContain('FOR UPDATE');
+    expect(queryRawCalls[0]).toContain('listings');
+  });
+
+  test('re-reads listing after acquiring lock (uses locked state, not stale read)', async () => {
+    mockListing = {
+      id: 'L2',
+      quantity: 2,
+      status: 'active',
+      specifications: {
+        sizeQuantities: { S: 1, M: 1 },
+      },
+    };
+    const tx = makeTx();
+
+    await restoreListingStock(tx as any, 'L2', 1, 'order_cancelled', 'M');
+
+    // findUnique called twice: initial read + re-read after lock
+    expect(tx.listings.findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  test('sets total quantity as sum of all size buckets (buckets are source of truth)', async () => {
     mockListing = {
       id: 'L2',
       quantity: 5,
@@ -129,7 +179,8 @@ describe('restoreListingStock — size variants', () => {
 
     await restoreListingStock(tx as any, 'L2', 3, 'return_refund', 'M');
 
-    expect(lastUpdate!.data.quantity).toBe(8); // S:2 + M:4 + L:2
+    // S:2 + M:(1+3) + L:2 = 8
+    expect(lastUpdate!.data.quantity).toBe(8);
   });
 
   test('sold listing with size variants returns to active', async () => {
@@ -174,6 +225,7 @@ describe('restoreListingStock — size variants', () => {
     await restoreListingStock(tx as any, 'L3', 1, 'order_cancelled', 'M');
 
     expect(lastUpdate!.data.quantity).toEqual({ increment: 1 });
+    expect(tx.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   test('logs size-specific audit line', async () => {
