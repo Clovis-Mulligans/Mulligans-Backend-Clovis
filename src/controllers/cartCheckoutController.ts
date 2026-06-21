@@ -710,7 +710,13 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             const orderQuantity = cartItem.quantity || 1;
             const selectedSize = cartItem.selected_size || null;
 
-            // Get listing details
+            // Row lock: prevents concurrent size-variant oversell (plain-quantity
+            // path uses atomic decrement, but JSON sizeQuantities needs a lock).
+            await (tx as any).$queryRawUnsafe(
+              `SELECT id FROM listings WHERE id = $1 FOR UPDATE`,
+              listingId,
+            );
+
             const listing = await tx.listings.findUnique({
               where: { id: listingId },
               select: {

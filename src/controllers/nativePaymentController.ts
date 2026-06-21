@@ -643,7 +643,13 @@ export class NativePaymentController {
 
     // [D-C1] Transaction with fresh stock read and atomic decrement
     const { createdOrder, shouldMarkSold } = await prisma.$transaction(async (tx) => {
-      // RACE CONDITION FIX: Fresh stock read inside transaction
+      // Row lock: prevents concurrent size-variant oversell (plain-quantity
+      // path uses atomic decrement, but JSON sizeQuantities needs a lock).
+      await (tx as any).$queryRawUnsafe(
+        `SELECT id FROM listings WHERE id = $1 FOR UPDATE`,
+        listingId,
+      );
+
       const freshListing = await tx.listings.findUnique({
         where: { id: listingId },
         select: { quantity: true, specifications: true, status: true },

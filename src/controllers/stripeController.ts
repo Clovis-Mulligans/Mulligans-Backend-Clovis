@@ -719,7 +719,13 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       try {
         // [D-C1] Use transaction to ensure atomicity -- stock check happens INSIDE
         const txResult = await prisma.$transaction(async (tx) => {
-          // [D-C1] RACE CONDITION FIX: Re-read listing inside transaction for fresh stock data
+          // Row lock: prevents concurrent size-variant oversell (plain-quantity
+          // path uses atomic decrement, but JSON sizeQuantities needs a lock).
+          await (tx as any).$queryRawUnsafe(
+            `SELECT id FROM listings WHERE id = $1 FOR UPDATE`,
+            listing_id,
+          );
+
           const freshListing = await tx.listings.findUnique({
             where: { id: listing_id },
             select: { quantity: true, specifications: true, status: true },
