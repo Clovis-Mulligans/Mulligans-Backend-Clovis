@@ -5,7 +5,7 @@
 
 import { Prisma, PrismaClient } from '@prisma/client';
 
-type StockChangeCause =
+export type StockChangeCause =
   | 'cart_checkout'
   | 'single_checkout'
   | 'native_checkout'
@@ -16,22 +16,30 @@ type StockChangeCause =
 
 /**
  * Restore listing stock after a cancellation, return, or refund.
- * Uses atomic increment to handle concurrent operations safely.
- * Logs a structured [STOCK] audit line for every mutation.
  *
- * Accepts either a Prisma transaction client (Prisma.TransactionClient)
- * or the base PrismaClient. Pass `tx` when called inside `$transaction`;
- * pass `prisma` when called outside.
+ * Handles both plain-quantity listings and size-variant listings
+ * (where specifications.sizeQuantities holds per-size counts).
+ * If a listing was marked 'sold' and stock is restored above zero,
+ * it is returned to 'active'. Listings with status 'deleted' are
+ * left deleted — stock is restored but status is not overridden.
+ *
+ * Uses atomic increment for plain-quantity listings.
+ * For size-variant listings, reads then writes within the caller's
+ * transaction — same approach as the decrement path at checkout.
+ *
+ * Accepts either a Prisma transaction client or the base PrismaClient.
+ * Pass `tx` when called inside `$transaction`; pass `prisma` outside.
  */
 export async function restoreListingStock(
   tx: Prisma.TransactionClient | PrismaClient,
   listingId: string,
   quantity: number,
   cause: StockChangeCause,
+  selectedSize?: string | null,
 ): Promise<void> {
   const listing = await tx.listings.findUnique({
     where: { id: listingId },
-    select: { quantity: true, status: true },
+    select: { quantity: true, status: true, specifications: true },
   });
 
   if (!listing) {
@@ -42,20 +50,51 @@ export async function restoreListingStock(
   }
 
   const prevQty = listing.quantity;
+  const specs = listing.specifications as any;
+  const hasSizeVariants = selectedSize && specs?.sizeQuantities && typeof specs.sizeQuantities === 'object';
 
-  await tx.listings.update({
-    where: { id: listingId },
-    data: {
-      quantity: { increment: quantity },
-      status: 'active',
-      updated_at: new Date(),
-    },
-  });
+  const newStatus = listing.status === 'deleted' ? 'deleted' : 'active';
 
-  const newQty = prevQty + quantity;
-  console.log(
-    `[STOCK] INCREMENT listing=${listingId} prev=${prevQty} delta=+${quantity} new=${newQty} cause=${cause}`,
-  );
+  if (hasSizeVariants) {
+    const currentSizeQty: number = specs.sizeQuantities[selectedSize!] || 0;
+    const updatedSpecs = {
+      ...specs,
+      sizeQuantities: {
+        ...specs.sizeQuantities,
+        [selectedSize!]: currentSizeQty + quantity,
+      },
+    };
+    const newTotalStock = Object.values(updatedSpecs.sizeQuantities)
+      .reduce((sum: number, qty: any) => sum + (qty || 0), 0);
+
+    await tx.listings.update({
+      where: { id: listingId },
+      data: {
+        quantity: newTotalStock,
+        specifications: updatedSpecs,
+        status: newStatus,
+        updated_at: new Date(),
+      },
+    });
+
+    console.log(
+      `[STOCK] INCREMENT listing=${listingId} size=${selectedSize} prev=${prevQty} sizeQty=${currentSizeQty}→${currentSizeQty + quantity} total=${newTotalStock} cause=${cause}`,
+    );
+  } else {
+    await tx.listings.update({
+      where: { id: listingId },
+      data: {
+        quantity: { increment: quantity },
+        status: newStatus,
+        updated_at: new Date(),
+      },
+    });
+
+    const newQty = prevQty + quantity;
+    console.log(
+      `[STOCK] INCREMENT listing=${listingId} prev=${prevQty} delta=+${quantity} new=${newQty} cause=${cause}`,
+    );
+  }
 }
 
 /**
