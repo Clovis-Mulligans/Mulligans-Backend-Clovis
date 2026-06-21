@@ -39,7 +39,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { CartCheckoutController } from './cartCheckoutController';
 import { sendPushNotification } from './pushNotificationController';
@@ -785,6 +785,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               offer_id: offerId || null,
               original_list_price: offerId ? originalListPrice : null,
               discount_amount: offerId ? discountAmount : 0,
+              // SB-07: Fee snapshot — what was charged at point of sale
+              ...buildFeeSnapshot(parseFloat(metadata.item_price), true, session.payment_intent as string),
             },
           });
 

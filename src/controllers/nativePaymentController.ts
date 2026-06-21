@@ -28,7 +28,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -708,6 +708,8 @@ export class NativePaymentController {
           offer_id: offerId || null,
           original_list_price: offerId ? originalListPrice : null,
           discount_amount: offerId ? discountAmount : 0,
+          // SB-07: Fee snapshot — what was charged at point of sale
+          ...buildFeeSnapshot(parseFloat(metadata.item_total), true, paymentIntent.id),
         },
       });
 
@@ -980,6 +982,7 @@ export class NativePaymentController {
 
     const orders: any[] = [];
     const soldListingIds: string[] = [];
+    const sellerFixedFeeApplied = new Set<string>();
 
     await prisma.$transaction(async (tx) => {
 
@@ -1065,8 +1068,15 @@ export class NativePaymentController {
             offer_id: offerInfo?.offer_id || null,
             original_list_price: offerInfo ? originalListPrice : null,
             discount_amount: offerInfo ? discountAmount : 0,
+            // SB-07: Fee snapshot — per-order share of what was charged
+            ...buildFeeSnapshot(
+              itemTotal,
+              !sellerFixedFeeApplied.has(listing.seller_id),
+              paymentIntent.id,
+            ),
           },
         });
+        sellerFixedFeeApplied.add(listing.seller_id);
 
         console.log('[PAY] Listing snapshot saved:', listing.title, '@ £' + effectiveUnitPrice, offerInfo ? `[offer: ${offerInfo.offer_id}]` : '');
         orders.push({ ...order, listing });
@@ -1110,6 +1120,14 @@ export class NativePaymentController {
             console.warn(`[PAY] Could not update offer ${offerInfo.offer_id}:`, offerUpdateErr);
           }
         }
+      }
+
+      // SB-07: Reconciliation — snapshot sum must match charged platform fee
+      const chargedPlatformFee = parseFloat(paymentIntent.metadata?.platform_fee || '0');
+      const snapshotSum = orders.reduce((s, o) => s + (parseFloat(o.platform_fee_amount?.toString() || '0')), 0);
+      const reconDiff = Math.abs(snapshotSum - chargedPlatformFee);
+      if (reconDiff > 0.01) {
+        console.error(`[SB-07] RECONCILIATION MISMATCH native cart: snapshot_sum=${snapshotSum.toFixed(2)} charged=${chargedPlatformFee.toFixed(2)} diff=${reconDiff.toFixed(2)} pi=${paymentIntent.id}`);
       }
 
       // Clear cart

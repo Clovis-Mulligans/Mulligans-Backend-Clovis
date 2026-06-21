@@ -43,7 +43,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
@@ -702,8 +702,11 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         // INSURANCE: Calculate total items value for proportional insurance split
       const totalItemsValue = sellerBreakdown.reduce((sum, s) => sum + s.subtotal, 0);
 
+        const createdOrderSnapshots: number[] = [];
+
         for (const sellerData of sellerBreakdown) {
           const { seller_id, seller_connect_id, subtotal, shipping_total, cart_items, first_image } = sellerData;
+          let sellerFixedFeeApplied = false;
 
           for (const cartItem of (cart_items || [])) {
             const listingId = cartItem.listing_id;
@@ -816,9 +819,17 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 offer_id: offerData?.offer_id || null,
                 original_list_price: offerData ? originalListPrice : null,
                 discount_amount: offerData ? discountAmount * orderQuantity : 0,
+                // SB-07: Fee snapshot — per-order share of what was charged
+                ...buildFeeSnapshot(
+                  orderItemTotal,
+                  !sellerFixedFeeApplied,
+                  session.payment_intent as string,
+                ),
               },
             });
 
+            createdOrderSnapshots.push(order.platform_fee_amount ? parseFloat(order.platform_fee_amount.toString()) : 0);
+            sellerFixedFeeApplied = true;
             createdOrders.push({ ...order, image_url: listingImage, title: listing.title, quantity: orderQuantity });
             console.log(`[CART] Order created: ${order.id} for listing: ${listingId} (qty: ${orderQuantity})${offerData ? ` [offer: ${offerData.offer_id}]` : ''}`);
 
@@ -891,6 +902,14 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
             listing_id: { in: listingIds },
           },
         });
+
+        // SB-07: Reconciliation — snapshot sum must match charged platform fee
+        const chargedPlatformFee = parseFloat(metadata.platform_fee || '0');
+        const snapshotSum = createdOrderSnapshots.reduce((s, v) => s + v, 0);
+        const reconDiff = Math.abs(snapshotSum - chargedPlatformFee);
+        if (reconDiff > 0.01) {
+          console.error(`[SB-07] RECONCILIATION MISMATCH cart: snapshot_sum=${snapshotSum.toFixed(2)} charged=${chargedPlatformFee.toFixed(2)} diff=${reconDiff.toFixed(2)} pi=${session.payment_intent}`);
+        }
       });
 
       // [Issue #2] Expire all other active offers for sold listings (outside transaction)

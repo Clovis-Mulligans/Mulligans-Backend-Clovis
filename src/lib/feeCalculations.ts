@@ -167,6 +167,38 @@ export function estimateBuyerPrice(itemPrice: number): number {
  * Returns null if the offer is valid, or a human-readable reason string if not.
  * Mirrors offerController.ts:159-172.
  */
+export interface FeeSnapshot {
+  fee_model: string;
+  fee_payer: string;
+  fee_percent: number;
+  fee_fixed: number;
+  platform_fee_amount: number;
+  seller_is_pro_at_sale: boolean;
+  insurance_charged: boolean;
+  checkout_group_ref: string;
+}
+
+export function buildFeeSnapshot(
+  orderItemTotal: number,
+  carriesFixedFee: boolean,
+  checkoutGroupRef: string,
+  sellerIsPro: boolean = false,
+  insuranceCharged: boolean = true,
+): FeeSnapshot {
+  const protectionFee = orderItemTotal * BUYER_PROTECTION_RATE;
+  const fixedFee = carriesFixedFee ? SERVICE_FEE_PER_ITEM : 0;
+  return {
+    fee_model: 'standard',
+    fee_payer: 'buyer',
+    fee_percent: BUYER_PROTECTION_RATE,
+    fee_fixed: fixedFee,
+    platform_fee_amount: Number((protectionFee + fixedFee).toFixed(2)),
+    seller_is_pro_at_sale: sellerIsPro,
+    insurance_charged: insuranceCharged,
+    checkout_group_ref: checkoutGroupRef,
+  };
+}
+
 export function validateOfferAmount(
   offerAmount: number,
   listPrice: number,

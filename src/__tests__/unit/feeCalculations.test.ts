@@ -3,6 +3,7 @@ import {
   calculateSellerPayout,
   validateOfferAmount,
   estimateBuyerPrice,
+  buildFeeSnapshot,
   BUYER_PROTECTION_RATE,
   SERVICE_FEE_PER_ITEM,
   INSURANCE_RATE,
@@ -357,5 +358,113 @@ describe('SB-06: £0.99 service fee is per seller-order, not per item', () => {
     const newServiceFee = fees.serviceFee;
     expect(newServiceFee).toBeCloseTo(0.99, 2);
     expect(oldServiceFee - newServiceFee).toBeCloseTo(1.98, 2);
+  });
+});
+
+// ─── SB-07: buildFeeSnapshot ───────────────────────────────────────────────
+
+describe('SB-07 — buildFeeSnapshot', () => {
+  test('carriesFixedFee=true → fee_fixed=0.99, platform_fee_amount includes £0.99', () => {
+    const snap = buildFeeSnapshot(100, true, 'pi_abc');
+    expect(snap.fee_fixed).toBe(0.99);
+    expect(snap.platform_fee_amount).toBeCloseTo(100 * 0.075 + 0.99, 2);
+  });
+
+  test('carriesFixedFee=false → fee_fixed=0, platform_fee_amount is 7.5% only', () => {
+    const snap = buildFeeSnapshot(100, false, 'pi_abc');
+    expect(snap.fee_fixed).toBe(0);
+    expect(snap.platform_fee_amount).toBeCloseTo(100 * 0.075, 2);
+  });
+
+  test('default constants: fee_model=standard, fee_payer=buyer, fee_percent=0.075', () => {
+    const snap = buildFeeSnapshot(50, true, 'pi_xyz');
+    expect(snap.fee_model).toBe('standard');
+    expect(snap.fee_payer).toBe('buyer');
+    expect(snap.fee_percent).toBe(0.075);
+  });
+
+  test('default booleans: seller_is_pro_at_sale=false, insurance_charged=true', () => {
+    const snap = buildFeeSnapshot(50, true, 'pi_xyz');
+    expect(snap.seller_is_pro_at_sale).toBe(false);
+    expect(snap.insurance_charged).toBe(true);
+  });
+
+  test('checkout_group_ref is passed through', () => {
+    const snap = buildFeeSnapshot(25, true, 'pi_test123');
+    expect(snap.checkout_group_ref).toBe('pi_test123');
+  });
+
+  test('platform_fee_amount is rounded to 2dp', () => {
+    // 33.33 * 0.075 = 2.49975 → should be 2.50
+    const snap = buildFeeSnapshot(33.33, false, 'pi_round');
+    expect(snap.platform_fee_amount).toBe(2.50);
+  });
+
+  test('platform_fee_amount with fixed fee is rounded to 2dp', () => {
+    // 33.33 * 0.075 + 0.99 = 3.48975 → should be 3.49
+    const snap = buildFeeSnapshot(33.33, true, 'pi_round');
+    expect(snap.platform_fee_amount).toBe(3.49);
+  });
+
+  // ─── Per-flow snapshot simulation ──────────────────────────────────────
+
+  test('single-item order: snapshot has fee_fixed=0.99 and correct platform_fee', () => {
+    const itemTotal = 45.00;
+    const snap = buildFeeSnapshot(itemTotal, true, 'pi_single');
+    expect(snap.fee_fixed).toBe(0.99);
+    expect(snap.platform_fee_amount).toBeCloseTo(45 * 0.075 + 0.99, 2);
+    expect(snap.checkout_group_ref).toBe('pi_single');
+  });
+
+  test('cart, 1 seller / 2 items: first order gets £0.99, second gets £0', () => {
+    const snap1 = buildFeeSnapshot(30, true, 'pi_cart1');
+    const snap2 = buildFeeSnapshot(20, false, 'pi_cart1');
+
+    expect(snap1.fee_fixed).toBe(0.99);
+    expect(snap2.fee_fixed).toBe(0);
+    expect(snap1.checkout_group_ref).toBe('pi_cart1');
+    expect(snap2.checkout_group_ref).toBe('pi_cart1');
+  });
+
+  test('cart, 2 sellers / 1 item each: BOTH orders get fee_fixed=0.99', () => {
+    const snap1 = buildFeeSnapshot(40, true, 'pi_cart2');
+    const snap2 = buildFeeSnapshot(60, true, 'pi_cart2');
+
+    expect(snap1.fee_fixed).toBe(0.99);
+    expect(snap2.fee_fixed).toBe(0.99);
+  });
+
+  // ─── Reconciliation test ──────────────────────────────────────────────
+
+  test('multi-seller cart: sum of per-order platform_fee_amount equals basket platform fee', () => {
+    // 2 sellers: seller A has 2 items (£30 + £20), seller B has 1 item (£50)
+    // Basket: itemsTotal = £100, sellerCount = 2
+    // Charged platformFee = 100 * 0.075 + 0.99 * 2 = 7.50 + 1.98 = 9.48
+    const chargedPlatformFee = 100 * BUYER_PROTECTION_RATE + SERVICE_FEE_PER_ITEM * 2;
+
+    // Seller A, item 1 (first for this seller → carries fixed fee)
+    const snapA1 = buildFeeSnapshot(30, true, 'pi_recon');
+    // Seller A, item 2 (not first → no fixed fee)
+    const snapA2 = buildFeeSnapshot(20, false, 'pi_recon');
+    // Seller B, item 1 (first for this seller → carries fixed fee)
+    const snapB1 = buildFeeSnapshot(50, true, 'pi_recon');
+
+    const snapshotSum = snapA1.platform_fee_amount + snapA2.platform_fee_amount + snapB1.platform_fee_amount;
+
+    expect(Math.abs(snapshotSum - chargedPlatformFee)).toBeLessThanOrEqual(0.01);
+  });
+
+  test('single-item: snapshot platform_fee_amount matches charged platform fee', () => {
+    const itemTotal = 75;
+    const chargedPlatformFee = itemTotal * BUYER_PROTECTION_RATE + SERVICE_FEE_PER_ITEM;
+    const snap = buildFeeSnapshot(itemTotal, true, 'pi_single_recon');
+    expect(Math.abs(snap.platform_fee_amount - chargedPlatformFee)).toBeLessThanOrEqual(0.01);
+  });
+
+  // ─── Unchanged assertions ─────────────────────────────────────────────
+
+  test('7.5% rate unchanged: fee_percent is always BUYER_PROTECTION_RATE', () => {
+    expect(buildFeeSnapshot(100, true, 'x').fee_percent).toBe(0.075);
+    expect(buildFeeSnapshot(100, false, 'x').fee_percent).toBe(0.075);
   });
 });
