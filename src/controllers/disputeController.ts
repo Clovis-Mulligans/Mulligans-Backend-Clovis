@@ -26,7 +26,7 @@ import {
 } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
 import { ESCROW_RELEASE_DAYS } from '../config/constants';
-import { calculateSellerPayout as calcPayout, BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
+import { calculateSellerPayout as calcPayout, BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, computeSellerTransferAmount } from '../lib/feeCalculations';
 import { isForceReturnThreshold, createForcedReturn, FORCED_RETURN_SHIP_DEADLINE_DAYS } from '../services/forcedReturnService';
 import {
   isAllowedBuyerRefundPercent,
@@ -152,8 +152,12 @@ async function transferSellerPayout(
     let sellerReceives: number;
 
     if (sellerPayout !== null) {
+      // SB-08: For pro sellers, deduct platform fee BEFORE scaling by refund percent
+      const platformFee = order.platform_fee_amount ? parseFloat(order.platform_fee_amount.toString()) : 0;
+      const isPro = order.seller_is_pro_at_sale === true;
+      const netPayout = computeSellerTransferAmount({ seller_payout: sellerPayout, seller_is_pro_at_sale: isPro, platform_fee_amount: platformFee });
       const refundPercent = orderAmount > 0 ? refundAmount / orderAmount : 0;
-      sellerReceives = sellerPayout * (1 - refundPercent);
+      sellerReceives = netPayout * (1 - refundPercent);
     } else {
       // B5 fix: use the centralised fee module for the fallback
       const payoutResult = calcPayout(orderAmount, 1, 0, true, 0);

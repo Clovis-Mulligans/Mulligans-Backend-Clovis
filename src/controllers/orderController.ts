@@ -20,6 +20,7 @@ import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { restoreListingStock } from '../lib/stockUtils';
 import { weekdaysUntil, calculateShippingDeadline } from '../utils/shippingDeadline';
 import { hasBlockingDispute, hasBlockingReturn } from '../services/escrowService';
+import { computeSellerTransferAmount } from '../lib/feeCalculations';
 
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
@@ -729,6 +730,8 @@ if (order.disputes) {
           buyer_id: true,
           amount: true,
           seller_payout: true,
+          seller_is_pro_at_sale: true,
+          platform_fee_amount: true,
           stripe_transfer_id: true,
           listings: {
             select: {
@@ -771,9 +774,13 @@ if (order.disputes) {
       const listingImage = order.listings?.images?.[0]?.image_url || null;
 
       // Transfer funds to seller with idempotency + persist transfer ID
+      // SB-08: For pro sellers, deduct platform fee before transfer
       let transferId: string | null = null;
       if (seller.stripe_connect_id && order.seller_payout) {
-        const transferAmount = Math.round(parseFloat(order.seller_payout.toString()) * 100);
+        const sellerPayoutNum = parseFloat(order.seller_payout.toString());
+        const platformFee = order.platform_fee_amount ? parseFloat(order.platform_fee_amount.toString()) : 0;
+        const isPro = order.seller_is_pro_at_sale === true;
+        const transferAmount = Math.round(computeSellerTransferAmount({ seller_payout: sellerPayoutNum, seller_is_pro_at_sale: isPro, platform_fee_amount: platformFee }) * 100);
 
         try {
           const transfer = await stripe.transfers.create({
@@ -1598,8 +1605,12 @@ if (isBuyerCancelling) {
       const listingImage = order.listings?.images?.[0]?.image_url || (order as any).listing_image || null;
 
       // ✅ Transfer funds to seller
+      // SB-08: For pro sellers, deduct platform fee before transfer
       if (seller.stripe_connect_id && sellerPayout) {
-        const transferAmount = Math.round(parseFloat(sellerPayout.toString()) * 100);
+        const sellerPayoutNum = parseFloat(sellerPayout.toString());
+        const platformFee = order.platform_fee_amount ? parseFloat(order.platform_fee_amount.toString()) : 0;
+        const isPro = order.seller_is_pro_at_sale === true;
+        const transferAmount = Math.round(computeSellerTransferAmount({ seller_payout: sellerPayoutNum, seller_is_pro_at_sale: isPro, platform_fee_amount: platformFee }) * 100);
 
         try {
           const transfer = await stripe.transfers.create({

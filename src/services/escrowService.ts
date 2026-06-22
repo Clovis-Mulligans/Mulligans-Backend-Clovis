@@ -26,6 +26,7 @@ import { sendPushNotification } from '../controllers/pushNotificationController'
 import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendInspectionReminders } from './inspectionReminder';
 import { restoreListingStock } from '../lib/stockUtils';
+import { computeSellerTransferAmount } from '../lib/feeCalculations';
 import crypto from 'crypto';
 
 const shippo = new Shippo({
@@ -595,9 +596,12 @@ export async function autoReleaseEscrow(): Promise<void> {
         // CALCULATE CORRECT PAYOUT FOR GROUP
         // ============================================
         // Seller receives item price only — platform retains shipping and pays label cost
+        // SB-08: For pro sellers, deduct platform_fee_amount per order before summing
         const actualPayout = orders.reduce((sum, o) => {
-          const payout = o.seller_payout ? parseFloat(o.seller_payout.toString()) : parseFloat(o.amount.toString());
-          return sum + payout;
+          const sellerPayout = o.seller_payout ? parseFloat(o.seller_payout.toString()) : parseFloat(o.amount.toString());
+          const platformFee = o.platform_fee_amount ? parseFloat(o.platform_fee_amount.toString()) : 0;
+          const isPro = o.seller_is_pro_at_sale === true;
+          return sum + computeSellerTransferAmount({ seller_payout: sellerPayout, seller_is_pro_at_sale: isPro, platform_fee_amount: platformFee });
         }, 0);
 
         const isAutoShipped = orders.some(o => (o as any).label_auto_generated === true);

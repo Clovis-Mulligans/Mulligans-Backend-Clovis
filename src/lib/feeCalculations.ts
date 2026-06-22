@@ -199,6 +199,16 @@ export function buildFeeSnapshot(
   };
 }
 
+export function computeSellerTransferAmount(order: {
+  seller_payout: number;
+  seller_is_pro_at_sale: boolean;
+  platform_fee_amount: number;
+}): number {
+  if (!order.seller_is_pro_at_sale) return order.seller_payout;
+  const net = order.seller_payout - order.platform_fee_amount;
+  return Number(Math.max(0, net).toFixed(2));
+}
+
 export function validateOfferAmount(
   offerAmount: number,
   listPrice: number,

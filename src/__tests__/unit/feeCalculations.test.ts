@@ -4,6 +4,7 @@ import {
   validateOfferAmount,
   estimateBuyerPrice,
   buildFeeSnapshot,
+  computeSellerTransferAmount,
   BUYER_PROTECTION_RATE,
   SERVICE_FEE_PER_ITEM,
   INSURANCE_RATE,
@@ -466,5 +467,125 @@ describe('SB-07 — buildFeeSnapshot', () => {
   test('7.5% rate unchanged: fee_percent is always BUYER_PROTECTION_RATE', () => {
     expect(buildFeeSnapshot(100, true, 'x').fee_percent).toBe(0.075);
     expect(buildFeeSnapshot(100, false, 'x').fee_percent).toBe(0.075);
+  });
+});
+
+// ─── SB-08: computeSellerTransferAmount ────────────────────────────────
+
+describe('SB-08 — computeSellerTransferAmount', () => {
+  // ─── Unit tests ───────────────────────────────────────────────────────
+
+  test('standard seller (seller_is_pro_at_sale=false) → returns seller_payout unchanged', () => {
+    const result = computeSellerTransferAmount({
+      seller_payout: 100,
+      seller_is_pro_at_sale: false,
+      platform_fee_amount: 8.49,
+    });
+    expect(result).toBe(100);
+  });
+
+  test('pro seller, first order (7.5% + £0.99): £100 item → £91.51', () => {
+    // platform_fee_amount = 100 * 0.075 + 0.99 = 8.49
+    const result = computeSellerTransferAmount({
+      seller_payout: 100,
+      seller_is_pro_at_sale: true,
+      platform_fee_amount: 8.49,
+    });
+    expect(result).toBe(91.51);
+  });
+
+  test('pro seller, subsequent order (7.5% only, no £0.99): £100 → £92.50', () => {
+    // platform_fee_amount = 100 * 0.075 = 7.50
+    const result = computeSellerTransferAmount({
+      seller_payout: 100,
+      seller_is_pro_at_sale: true,
+      platform_fee_amount: 7.50,
+    });
+    expect(result).toBe(92.50);
+  });
+
+  test('rounds to 2dp', () => {
+    // 33.33 - 2.49975 = 30.83025 → 30.83
+    const result = computeSellerTransferAmount({
+      seller_payout: 33.33,
+      seller_is_pro_at_sale: true,
+      platform_fee_amount: 2.50,
+    });
+    expect(result).toBe(30.83);
+  });
+
+  test('floors at 0 if fee >= payout (defensive)', () => {
+    const result = computeSellerTransferAmount({
+      seller_payout: 5,
+      seller_is_pro_at_sale: true,
+      platform_fee_amount: 10,
+    });
+    expect(result).toBe(0);
+  });
+
+  // ─── Per-flow behavioural tests ───────────────────────────────────────
+
+  test('escrow auto-release, standard seller → transfer == seller_payout', () => {
+    const orders = [
+      { seller_payout: 45, seller_is_pro_at_sale: false, platform_fee_amount: 4.37 },
+      { seller_payout: 30, seller_is_pro_at_sale: false, platform_fee_amount: 3.24 },
+    ];
+    const totalTransfer = orders.reduce((s, o) => s + computeSellerTransferAmount(o), 0);
+    expect(totalTransfer).toBe(75); // 45 + 30, unchanged
+  });
+
+  test('escrow auto-release, pro seller → transfer == seller_payout - platform_fee per order', () => {
+    const orders = [
+      { seller_payout: 45, seller_is_pro_at_sale: true, platform_fee_amount: 4.37 },
+      { seller_payout: 30, seller_is_pro_at_sale: true, platform_fee_amount: 2.25 },
+    ];
+    const totalTransfer = orders.reduce((s, o) => s + computeSellerTransferAmount(o), 0);
+    // (45 - 4.37) + (30 - 2.25) = 40.63 + 27.75 = 68.38
+    expect(totalTransfer).toBeCloseTo(68.38, 2);
+  });
+
+  test('grouped release: deduct per-order then sum (not one flat fee)', () => {
+    // 2 orders from same seller, first carries £0.99
+    const snap1 = buildFeeSnapshot(50, true, 'pi_group');   // fee = 50*0.075 + 0.99 = 4.74
+    const snap2 = buildFeeSnapshot(30, false, 'pi_group');  // fee = 30*0.075 = 2.25
+
+    const order1 = { seller_payout: 50, seller_is_pro_at_sale: true as boolean, platform_fee_amount: snap1.platform_fee_amount };
+    const order2 = { seller_payout: 30, seller_is_pro_at_sale: true as boolean, platform_fee_amount: snap2.platform_fee_amount };
+
+    const perOrder1 = computeSellerTransferAmount(order1); // 50 - 4.74 = 45.26
+    const perOrder2 = computeSellerTransferAmount(order2); // 30 - 2.25 = 27.75
+    const totalTransfer = perOrder1 + perOrder2;           // 73.01
+
+    expect(perOrder1).toBe(45.26);
+    expect(perOrder2).toBe(27.75);
+    expect(totalTransfer).toBeCloseTo(73.01, 2);
+  });
+
+  test('dispute, pro seller, 50% refund → (seller_payout - fee) * 0.5', () => {
+    // £100 item, pro, first order: platform_fee_amount = 8.49
+    const order = { seller_payout: 100, seller_is_pro_at_sale: true, platform_fee_amount: 8.49 };
+    const netPayout = computeSellerTransferAmount(order); // 91.51
+    const refundPercent = 0.5;
+    const sellerReceives = netPayout * (1 - refundPercent); // 91.51 * 0.5 = 45.755
+    expect(netPayout).toBe(91.51);
+    expect(Math.round(sellerReceives * 100) / 100).toBe(45.76);
+  });
+
+  // ─── TRIPWIRE: gating guarantee ──────────────────────────────────────
+
+  test('TRIPWIRE: with seller_is_pro_at_sale=false, payout is byte-for-byte identical to pre-SB-08', () => {
+    const testCases = [
+      { seller_payout: 100, platform_fee_amount: 8.49 },
+      { seller_payout: 45.50, platform_fee_amount: 4.40 },
+      { seller_payout: 0.99, platform_fee_amount: 0.99 },
+      { seller_payout: 250, platform_fee_amount: 19.74 },
+    ];
+    for (const tc of testCases) {
+      const result = computeSellerTransferAmount({
+        ...tc,
+        seller_is_pro_at_sale: false,
+      });
+      expect(result).toBe(tc.seller_payout);
+    }
   });
 });
