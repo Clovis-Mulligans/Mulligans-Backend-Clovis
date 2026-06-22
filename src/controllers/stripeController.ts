@@ -438,9 +438,10 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           // Retrieve the full session to get shipping details
           const fullSession = await stripe.checkout.sessions.retrieve(webhookSession.id);
 
-          // Check if this is a cart checkout or single item
-          if (fullSession.metadata?.type === 'cart_checkout') {
-            console.log('[WEBHOOK] Processing cart checkout for session:', fullSession.id);
+          // Check if this is a cart/seller checkout or single item
+          const sessionType = fullSession.metadata?.type;
+          if (sessionType === 'cart_checkout' || sessionType === 'seller_checkout') {
+            console.log(`[WEBHOOK] Processing ${sessionType} for session:`, fullSession.id);
             await CartCheckoutController.fulfillCartOrder(fullSession);
           } else {
             console.log('[WEBHOOK] Processing single item checkout for session:', fullSession.id);

@@ -785,7 +785,7 @@ export class NativePaymentController {
           resolvedAddress,
           autoCancelAt
         );
-      } else if (metadata.type === 'native_cart') {
+      } else if (metadata.type === 'native_cart' || metadata.type === 'seller_native') {
         orders = await NativePaymentController.fulfillCart(
           paymentIntent,
           resolvedAddress,
