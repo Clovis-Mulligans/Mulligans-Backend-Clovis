@@ -220,3 +220,92 @@ Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbo
 - **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
 - **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
 - **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.
+
+---
+
+# Questions — PRO-IMPORT-01: Import Pipeline Surface
+
+**Date:** 2026-06-22
+
+## Q1. Parcel size + shipping cost in CSV — how should the import handle this?
+
+**Context:** The current wizard maps human-readable shipping options to fixed prices:
+
+| Shipping Option | parcel_size | shipping_cost |
+|----------------|-------------|---------------|
+| Small | small | £3.49 |
+| Medium | medium | £4.99 |
+| Large | large | £6.99 |
+| Extra Large | extra_large | £9.99 |
+| Oversized | oversized | £14.99 |
+| Own Carrier | small (fallback) | £0.00 |
+
+**Live validation:** Backend Zod requires BOTH `parcel_size` (5-value enum) and `shipping_cost` (0-100). Both are non-optional.
+
+**Options:**
+- **(a) Require `shipping_option` per-row in CSV** (current approach) — maps to parcel_size + fixed cost. Simple. Seller doesn't control exact shipping cost.
+- **(b) Require `parcel_size` + `shipping_cost` per-row** — seller controls exact shipping price. More complex CSV.
+- **(c) `shipping_option` per-row, allow optional `shipping_cost` override** — uses fixed price from the mapping unless seller specifies their own.
+- **(d) Derive from category with per-row override** — e.g. "Clubs" defaults to "Large", "Balls" defaults to "Small". No category→size mapping exists today — would need to create one.
+
+**My recommendation:** **(c)** — it matches the current CSV template (already has `shipping_option`) and lets power sellers override the price. Minimal change from status quo.
+
+---
+
+## Q2. Concierge import auth — admin-on-behalf-of-seller vs seller self-serve
+
+**Context:** There is NO admin role, impersonation, or "act on behalf" mechanism in the codebase. The `users` model has no `role` field. The only related field is `is_pro_store` (boolean flag, no special privileges).
+
+For a concierge import (Mulligans staff importing for a seller who sends a CSV), two options:
+
+- **(a) Admin endpoint with `seller_id` parameter** — requires building an admin auth layer (role field, middleware, admin UI). Significant new surface + security weight.
+- **(b) Seller self-serve only for v1** — sellers upload their own CSV via the dashboard. The import runs under their own `req.user.id`. If Harry needs to import on behalf of a seller for early onboarding, he does it logged in as that user's session (or the seller does it themselves).
+
+**My recommendation:** **(b)** for v1. Admin auth is a larger piece of work with security implications (privilege escalation, audit trail). The import endpoint itself is the same either way — admin auth can be layered on later without changing the import logic. For the handful of early pro sellers, guide them through the dashboard CSV upload.
+
+---
+
+## Q3. "Sold elsewhere" mid-order — confirm block-if-active is the safe v1
+
+**Context:** If a seller marks a listing as "sold elsewhere" but there's an active order for that listing (statuses: `pending`, `paid`, `to_ship`, `shipped`, `in_transit`, `delivered`), what should happen?
+
+- **(a) Block the action** — "You can't mark this as sold, there's an active order." Seller must wait until the order completes or is cancelled. Safe v1: no money path touched.
+- **(b) Auto-cancel the order + refund the buyer** — touches the money path (Stripe refund, escrow reversal, buyer notification). Correct long-term but money-critical.
+
+**My recommendation:** **(a)** for v1. The auto-cancel+refund path needs its own money-critical brief. I-04 implements the safe block; a future brief adds the auto-cancel path.
+
+---
+
+## Q4. SSRF hardening checklist — confirm scope before I-03
+
+The image-URL fetch feature (I-03) introduces **server-side fetching of arbitrary seller-supplied URLs**. Planned hardening:
+
+| Check | Purpose |
+|-------|---------|
+| `https://` only | Block `http://`, `file://`, `ftp://`, `data:` |
+| DNS resolve → IP check BEFORE connecting | Prevent DNS rebinding attacks |
+| Block `169.254.0.0/16` | AWS metadata service (credential theft) |
+| Block `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | Internal network |
+| Block `127.0.0.0/8`, `::1` | Localhost |
+| Block `fc00::/7` | IPv6 private |
+| Max response size: 10MB | Prevent memory exhaustion |
+| Content-type check | Only image MIME types |
+| Fetch timeout: 15s | Prevent slow-loris |
+| Max 3 redirects, re-check each | Prevent redirect-to-private |
+
+**Question:** Is this scope correct? Should we also add audit logging, per-import rate limit (50 URLs), or a domain allowlist for v1?
+
+**My recommendation:** Full checklist + audit logging + per-import rate limit. Skip domain allowlist (too restrictive for CSV imports where images could be hosted anywhere).
+
+---
+
+## Q5. Import wizard bugs discovered — fix in import slices or separately?
+
+Found 4 bugs in the existing import wizard:
+
+1. **`status: 'draft'` silently ignored** — wizard sends `draft`, backend hardcodes `'active'`
+2. **`parcel_size` UPPERCASE vs lowercase** — would fail Zod validation
+3. **Category string mismatch** — `'Shafts Grips & Heads'` vs `'Shafts, Grips & Heads'`
+4. **`subcategory` required by backend but optional in wizard**
+
+**My recommendation:** Fix as part of the import slices (I-01 fixes bug 1, I-02's csvAdapter fixes bugs 2-4, I-05 updates the wizard code).
