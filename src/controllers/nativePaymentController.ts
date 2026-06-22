@@ -28,7 +28,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot, calculateBuyerFees, CartItem as FeeCartItem } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
@@ -468,6 +468,217 @@ export class NativePaymentController {
       });
     } catch (error: any) {
       console.error('[PAY] Error creating cart payment intent:', error);
+      res.status(500).json({ error: error.message || 'Failed to create payment' });
+    }
+  }
+
+  /**
+   * Create PaymentIntent for a SINGLE SELLER's cart items (Apple Pay / Google Pay).
+   * POST /api/stripe/native-payment/seller
+   * Body: { seller_id: string }
+   *
+   * Independent per-seller native pay (Depop model). Each seller's items
+   * get their own PaymentIntent — no chaining, no sequence.
+   */
+  static async createSellerPaymentIntent(req: AuthenticatedRequest, res: Response) {
+    try {
+      const userId = req.user?.id || req.user?.sub;
+      const { seller_id } = req.body;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      if (!seller_id || typeof seller_id !== 'string') {
+        return res.status(400).json({ error: 'seller_id is required' });
+      }
+
+      const cartItems = await prisma.cart_items.findMany({
+        where: {
+          user_id: userId,
+          expires_at: { gt: new Date() },
+        },
+        include: {
+          listings: {
+            include: {
+              images: { take: 1, orderBy: PRIMARY_IMAGE_ORDER },
+              users: {
+                select: {
+                  id: true,
+                  email: true,
+                  display_name: true,
+                  stripe_connect_id: true,
+                  stripe_connect_status: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const sellerItems = cartItems.filter(
+        (item) => item.listings.seller_id === seller_id && item.listings.status === 'active'
+      );
+
+      if (sellerItems.length === 0) {
+        return res.status(400).json({ error: 'No active cart items found for this seller' });
+      }
+
+      if (seller_id === userId) {
+        return res.status(400).json({ error: 'You cannot buy your own listings' });
+      }
+
+      // Validate stock for size variants
+      const overStockItems: any[] = [];
+      for (const item of sellerItems) {
+        const requestedQty = item.quantity || 1;
+        const availableStock = getStockForSize(item.listings, item.selected_size);
+        if (requestedQty > availableStock) {
+          overStockItems.push({
+            listing_id: item.listing_id,
+            title: item.listings.title,
+            selected_size: item.selected_size,
+            requested: requestedQty,
+            available: availableStock,
+          });
+        }
+      }
+
+      if (overStockItems.length > 0) {
+        return res.status(400).json({
+          error: 'Some items exceed available stock',
+          over_stock: overStockItems,
+        });
+      }
+
+      const seller = sellerItems[0].listings.users;
+
+      // Auto-create Connect account if needed (mirrors SC-01 pattern)
+      let sellerConnectId = seller.stripe_connect_id;
+      if (!sellerConnectId) {
+        console.log('[SELLER-NATIVE] Auto-creating Connect account for seller:', seller_id);
+        try {
+          const account = await stripe.accounts.create({
+            type: 'express',
+            country: 'GB',
+            email: seller.email,
+            capabilities: {
+              card_payments: { requested: true },
+              transfers: { requested: true },
+            },
+            business_type: 'individual',
+            metadata: {
+              user_id: seller_id,
+              platform: 'mulligans',
+              auto_created: 'true',
+            },
+          });
+
+          sellerConnectId = account.id;
+          await prisma.users.update({
+            where: { id: seller_id },
+            data: {
+              stripe_connect_id: account.id,
+              stripe_connect_status: 'pending',
+              updated_at: new Date(),
+            },
+          });
+          console.log('[SELLER-NATIVE] Connect account created:', account.id);
+        } catch (error: any) {
+          console.error('[SELLER-NATIVE] Failed to create Connect account:', error);
+          return res.status(500).json({
+            error: 'Failed to set up seller payments',
+            details: error.message,
+          });
+        }
+      }
+
+      // Calculate fees via single source of truth
+      const feeItems: FeeCartItem[] = sellerItems.map((item) => ({
+        sellerId: seller_id,
+        listingPrice: parseFloat(item.listings.price.toString()),
+        offerPrice: item.offer_price ? parseFloat(item.offer_price.toString()) : null,
+        quantity: item.quantity || 1,
+        shippingCost: parseFloat((item.listings as any).shipping_cost?.toString() || '0'),
+      }));
+
+      const fees = calculateBuyerFees(feeItems);
+      const totalAmountPence = Math.round(fees.grandTotal * 100);
+
+      console.log('[SELLER-NATIVE] Price breakdown for seller', seller_id, {
+        itemsTotal: fees.itemsTotal.toFixed(2),
+        baseShipping: fees.baseShipping.toFixed(2),
+        insurancePremium: fees.insurancePremium.toFixed(2),
+        insuredShipping: fees.insuredShipping.toFixed(2),
+        platformFee: fees.platformFee.toFixed(2),
+        grandTotal: fees.grandTotal.toFixed(2),
+        itemCount: fees.itemCount,
+      });
+
+      // Build items metadata in same format as native_cart: "listing_id:qty,listing_id:qty"
+      const itemsMetadata = sellerItems.map(
+        (item) => `${item.listing_id}:${item.quantity || 1}`
+      );
+
+      // Offer metadata (same format as native_cart)
+      const offerMetadata: Record<string, string> = {};
+      for (const item of sellerItems) {
+        if (item.offer_id && item.offer_price) {
+          const originalPrice = parseFloat(item.listings.price.toString());
+          offerMetadata[`offer_${item.listing_id}`] = `${item.offer_id}|${parseFloat(item.offer_price.toString()).toFixed(2)}|${originalPrice.toFixed(2)}`;
+        }
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: totalAmountPence,
+        currency: 'gbp',
+        automatic_payment_methods: {
+          enabled: true,
+        },
+        metadata: {
+          type: 'seller_native',
+          buyer_id: userId,
+          seller_id: seller_id,
+          seller_connect_id: sellerConnectId || '',
+          items: itemsMetadata.join(','),
+          items_total: fees.itemsTotal.toFixed(2),
+          shipping_total: fees.insuredShipping.toFixed(2),
+          platform_fee: fees.platformFee.toFixed(2),
+          grand_total: fees.grandTotal.toFixed(2),
+          insurance_premium: fees.insurancePremium.toFixed(2),
+          has_offers: Object.keys(offerMetadata).length > 0 ? 'true' : 'false',
+          ...offerMetadata,
+        },
+      });
+
+      console.log('[SELLER-NATIVE] PaymentIntent created:', paymentIntent.id, 'for seller:', seller_id);
+
+      res.json({
+        clientSecret: paymentIntent.client_secret,
+        paymentIntentId: paymentIntent.id,
+        amount: fees.grandTotal,
+        currency: 'gbp',
+        breakdown: {
+          items: fees.itemsTotal,
+          shipping: fees.insuredShipping,
+          buyerProtection: fees.platformFee,
+          total: fees.grandTotal,
+        },
+        sellerSummary: {
+          sellerId: seller_id,
+          sellerName: seller.display_name,
+          itemCount: fees.itemCount,
+          totalQuantity: fees.totalQuantity,
+          itemsTotal: fees.itemsTotal.toFixed(2),
+          baseShipping: fees.baseShipping.toFixed(2),
+          insurancePremium: fees.insurancePremium.toFixed(2),
+          insuredShippingTotal: fees.insuredShipping.toFixed(2),
+          platformFee: fees.platformFee.toFixed(2),
+          grandTotal: fees.grandTotal.toFixed(2),
+        },
+      });
+    } catch (error: any) {
+      console.error('[SELLER-NATIVE] Error:', error);
       res.status(500).json({ error: error.message || 'Failed to create payment' });
     }
   }

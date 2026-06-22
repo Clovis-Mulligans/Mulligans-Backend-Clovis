@@ -118,7 +118,70 @@ describe('SC-01: per-seller checkout fee calculation', () => {
   });
 });
 
-describe('SC-01: existing create-cart-checkout behaviour preserved', () => {
+describe('SC-02: per-seller native pay fee calculation', () => {
+  const SELLER_A = 'seller-A';
+  const SELLER_B = 'seller-B';
+
+  const fullCart = [
+    item({ sellerId: SELLER_A, listingPrice: 50, shippingCost: 4.99, quantity: 1 }),
+    item({ sellerId: SELLER_A, listingPrice: 30, shippingCost: 3.99, quantity: 2 }),
+    item({ sellerId: SELLER_B, listingPrice: 80, shippingCost: 5.99, quantity: 1 }),
+  ];
+
+  test('seller A PI amount: only seller A items in breakdown', () => {
+    const sellerAItems = fullCart.filter((i) => i.sellerId === SELLER_A);
+    const fees = calculateBuyerFees(sellerAItems);
+
+    // items: 50 + (30 * 2) = 110
+    expect(fees.itemsTotal).toBeCloseTo(110, 2);
+    // PI amount in pence = Math.round(grandTotal * 100)
+    const piAmountPence = Math.round(fees.grandTotal * 100);
+    expect(piAmountPence).toBeGreaterThan(0);
+    // Verify the breakdown sums to grandTotal
+    expect(fees.itemsTotal + fees.insuredShipping + fees.platformFee).toBeCloseTo(fees.grandTotal, 2);
+  });
+
+  test('one seller, 3 items: £0.99 once + 7.5% (SB-06 per-seller-order rule)', () => {
+    const threeItems = [
+      item({ sellerId: SELLER_A, listingPrice: 20, shippingCost: 3, quantity: 1 }),
+      item({ sellerId: SELLER_A, listingPrice: 30, shippingCost: 2, quantity: 1 }),
+      item({ sellerId: SELLER_A, listingPrice: 40, shippingCost: 5, quantity: 1 }),
+    ];
+    const fees = calculateBuyerFees(threeItems);
+
+    // items: 90, one £0.99
+    expect(fees.serviceFee).toBeCloseTo(0.99, 2);
+    expect(fees.buyerProtectionFee).toBeCloseTo(90 * 0.075, 2);
+    expect(fees.platformFee).toBeCloseTo(90 * 0.075 + 0.99, 2);
+  });
+
+  test('seller_id with no items: calculateBuyerFees returns zero breakdown', () => {
+    const noItems = fullCart.filter((i) => i.sellerId === 'nonexistent');
+    const fees = calculateBuyerFees(noItems);
+    expect(fees.grandTotal).toBe(0);
+    expect(fees.platformFee).toBe(0);
+    expect(fees.itemCount).toBe(0);
+  });
+
+  test('breakdown matches sellerSummary: items + insuredShipping + platformFee = grandTotal', () => {
+    const fees = calculateBuyerFees(fullCart.filter((i) => i.sellerId === SELLER_B));
+    // This is what the endpoint returns as both `breakdown.total` and `sellerSummary.grandTotal`
+    const breakdownTotal = fees.itemsTotal + fees.insuredShipping + fees.platformFee;
+    expect(breakdownTotal).toBeCloseTo(fees.grandTotal, 2);
+  });
+
+  test('seller_id === userId guard: per-seller filtering is by seller_id, not buyer', () => {
+    // Simulate: if buyer filters their own seller_id, they get their own items
+    // The endpoint rejects this with 400 BEFORE fee calculation
+    // This test verifies the fee calculation itself is seller-id-specific
+    const buyerAsSeller = fullCart.filter((i) => i.sellerId === 'buyer-user-id');
+    expect(buyerAsSeller.length).toBe(0);
+    const fees = calculateBuyerFees(buyerAsSeller);
+    expect(fees.grandTotal).toBe(0);
+  });
+});
+
+describe('SC-01 + SC-02: existing combined endpoints preserved', () => {
   test('combined cart fee matches sum of per-seller fees (2-seller worked example)', () => {
     const cart = [
       item({ sellerId: 'shop-A', listingPrice: 45, shippingCost: 4.99, quantity: 1 }),

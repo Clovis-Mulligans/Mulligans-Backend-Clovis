@@ -42,6 +42,13 @@ router.post(
   NativePaymentController.createCartPaymentIntent
 );
 
+// Per-seller native pay (split checkout — one PI per seller)
+router.post(
+  '/native-payment/seller',
+  authenticateToken,
+  NativePaymentController.createSellerPaymentIntent
+);
+
 router.post(
   '/native-payment/fulfill',
   authenticateToken,
