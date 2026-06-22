@@ -1,11 +1,77 @@
+// SC-03-FIX: Real behavioural tests for dispatch routing + idempotency.
+//
+// Routing: extracted pure functions (resolveCheckoutRoute, resolveNativeRoute)
+// are tested directly — each test FAILS if the routing condition is broken.
+//
+// Idempotency: fulfillCartOrder and confirmPayment are invoked with mocked
+// prisma/stripe. The guard is proven by asserting $transaction / fulfillCart
+// are called (or not) based on whether existing orders are found.
+
+// ─── Env vars needed by module-level `new Stripe(...)` in controllers ───
+process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || 'sk_test_mock';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
+
+// ─── Stripe mock ───
+const mockStripeInstance: any = {
+  paymentIntents: { retrieve: jest.fn(), create: jest.fn() },
+  refunds: { create: jest.fn() },
+  checkout: { sessions: { retrieve: jest.fn(), create: jest.fn() } },
+  accounts: { create: jest.fn() },
+};
+jest.mock('stripe', () => jest.fn(() => mockStripeInstance));
+
+// ─── Prisma mock ───
+const mockPrisma: any = {
+  listings: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+  orders: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn() },
+  users: { findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+  notifications: { create: jest.fn() },
+  cart_items: { findMany: jest.fn(), deleteMany: jest.fn() },
+  $transaction: jest.fn(),
+};
+jest.mock('../../lib/prisma', () => ({ prisma: mockPrisma }));
+
+// ─── Side-effect-heavy modules: mock to prevent network / DB calls ───
+jest.mock('../../utils/addressValidation', () => ({
+  validateShippingAddress: jest.fn(),
+  AddressValidationError: class extends Error { missingFields: string[] = []; },
+}));
+jest.mock('../../services/emailService', () => ({
+  sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+  sendSaleNotification: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../../controllers/pushNotificationController', () => ({
+  sendPushNotification: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../../jobs/offerJobs', () => ({
+  expireOffersForSoldItem: jest.fn().mockResolvedValue(0),
+}));
+jest.mock('../../services/autoShippingService', () => ({
+  autoPurchaseLabel: jest.fn().mockResolvedValue({ success: false }),
+}));
+jest.mock('../../lib/stockUtils', () => ({
+  logStockDecrement: jest.fn(),
+}));
+jest.mock('../../services/metaCapi', () => ({
+  sendMetaPurchaseEvent: jest.fn(),
+}));
+jest.mock('../../utils/email', () => ({
+  sendEmail: jest.fn().mockResolvedValue(undefined),
+}));
+
+// ─── Imports (loaded after mocks take effect) ───
+import { resolveCheckoutRoute } from '../../controllers/stripeController';
+import { resolveNativeRoute } from '../../controllers/nativePaymentController';
+import { NativePaymentController } from '../../controllers/nativePaymentController';
+import { CartCheckoutController } from '../../controllers/cartCheckoutController';
 import {
   calculateBuyerFees,
   buildFeeSnapshot,
   CartItem,
-  BUYER_PROTECTION_RATE,
   SERVICE_FEE_PER_ITEM,
 } from '../../lib/feeCalculations';
 
+// ─── Helpers ───
 const item = (p: Partial<CartItem> & { listingPrice: number }): CartItem => ({
   sellerId: p.sellerId ?? 'seller-1',
   listingPrice: p.listingPrice,
@@ -14,53 +80,107 @@ const item = (p: Partial<CartItem> & { listingPrice: number }): CartItem => ({
   shippingCost: p.shippingCost ?? 0,
 });
 
-describe('SC-03: dispatch type strings match endpoint metadata', () => {
-  // These tests verify the contract between endpoint metadata and dispatcher routing.
-  // The endpoint sets metadata.type; the dispatcher reads it to route fulfilment.
-  // If either side changes the string, these tests catch the mismatch.
+function fakeStripeSession(metadataOverrides: Record<string, string> = {}) {
+  return {
+    id: 'cs_test_123',
+    payment_intent: 'pi_test_123',
+    metadata: {
+      type: 'seller_checkout',
+      buyer_id: 'buyer_1',
+      listing_ids: 'lst_1',
+      listing_quantities: '{"lst_1":1}',
+      seller_ids: 'seller_1',
+      insurance_premium: '0.63',
+      insured_value: '50',
+      platform_fee: '4.74',
+      grand_total: '55.37',
+      shipping_total: '5',
+      total_quantity: '1',
+      ...metadataOverrides,
+    },
+    collected_information: {
+      shipping_details: {
+        name: 'Test Buyer',
+        address: { line1: '123 Test St', city: 'London', postal_code: 'SW1A 1AA', country: 'GB' },
+      },
+    },
+  };
+}
 
-  const SELLER_CHECKOUT_TYPE = 'seller_checkout';
-  const SELLER_NATIVE_TYPE = 'seller_native';
-  const CART_CHECKOUT_TYPE = 'cart_checkout';
-  const NATIVE_CART_TYPE = 'native_cart';
-  const SINGLE_ITEM_TYPE = 'single_item';
-  const NATIVE_SINGLE_TYPE = 'native_single_item';
+function fakeListing(id = 'lst_1', sellerId = 'seller_1') {
+  return {
+    id,
+    seller_id: sellerId,
+    price: { toString: () => '50' },
+    shipping_cost: { toString: () => '5' },
+    quantity: 1,
+    images: [{ image_url: 'https://img.test/1.jpg' }],
+    users: { id: sellerId, stripe_connect_id: 'acct_test_seller' },
+  };
+}
 
-  test('seller_checkout routes to fulfillCartOrder (same handler as cart_checkout)', () => {
-    // The webhook dispatcher routes both cart_checkout and seller_checkout
-    // to CartCheckoutController.fulfillCartOrder().
-    // This verifies the type strings used by SC-01 and the webhook.
-    const cartTypes = [CART_CHECKOUT_TYPE, SELLER_CHECKOUT_TYPE];
-    for (const type of cartTypes) {
-      expect(type === 'cart_checkout' || type === 'seller_checkout').toBe(true);
-    }
+function makeMockRes() {
+  const res: any = { statusCode: 200, body: undefined };
+  res.status = jest.fn((code: number) => { res.statusCode = code; return res; });
+  res.json = jest.fn((payload: any) => { res.body = payload; return res; });
+  return res;
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DISPATCH ROUTING — pure functions extracted from controllers
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('SC-03: webhook checkout dispatch (resolveCheckoutRoute)', () => {
+  // Teeth: removing `|| type === 'seller_checkout'` makes the first test fail.
+
+  test('seller_checkout → cart (SC-01 sessions reach fulfillCartOrder)', () => {
+    expect(resolveCheckoutRoute('seller_checkout')).toBe('cart');
   });
 
-  test('seller_native routes to fulfillCart (same handler as native_cart)', () => {
-    // The confirm dispatcher routes both native_cart and seller_native
-    // to NativePaymentController.fulfillCart().
-    const nativeCartTypes = [NATIVE_CART_TYPE, SELLER_NATIVE_TYPE];
-    for (const type of nativeCartTypes) {
-      expect(type === 'native_cart' || type === 'seller_native').toBe(true);
-    }
+  test('cart_checkout → cart (regression: existing combined cart unchanged)', () => {
+    expect(resolveCheckoutRoute('cart_checkout')).toBe('cart');
   });
 
-  test('existing single_item type still falls to fulfillOrder (not cart handler)', () => {
-    // single_item and native_single_item must NOT match the cart/seller conditions
-    expect(SINGLE_ITEM_TYPE).not.toBe('cart_checkout');
-    expect(SINGLE_ITEM_TYPE).not.toBe('seller_checkout');
-    expect(NATIVE_SINGLE_TYPE).not.toBe('native_cart');
-    expect(NATIVE_SINGLE_TYPE).not.toBe('seller_native');
+  test('undefined → single (single-item sessions fall through to fulfillOrder)', () => {
+    expect(resolveCheckoutRoute(undefined)).toBe('single');
   });
 
-  test('existing cart_checkout type still routes to fulfillCartOrder', () => {
-    expect(CART_CHECKOUT_TYPE).toBe('cart_checkout');
-  });
-
-  test('existing native_cart type still routes to fulfillCart', () => {
-    expect(NATIVE_CART_TYPE).toBe('native_cart');
+  test('any other type → single (safe default, no crash)', () => {
+    expect(resolveCheckoutRoute('something_new')).toBe('single');
   });
 });
+
+describe('SC-03: native confirm dispatch (resolveNativeRoute)', () => {
+  // Teeth: removing `|| type === 'seller_native'` makes the first test fail.
+
+  test('seller_native → cart (SC-02 payments reach fulfillCart)', () => {
+    expect(resolveNativeRoute('seller_native')).toBe('cart');
+  });
+
+  test('native_cart → cart (regression: existing combined cart unchanged)', () => {
+    expect(resolveNativeRoute('native_cart')).toBe('cart');
+  });
+
+  test('native_single_item → single (regression: existing single-item unchanged)', () => {
+    expect(resolveNativeRoute('native_single_item')).toBe('single');
+  });
+
+  test('undefined → unknown (returns 400 in handler)', () => {
+    expect(resolveNativeRoute(undefined)).toBe('unknown');
+  });
+
+  test('unrecognised type → unknown (returns 400 in handler)', () => {
+    expect(resolveNativeRoute('garbage')).toBe('unknown');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEE SNAPSHOT RECONCILIATION (KEPT — these exercise real fee logic)
+// ═══════════════════════════════════════════════════════════════════════════
 
 describe('SC-03: single-seller fulfilment produces correct fee snapshot + reconciliation', () => {
   test('one seller, 2 items: fee snapshot sum matches session platform_fee', () => {
@@ -70,15 +190,10 @@ describe('SC-03: single-seller fulfilment produces correct fee snapshot + reconc
     ];
     const fees = calculateBuyerFees(sellerItems);
 
-    // Simulate what fulfillCartOrder does: build fee snapshot per order
-    const order1Total = 60; // first item
-    const order2Total = 40; // second item
-    const snap1 = buildFeeSnapshot(order1Total, true, 'pi_seller_1');  // first order carries £0.99
-    const snap2 = buildFeeSnapshot(order2Total, false, 'pi_seller_1'); // subsequent: no £0.99
+    const snap1 = buildFeeSnapshot(60, true, 'pi_seller_1');
+    const snap2 = buildFeeSnapshot(40, false, 'pi_seller_1');
 
     const snapshotSum = snap1.platform_fee_amount + snap2.platform_fee_amount;
-
-    // Reconciliation: snapshot sum must match session platform_fee within 1p
     expect(Math.abs(snapshotSum - fees.platformFee)).toBeLessThanOrEqual(0.01);
   });
 
@@ -100,7 +215,6 @@ describe('SC-03: single-seller fulfilment produces correct fee snapshot + reconc
     ];
     const fees = calculateBuyerFees(items);
 
-    // Simulate fulfilment: first order gets carriesFixedFee=true
     const snaps = [
       buildFeeSnapshot(20, true, 'pi_seller_3'),
       buildFeeSnapshot(30, false, 'pi_seller_3'),
@@ -110,7 +224,6 @@ describe('SC-03: single-seller fulfilment produces correct fee snapshot + reconc
     const snapshotSum = snaps.reduce((s, snap) => s + snap.platform_fee_amount, 0);
     expect(Math.abs(snapshotSum - fees.platformFee)).toBeLessThanOrEqual(0.01);
 
-    // Verify only first order has the £0.99
     expect(snaps[0].fee_fixed).toBe(SERVICE_FEE_PER_ITEM);
     expect(snaps[1].fee_fixed).toBe(0);
     expect(snaps[2].fee_fixed).toBe(0);
@@ -128,28 +241,111 @@ describe('SC-03: single-seller fulfilment produces correct fee snapshot + reconc
   });
 });
 
-describe('SC-03: idempotency — double fulfil safety', () => {
-  test('fulfilment uses stripe_payment_intent_id for idempotency (unique per seller PI)', () => {
-    // Per-seller PIs are unique: pi_seller_A !== pi_seller_B !== pi_combined_cart
-    // The idempotency check uses findFirst/findMany by stripe_payment_intent_id.
-    // Two different seller PIs will not collide.
-    const piA = 'pi_seller_A_12345';
-    const piB = 'pi_seller_B_67890';
-    const piCombined = 'pi_combined_cart_abcde';
+// ═══════════════════════════════════════════════════════════════════════════
+// IDEMPOTENCY — fulfillCartOrder (webhook path)
+// ═══════════════════════════════════════════════════════════════════════════
 
-    expect(piA).not.toBe(piB);
-    expect(piA).not.toBe(piCombined);
-    expect(piB).not.toBe(piCombined);
+describe('SC-03: idempotency — fulfillCartOrder guard', () => {
+  // Teeth: commenting out the `if (existingOrders.length > 0) return;` guard
+  // makes the first test fail ($transaction WOULD be called).
+
+  test('returns early (no $transaction) when orders already exist for this PI', async () => {
+    mockPrisma.listings.findMany.mockResolvedValue([fakeListing()]);
+    mockPrisma.orders.findMany.mockResolvedValue([{ id: 'existing_order_1' }]);
+
+    await CartCheckoutController.fulfillCartOrder(fakeStripeSession() as any);
+
+    expect(mockPrisma.orders.findMany).toHaveBeenCalledWith({
+      where: { stripe_payment_intent_id: 'pi_test_123' },
+    });
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  test('same PI replayed returns early (existing orders found)', () => {
-    // This verifies the contract: if orders exist for a PI, fulfilment returns early.
-    // fulfillCartOrder checks: orders.findMany({ where: { stripe_payment_intent_id } })
-    // confirmPayment checks: orders.findFirst({ where: { stripe_payment_intent_id } })
-    // Both return early if found. Since per-seller PIs are unique, replaying the same
-    // PI hits the guard. A different seller's PI creates its own orders separately.
-    const sellerPi = 'pi_seller_checkout_xyz';
-    const existingOrders = [{ id: 'order_1', stripe_payment_intent_id: sellerPi }];
-    expect(existingOrders.filter(o => o.stripe_payment_intent_id === sellerPi).length).toBeGreaterThan(0);
+  test('proceeds to $transaction when no existing orders found', async () => {
+    mockPrisma.listings.findMany.mockResolvedValue([fakeListing()]);
+    mockPrisma.orders.findMany.mockResolvedValue([]);
+    mockPrisma.users.findUnique.mockResolvedValue({
+      id: 'buyer_1', email: 'buyer@test.com', display_name: 'Test Buyer',
+    });
+    mockPrisma.$transaction.mockResolvedValue(undefined);
+    mockPrisma.notifications.create.mockResolvedValue({ id: 'notif_1' });
+
+    await CartCheckoutController.fulfillCartOrder(fakeStripeSession() as any);
+
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IDEMPOTENCY — confirmPayment (native path)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('SC-03: idempotency — confirmPayment guard', () => {
+  // Teeth: commenting out the `if (existingOrder)` guard makes the first test
+  // fail (response would NOT contain 'Order already created').
+
+  const fakePI = (type: string) => ({
+    id: 'pi_test_native',
+    status: 'succeeded',
+    metadata: {
+      type,
+      buyer_id: 'buyer_1',
+      items: 'lst_1:1',
+      items_total: '50',
+      insurance_premium: '0.63',
+    },
+    shipping: {
+      name: 'Test Buyer',
+      address: { line1: '123 St', city: 'London', postal_code: 'SW1A 1AA', country: 'GB' },
+    },
+  });
+
+  test('returns "Order already created" when order exists for this PI', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(fakePI('seller_native'));
+    mockPrisma.orders.findFirst.mockResolvedValue({ id: 'existing_order_99' });
+
+    const req = { body: { paymentIntentId: 'pi_test_native' }, user: { id: 'buyer_1' }, headers: {} } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: 'Order already created' }),
+    );
+  });
+
+  test('calls fulfillCart for seller_native when no existing order', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(fakePI('seller_native'));
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+
+    const fulfillCartSpy = jest.spyOn(NativePaymentController as any, 'fulfillCart')
+      .mockResolvedValue([{ id: 'new_order_1' }]);
+
+    const req = { body: { paymentIntentId: 'pi_test_native' }, user: { id: 'buyer_1' }, headers: {} } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(fulfillCartSpy).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+    fulfillCartSpy.mockRestore();
+  });
+
+  test('calls fulfillSingleItem for native_single_item (regression)', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(fakePI('native_single_item'));
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+
+    const fulfillSingleSpy = jest.spyOn(NativePaymentController as any, 'fulfillSingleItem')
+      .mockResolvedValue({ id: 'single_order_1' });
+
+    const req = { body: { paymentIntentId: 'pi_test_native' }, user: { id: 'buyer_1' }, headers: {} } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(fulfillSingleSpy).toHaveBeenCalled();
+
+    fulfillSingleSpy.mockRestore();
   });
 });

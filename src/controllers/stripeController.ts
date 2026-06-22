@@ -57,6 +57,10 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 
+export function resolveCheckoutRoute(type: string | undefined): 'cart' | 'single' {
+  return (type === 'cart_checkout' || type === 'seller_checkout') ? 'cart' : 'single';
+}
+
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
   if (!selectedSize) {
@@ -439,9 +443,9 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
           const fullSession = await stripe.checkout.sessions.retrieve(webhookSession.id);
 
           // Check if this is a cart/seller checkout or single item
-          const sessionType = fullSession.metadata?.type;
-          if (sessionType === 'cart_checkout' || sessionType === 'seller_checkout') {
-            console.log(`[WEBHOOK] Processing ${sessionType} for session:`, fullSession.id);
+          const route = resolveCheckoutRoute(fullSession.metadata?.type);
+          if (route === 'cart') {
+            console.log(`[WEBHOOK] Processing ${fullSession.metadata?.type} for session:`, fullSession.id);
             await CartCheckoutController.fulfillCartOrder(fullSession);
           } else {
             console.log('[WEBHOOK] Processing single item checkout for session:', fullSession.id);

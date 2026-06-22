@@ -44,6 +44,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
 
+export function resolveNativeRoute(type: string | undefined): 'single' | 'cart' | 'unknown' {
+  if (type === 'native_single_item') return 'single';
+  if (type === 'native_cart' || type === 'seller_native') return 'cart';
+  return 'unknown';
+}
 
 // SIZE VARIANT: Helper to get stock for a specific size
 function getStockForSize(listing: any, selectedSize: string | null): number {
@@ -779,13 +784,14 @@ export class NativePaymentController {
       const metadata = paymentIntent.metadata;
       let orders: any;
 
-      if (metadata.type === 'native_single_item') {
+      const route = resolveNativeRoute(metadata.type);
+      if (route === 'single') {
         orders = await NativePaymentController.fulfillSingleItem(
           paymentIntent,
           resolvedAddress,
           autoCancelAt
         );
-      } else if (metadata.type === 'native_cart' || metadata.type === 'seller_native') {
+      } else if (route === 'cart') {
         orders = await NativePaymentController.fulfillCart(
           paymentIntent,
           resolvedAddress,
