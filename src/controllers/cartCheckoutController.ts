@@ -43,7 +43,7 @@ import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
-import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot } from '../lib/feeCalculations';
+import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM, INSURANCE_RATE, buildFeeSnapshot, calculateBuyerFees, CartItem as FeeCartItem } from '../lib/feeCalculations';
 import { SHIPPING_DEADLINE_DAYS } from '../config/constants';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendPushNotification } from './pushNotificationController';
@@ -493,6 +493,288 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       console.error('[CART] Cart checkout session error:', error);
       res.status(500).json({
         error: 'Failed to create checkout session',
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Create Stripe Checkout Session for a SINGLE SELLER's cart items.
+   * POST /api/stripe/create-seller-checkout
+   * Body: { seller_id: string }
+   *
+   * Independent per-seller checkout (Depop model). Each seller's items
+   * check out on their own — no chaining, no sequence.
+   */
+  static async createSellerCheckoutSession(req: AuthenticatedRequest, res: Response) {
+    try {
+      const userId = req.user?.id || req.user?.sub;
+      const { seller_id } = req.body;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      if (!seller_id || typeof seller_id !== 'string') {
+        return res.status(400).json({ error: 'seller_id is required' });
+      }
+
+      const cartItems = await prisma.cart_items.findMany({
+        where: {
+          user_id: userId,
+          expires_at: { gt: new Date() },
+        },
+        include: {
+          listings: {
+            include: {
+              images: {
+                take: 1,
+                orderBy: PRIMARY_IMAGE_ORDER,
+              },
+              users: {
+                select: {
+                  id: true,
+                  email: true,
+                  display_name: true,
+                  stripe_connect_id: true,
+                  stripe_connect_status: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const sellerItems = cartItems.filter(
+        (item) => item.listings.seller_id === seller_id && item.listings.status === 'active'
+      );
+
+      if (sellerItems.length === 0) {
+        return res.status(400).json({ error: 'No active cart items found for this seller' });
+      }
+
+      // Check buyer isn't buying their own items
+      if (seller_id === userId) {
+        return res.status(400).json({ error: 'You cannot buy your own listings' });
+      }
+
+      // Validate stock for size variants
+      const overStockItems: any[] = [];
+      for (const item of sellerItems) {
+        const requestedQty = item.quantity || 1;
+        const availableStock = getStockForSize(item.listings, item.selected_size);
+        if (requestedQty > availableStock) {
+          overStockItems.push({
+            listing_id: item.listing_id,
+            title: item.listings.title,
+            selected_size: item.selected_size,
+            requested: requestedQty,
+            available: availableStock,
+          });
+        }
+      }
+
+      if (overStockItems.length > 0) {
+        return res.status(400).json({
+          error: 'Some items exceed available stock',
+          over_stock: overStockItems,
+        });
+      }
+
+      // Get seller details
+      const seller = sellerItems[0].listings.users;
+
+      // Auto-create Connect account if needed
+      let sellerConnectId = seller.stripe_connect_id;
+      if (!sellerConnectId) {
+        console.log('[SELLER-CHECKOUT] Auto-creating Connect account for seller:', seller_id);
+        try {
+          const account = await stripe.accounts.create({
+            type: 'express',
+            country: 'GB',
+            email: seller.email,
+            capabilities: {
+              card_payments: { requested: true },
+              transfers: { requested: true },
+            },
+            business_type: 'individual',
+            business_profile: {
+              mcc: '5699',
+              product_description: 'Selling golf equipment on Mulligans',
+            },
+            settings: {
+              payouts: {
+                schedule: { delay_days: 'minimum' },
+              },
+            },
+            metadata: {
+              user_id: seller_id,
+              platform: 'mulligans',
+              auto_created: 'true',
+            },
+          });
+
+          sellerConnectId = account.id;
+          await prisma.users.update({
+            where: { id: seller_id },
+            data: {
+              stripe_connect_id: account.id,
+              stripe_connect_status: 'pending',
+              updated_at: new Date(),
+            },
+          });
+          console.log('[SELLER-CHECKOUT] Connect account created:', account.id);
+        } catch (error: any) {
+          console.error('[SELLER-CHECKOUT] Failed to create Connect account:', error);
+          return res.status(500).json({
+            error: 'Failed to set up seller payments',
+            details: error.message,
+          });
+        }
+      }
+
+      // Build fee cart items for calculateBuyerFees (single seller)
+      const feeItems: FeeCartItem[] = sellerItems.map((item) => ({
+        sellerId: seller_id,
+        listingPrice: parseFloat(item.listings.price.toString()),
+        offerPrice: item.offer_price ? parseFloat(item.offer_price.toString()) : null,
+        quantity: item.quantity || 1,
+        shippingCost: parseFloat((item.listings as any).shipping_cost?.toString() || '0'),
+      }));
+
+      const fees = calculateBuyerFees(feeItems);
+
+      console.log('[SELLER-CHECKOUT] Price breakdown for seller', seller_id, {
+        itemsTotal: fees.itemsTotal.toFixed(2),
+        baseShipping: fees.baseShipping.toFixed(2),
+        insurancePremium: fees.insurancePremium.toFixed(2),
+        insuredShipping: fees.insuredShipping.toFixed(2),
+        platformFee: fees.platformFee.toFixed(2),
+        grandTotal: fees.grandTotal.toFixed(2),
+        itemCount: fees.itemCount,
+      });
+
+      // Build Stripe line items for this seller only
+      const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = sellerItems.map(
+        (item) => ({
+          price_data: {
+            currency: 'gbp',
+            product_data: {
+              name: item.listings.title,
+              description: `Sold by ${seller.display_name}`,
+              images: item.listings.images[0]?.image_url
+                ? [item.listings.images[0].image_url]
+                : undefined,
+            },
+            unit_amount: Math.round(
+              parseFloat((item.offer_price || item.listings.price).toString()) * 100
+            ),
+          },
+          quantity: item.quantity || 1,
+        })
+      );
+
+      // Platform fee line item
+      lineItems.push({
+        price_data: {
+          currency: 'gbp',
+          product_data: {
+            name: 'Buyer Protection Fee',
+            description: 'Secure payment processing and buyer protection',
+          },
+          unit_amount: Math.round(fees.platformFee * 100),
+        },
+        quantity: 1,
+      });
+
+      // Insured shipping line item
+      if (fees.insuredShipping > 0) {
+        lineItems.push({
+          price_data: {
+            currency: 'gbp',
+            product_data: {
+              name: 'Insured Shipping',
+              description: `Delivery for ${fees.totalQuantity} item${fees.totalQuantity > 1 ? 's' : ''} with full loss & damage protection`,
+            },
+            unit_amount: Math.round(fees.insuredShipping * 100),
+          },
+          quantity: 1,
+        });
+      }
+
+      // Build listing quantities for metadata
+      const listingQuantities: Record<string, number> = {};
+      for (const item of sellerItems) {
+        listingQuantities[item.listing_id] = item.quantity || 1;
+      }
+
+      // Offer metadata
+      const offerMetadataKeys: Record<string, string> = {};
+      let hasOffers = false;
+      for (const item of sellerItems) {
+        if (item.offer_id && item.offer_price) {
+          const offerPrice = parseFloat(item.offer_price.toString()).toFixed(2);
+          const originalPrice = parseFloat(item.listings.price.toString()).toFixed(2);
+          offerMetadataKeys[`offer_${item.listing_id}`] = `${item.offer_id}|${offerPrice}|${originalPrice}`;
+          hasOffers = true;
+        }
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        mode: 'payment',
+        line_items: lineItems,
+        shipping_address_collection: {
+          allowed_countries: ['GB'],
+        },
+        metadata: {
+          type: 'seller_checkout',
+          buyer_id: userId,
+          seller_id: seller_id,
+          seller_connect_id: sellerConnectId || '',
+          items_total: fees.itemsTotal.toFixed(2),
+          shipping_total: fees.insuredShipping.toFixed(2),
+          base_shipping: fees.baseShipping.toFixed(2),
+          insurance_premium: fees.insurancePremium.toFixed(2),
+          insured_value: fees.itemsTotal.toFixed(2),
+          platform_fee: fees.platformFee.toFixed(2),
+          grand_total: fees.grandTotal.toFixed(2),
+          item_count: fees.itemCount.toString(),
+          total_quantity: fees.totalQuantity.toString(),
+          listing_ids: sellerItems.map((item) => item.listing_id).join(',').substring(0, 490),
+          listing_quantities: JSON.stringify(listingQuantities).substring(0, 490),
+          seller_ids: seller_id,
+          first_item_image: (sellerItems[0]?.listings.images[0]?.image_url || '').substring(0, 490),
+          escrow: 'true',
+          has_offers: hasOffers ? 'true' : 'false',
+          ...offerMetadataKeys,
+        },
+        success_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-cancelled`,
+      });
+
+      console.log('[SELLER-CHECKOUT] Session created:', session.id, 'for seller:', seller_id);
+
+      res.json({
+        sessionId: session.id,
+        url: session.url,
+        sellerSummary: {
+          sellerId: seller_id,
+          sellerName: seller.display_name,
+          itemCount: fees.itemCount,
+          totalQuantity: fees.totalQuantity,
+          itemsTotal: fees.itemsTotal.toFixed(2),
+          baseShipping: fees.baseShipping.toFixed(2),
+          insurancePremium: fees.insurancePremium.toFixed(2),
+          insuredShippingTotal: fees.insuredShipping.toFixed(2),
+          platformFee: fees.platformFee.toFixed(2),
+          grandTotal: fees.grandTotal.toFixed(2),
+        },
+      });
+    } catch (error: any) {
+      console.error('[SELLER-CHECKOUT] Error:', error);
+      res.status(500).json({
+        error: 'Failed to create seller checkout session',
         details: error.message,
       });
     }

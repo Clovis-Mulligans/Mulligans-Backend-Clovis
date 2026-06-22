@@ -22,6 +22,13 @@ router.post(
   CartCheckoutController.createCartCheckoutSession
 );
 
+// Per-seller checkout (split checkout — one session per seller)
+router.post(
+  '/create-seller-checkout',
+  authenticateToken,
+  CartCheckoutController.createSellerCheckoutSession
+);
+
 // ✅ NEW: Native Payment (Apple Pay / Google Pay) routes
 router.post(
   '/native-payment/single-item',
