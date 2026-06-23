@@ -179,9 +179,10 @@ export class ListingController {
         specifications,
         location,
         is_negotiable,
-        parcel_size,      // ✅ Shipping parcel size
-        shipping_cost,    // ✅ Seller's shipping cost
-        quantity,         // ✅ ADDED: Quantity available
+        parcel_size,
+        shipping_cost,
+        quantity,
+        status,
       } = req.body;
 
       // Verify user exists (optional safety check)
@@ -231,7 +232,7 @@ export class ListingController {
           // ✅ SIZE VARIANT: Auto-calculate quantity from sizeQuantities if present
           quantity: calculateTotalFromSizeQuantities(specifications) || (quantity ? parseInt(quantity) : 1),
           seller_id: userId,
-          status: 'active',
+          status: status ?? 'active',
           created_at: new Date(),
           updated_at: new Date(),
         },
@@ -834,6 +835,12 @@ if (keyword) {
         return;
       }
 
+      const viewerId = req.user?.id;
+      if (listing.status === 'draft' && listing.seller_id !== viewerId) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
       // Get seller info
       const seller = await prisma.users.findUnique({
         where: { id: listing.seller_id },
@@ -862,7 +869,6 @@ if (keyword) {
         status: string;
       } | null = null;
 
-      const viewerId = (req as any).user?.id;
       if (viewerId && viewerId !== listing.seller_id) {
         const activeOffer = await prisma.offers.findFirst({
           where: {

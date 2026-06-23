@@ -8,7 +8,7 @@
 import { CART_ITEM_EXPIRY_HOURS } from './feeCalculations';
 export { CART_ITEM_EXPIRY_HOURS };
 
-export type ListingStatus = 'active' | 'sold' | 'inactive' | 'deleted' | 'pending_review';
+export type ListingStatus = 'active' | 'sold' | 'inactive' | 'deleted' | 'pending_review' | 'draft';
 
 export interface ListingSnapshot {
   id: string;
