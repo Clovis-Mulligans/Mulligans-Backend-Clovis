@@ -330,3 +330,106 @@ On dev, after deploy: import a small CSV twice via `POST /api/listings/import`.
 - **Second import (same CSV, same seller):** every row returns `failed` with `reason: 'duplicate'`.
 
 This — not the unit test — is the proof the `listings_external_dedup` index enforces dedup through the real import path. The I-01 `questions.md` also has raw SQL INSERT statements for manual index verification.
+
+---
+
+# Questions — I-02c: Re-import Sync Surface Investigation
+
+**Date:** 2026-06-23
+
+## Decision 1: Qty-0 status — `'sold'` or wait for I-04?
+
+When a re-import sets quantity to 0, the listing should leave public search. Today, qty=0 after a sale sets `status: 'sold'`. But "sold" is semantically wrong for "seller pulled stock from their external system."
+
+**Options:**
+1. **Use `'sold'` now** — functional, removes from public queries, but semantically imprecise. Re-import can be updated later when I-04 defines `'off_sale'`.
+2. **Land I-04 first** — define a proper `'off_sale'` status, then use it in I-02c. Adds a dependency.
+
+**My recommendation:** Option 1. `'sold'` works today, and updating to `'off_sale'` later is a one-line change in the re-import service. Don't block I-02c on I-04.
+
+**Blocked:** No — can proceed with either choice.
+
+## Decision 2: Manual Mulligans-side edits between imports
+
+If a seller hand-edits a title/description on Mulligans (e.g., adds "REDUCED!" or fixes a typo), the next CSV re-import will overwrite that edit with the CSV value.
+
+**Options:**
+1. **Full re-sync** (Harry's lean) — CSV always wins. Simple. Clear mental model for pro sellers.
+2. **Qty+price only** — only sync quantity and price on re-import; leave other fields untouched. Protects hand-edits but limits CSV as source of truth.
+3. **Configurable** — `sync_mode` param: `'full'` or `'qty_price_only'`. More complex, but flexible.
+
+**My recommendation:** Option 1 for v1. Pro sellers using CSV are unlikely to also hand-edit on Mulligans. If they do, the import response will warn them. Option 3 can be added later if sellers request it.
+
+**Blocked:** No.
+
+## Decision 3: Reactivation from `'sold'` on re-import
+
+If a listing was `status: 'sold'` (qty hit 0) and a re-import provides qty > 0, should it reactivate to `'active'` automatically?
+
+**Options:**
+1. **Auto-reactivate to `'active'`** — if the seller's CSV says stock is available, the listing goes live. Matches "CSV is source of truth" philosophy.
+2. **Reactivate to `'draft'`** — seller must explicitly publish again. Safer (prevents accidental relisting of items the seller may have forgotten about).
+3. **Skip** — don't update sold listings. Seller must manually relist. Most conservative.
+
+**My recommendation:** Option 2. A sold listing reappearing live without the seller explicitly publishing could surprise them (especially if the CSV data is stale). Reactivating to `'draft'` lets the seller review and publish, which is the same flow as initial import.
+
+**Blocked:** No.
+
+## Decision 4: Should `listingController.updateListing` be refactored now?
+
+The investigation recommends extracting a shared `applyListingUpdate()` service function from the existing `updateListing` controller, so both the controller and importService can reuse it.
+
+**Options:**
+1. **Extract now** — cleaner, single source of update logic. But touches the existing controller in the same PR.
+2. **Duplicate minimally** — importService builds its own Prisma update. Duplicates the field-assembly pattern but doesn't touch the controller.
+3. **Extract in a follow-up** — importService calls Prisma directly for now. Schedule a cleanup brief to extract the shared function.
+
+**My recommendation:** Option 2 for this slice. The import update only needs a subset of fields (no image handling, no condition auto-calc for Clubs). Extracting a full shared function adds scope and risk. Revisit when the update paths genuinely diverge.
+
+**Blocked:** No.
+
+## Decision 5: Size-variant quantity reconciliation
+
+The reconciliation formula works for plain quantity. For size-variant listings (with `sizeQuantities` buckets), the CSV adapter doesn't produce per-size quantities — it only has a total `quantity`.
+
+**Options:**
+1. **Total-only reconciliation** — apply the delta formula to the total quantity. Don't touch sizeQuantities. This means size buckets could drift from the total.
+2. **Clear size variants on re-import** — if CSV provides a total qty without per-size breakdown, clear `sizeQuantities` and set plain quantity. This converts the listing from size-variant to plain.
+3. **Skip size-variant listings** — report as `skipped: 'size_variant_not_supported'`. Handle in a future brief when CSV format supports per-size columns.
+
+**My recommendation:** Option 3 for v1. Size-variant reconciliation without per-size CSV data is lossy. Better to skip and flag than silently corrupt the size buckets. This can be revisited when the CSV format adds size columns.
+
+**Blocked:** No.
+
+## Informational: Schema change required
+
+I-02c needs two new nullable columns on `listings`:
+- `last_imported_at` (TIMESTAMPTZ) — set to NOW() on every import/re-import
+- `qty_at_last_import` (INT) — the CSV quantity value at import time
+
+Migration: `20260624000000_import_reconciliation_fields`. Standard Prisma migration. RDS snapshot before prod (standing rule).
+
+## Informational: Price snapshot is safe
+
+In-flight purchases are safe from re-import price changes:
+1. Stripe session locks the charge amount at creation (`cartCheckoutController.ts:357-374`).
+2. Orders snapshot `listing_price` and `amount` at creation (`cartCheckoutController.ts:1081-1089`).
+3. The active-order guard prevents re-import from touching any listing with orders in `['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered']`.
+
+The only theoretical window (cart → checkout session) is NOT an order and has the same behaviour as a manual price change today. No new risk.
+
+## Informational: Active-order guard is reusable
+
+The guard at `listingController.ts:1137-1168` is a clean, extractable pattern. The re-import will use the same `ACTIVE_ORDER_STATUSES` list and `findFirst` lookup. Recommend extracting to a shared constant in Phase 2.
+
+## Dev verification steps (post-deploy)
+
+After deploying I-02c on dev:
+
+1. **Import a CSV with 3 rows** (SKU-A qty 5, SKU-B qty 3, SKU-C qty 1).
+2. **Verify `last_imported_at` and `qty_at_last_import` are set** on all 3 listings.
+3. **Simulate a sale** of 2 units of SKU-A (set qty to 3 manually if no test checkout available).
+4. **Re-import the same CSV with SKU-A qty 4:** Expected result = `updated` with reconciled qty = MAX(0, 4 - (5-3)) = 2.
+5. **Create an order for SKU-B** (status 'to_ship'). Re-import CSV: SKU-B should be `skipped: 'active_order'`.
+6. **Re-import CSV with SKU-C qty 0:** Expected result = `updated`, status → `'sold'`.
+7. **Re-import CSV with SKU-C qty 3:** Expected result = `updated`, status → `'draft'` (reactivation, per Decision 3).
