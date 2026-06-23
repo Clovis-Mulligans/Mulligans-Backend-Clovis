@@ -1,204 +1,195 @@
-# I-01 — Schema: Import Dedup Fields + Safe `draft` Status
+# I-02 — CSV Adapter + Import Service (lands drafts)
 
-**Branch:** `task/pro-import-i01-schema` off `clovis/pro-seller-foundation`
-**Start SHA:** `dc3891965d4925939175e5ce8cab63af63b0e30b`
-**Base-tip SHA:** `dc3891965d4925939175e5ce8cab63af63b0e30b` (confirms fresh base)
+**Branch:** `task/pro-import-i02-service` off `origin/pro-seller-foundation`
+**Start SHA:** `621f1f6dcaa7af91b7ae47eaa8fdf06b721f7045`
+**Base-tip SHA:** `621f1f6dcaa7af91b7ae47eaa8fdf06b721f7045` (fresh base, I-01+I-01a merged)
 **Repo:** `Mulligans-Backend`
 **Date:** 2026-06-23
+
+---
+
+## I-01 Gate — PASSED
+
+- `grep external_source prisma/schema.prisma` → line 106 ✓
+- `grep external_id prisma/schema.prisma` → line 107 ✓
+- `createListingSchema` accepts `status: z.enum(['active', 'draft'])` → line 69 ✓
+- `listings_external_dedup` migration → `prisma/migrations/20260623000000_listing_import_dedup/migration.sql` ✓
 
 ---
 
 ## Files Changed
 
 ```
-prisma/schema.prisma                                          | +2  (external_source, external_id)
-prisma/migrations/20260623000000_listing_import_dedup/         | new (migration SQL)
-src/middleware/validation.ts                                   | +2  (status in create + update schemas)
-src/controllers/listingController.ts                          | +5  (status from body, draft owner gate)
-src/lib/cartValidation.ts                                     | +1  ('draft' in ListingStatus type)
-src/__tests__/unit/importDedupDraft.test.ts                   | new (15 tests)
-CHANGES.md                                                    | this file
+src/services/csvAdapter.ts          | new  (CSV parsing + normalization → IncomingListing[])
+src/services/importService.ts       | new  (Zod validation + batch Prisma create)
+src/controllers/importController.ts | new  (POST /api/listings/import handler)
+src/routes/listingRoutes.ts         | +12  (import route + importLimiter + ImportController import)
+src/__tests__/unit/csvImport.test.ts| new  (13 tests)
+src/__tests__/unit/draftVisibility.test.ts | +1 (multer mock: add .single())
+CHANGES.md                          | this file
+questions.md                        | +  security scan, dep note, hash inputs
+package.json                        | +1 (csv-parse dependency)
+package-lock.json                   | churn (csv-parse added)
 ```
 
-No changes to: `package.json`, `package-lock.json`, `checkoutState.ts`, any Stripe/transfer/refund/escrow code, fee calculations, or any money path.
+No changes to: `checkoutState.ts`, any Stripe/transfer/refund/escrow code, fee calculations, or any money path.
 
 ---
 
-## Change 1: Prisma Schema — `external_source` + `external_id`
+## Change 1: `csvAdapter.ts` (new)
 
-**File:** `prisma/schema.prisma` (model listings, after `deleted_at`)
+**File:** `src/services/csvAdapter.ts`
 
-```prisma
-external_source     String?
-external_id         String?
-```
+Parses a CSV buffer → `AdapterResult { rows: IncomingListing[], failed: [...], warnings: [...] }`.
 
-Both nullable. Existing listings get NULL. No `@@unique` in Prisma — the dedup index is partial (see Change 2).
+Per-row normalization:
+- **category**: case-insensitive match against the live 8-value enum. `'Shafts Grips & Heads'` → `'Shafts, Grips & Heads'` (comma fix). Unknown categories → row rejected with clear message.
+- **condition**: `New`→5, `Like New`→4, `Very Good`→3, `Good`→2, `Fair`→1. Unknown → warning, field skipped.
+- **parcel_size**: `Small`→`small`, `Medium`→`medium`, `Large`→`large`, `Extra Large`→`extra_large`, `Oversized`→`oversized`. **Required** — missing/invalid → row rejected.
+- **shipping_cost**: seller-set number 0–100. **Required** — not derived from any fixed map.
+- **subcategory**: **Required** (backend Zod enforces this).
+- **spec fields**: `club_type, shaft_flex, shaft_material, loft, lie_angle, shaft_length, dexterity, size, gender, colour` → assembled into `specifications` JSON.
+- **accepts_offers** → `is_negotiable` boolean.
+- **quantity**: optional, int 1–999, default 1.
+- **sku** → `external_id`. If absent, content hash (see below).
+- **auto_decline_threshold**: DROPPED (dead column).
 
-## Change 2: Migration — Partial Unique Index
+### `external_id` derivation
 
-**Folder:** `prisma/migrations/20260623000000_listing_import_dedup/migration.sql`
+- If `sku` column present: `external_id = sku`
+- If absent: SHA-256(first 16 hex chars) of `normalize(title)|normalize(brand)|normalize(model)|normalize(category)|price` where normalize = `trim().toLowerCase()`.
 
-```sql
-ALTER TABLE "listings" ADD COLUMN "external_source" TEXT;
-ALTER TABLE "listings" ADD COLUMN "external_id" TEXT;
+Stable across re-imports — the same row always produces the same hash.
 
-CREATE UNIQUE INDEX "listings_external_dedup"
-  ON "listings" ("seller_id", "external_source", "external_id")
-  WHERE "external_source" IS NOT NULL;
-```
+## Change 2: `importService.ts` (new)
 
-Partial index: only applies when `external_source IS NOT NULL`. Existing listings (NULL external_source) are unaffected — the constraint only catches duplicate imports.
+**File:** `src/services/importService.ts`
 
-## Change 3: Validation — `status` on Create + Update
+Takes `IncomingListing[]` + `sellerId` → `ImportResult { created, failed, warnings }`.
 
-**File:** `src/middleware/validation.ts`
+- Validates each row against the **real** `createListingSchema` (imported from `middleware/validation.ts`). Not a reimplemented copy.
+- Creates each valid listing via `prisma.listings.create` with the same data shape as `listingController.createListing` (same fields, same attribute-saving logic).
+- All listings created with `status: 'draft'`, `external_source: 'csv'`, `external_id` from adapter.
+- Duplicate handling: catches Prisma `P2002` on `listings_external_dedup` → records row as `failed` with `reason: 'duplicate'`, continues batch.
+- One bad row doesn't sink the import.
 
-- **createListingSchema** (line 69): Added `status: z.enum(['active', 'draft']).optional().default('active')`. Backward-compatible — omitting `status` defaults to `'active'`.
-- **updateListingSchema** (line 91): Added `'draft'` to existing enum → `z.enum(['active', 'sold', 'reserved', 'removed', 'draft']).optional()`.
+## Change 3: `importController.ts` (new)
 
-`'sold_elsewhere'` is NOT added — that belongs to I-04.
+**File:** `src/controllers/importController.ts`
 
-## Change 4: Controller — Use Validated Status
+`POST /api/listings/import` handler:
+1. Reads CSV from `req.file.buffer`
+2. Passes to `parseCsv()` → gets adapter results
+3. Checks `totalParsedRows > 200` → 400 before any creation
+4. Calls `importListings(rows, req.user.id, ...)` → 200 with result JSON
 
-**File:** `src/controllers/listingController.ts`
+## Change 4: Route wiring
 
-- Added `status` to the destructured body (line 184).
-- Changed line 234 from `status: 'active'` to `status: status ?? 'active'`. The `??` is a safety net — the Zod `.default('active')` already ensures a value, but `??` catches any edge case.
+**File:** `src/routes/listingRoutes.ts`
 
-## Change 5: Draft Safety — `getListingById` Owner Gate
+- Added `importLimiter` (5 imports/hour)
+- Added `upload.single('file')` for CSV upload (reuses existing multer instance, 5 MB limit)
+- Route: `POST /import` → `authenticateToken → importLimiter → upload.single('file') → ImportController.importCsv`
+- Placed before `/:id` routes to avoid parameter capture.
 
-**File:** `src/controllers/listingController.ts` (lines 838-842)
+## Change 5: Dependency
 
-```ts
-const viewerId = req.user?.id;
-if (listing.status === 'draft' && listing.seller_id !== viewerId) {
-  res.status(404).json({ error: 'Listing not found' });
-  return;
-}
-```
-
-Non-owner requesting a draft listing → 404 (does not reveal existence). Owner → normal 200 response.
-
-Also removed a duplicate `const viewerId` declaration at the former line 872 (offer lookup section), which now reuses the earlier declaration.
-
-## Change 6: `ListingStatus` Type
-
-**File:** `src/lib/cartValidation.ts` (line 11)
-
-Added `'draft'` to the `ListingStatus` union type. The existing `validateListingForCart` and `validateCheckout` functions already check `listing.status !== 'active'`, so drafts are automatically rejected by both — no logic change needed.
+`csv-parse` v7 added to `dependencies`. Used via `csv-parse/sync` for synchronous CSV parsing. Pure JS, MIT licensed.
 
 ---
 
-## Public Query Audit — Draft Exclusion
+## Import Limits
 
-Every public-facing query was checked for `status: 'active'` filter:
-
-| Query | File:line | Filter | Result |
-|-------|----------|--------|--------|
-| `getFeaturedListings` | `listingController.ts:58` | `status: 'active'` | Already excludes drafts |
-| `getAllListings` (search/browse) | `listingController.ts:462` | `status: 'active'` | Already excludes drafts |
-| `getSellerListings` (public profile) | `listingController.ts:919` | `status: 'active'` | Already excludes drafts |
-| `getUserListings` (public profile) | `userController.ts:904` | `status: 'active'` | Already excludes drafts |
-| `getMyListings` (dashboard, auth'd) | `userController.ts:802-806` | Status from query param; no filter = all | Correct: owner sees own drafts |
-
-## Cart + Checkout Audit — Draft Blocked
-
-| Path | File:line | Guard | Result |
-|------|----------|-------|--------|
-| `addToCart` | `cartController.ts:331` | `listing.status !== 'active'` → 400 | Blocks drafts |
-| Cart checkout entry | `cartCheckoutController.ts:153` | `item.listings.status !== 'active'` → reject | Blocks drafts |
-| Per-seller checkout | `cartCheckoutController.ts:549` | `item.listings.status === 'active'` filter | Excludes drafts |
-| Stripe single-item | `stripeController.ts:137` | `listing.status !== 'active'` → 400 | Blocks drafts |
-| Native single-item | `nativePaymentController.ts:133` | `listing.status !== 'active'` → 400 | Blocks drafts |
-| Native per-seller | `nativePaymentController.ts:525` | `item.listings.status === 'active'` filter | Excludes drafts |
-| Native cart | `nativePaymentController.ts:369` | `item.listings.status !== 'active'` → reject | Blocks drafts |
-
-All checkout paths already gate on `status === 'active'`. No changes needed to any checkout/payment code.
+| Limit | Value | Enforced at |
+|-------|-------|-------------|
+| Max rows | 200 | Controller (before creation) |
+| Max file size | 5 MB | multer limits |
+| Rate limit | 5/hour | `importLimiter` |
+| Auth | Required | `authenticateToken` |
+| Ownership | `req.user.id` only | Controller (no seller_id param) |
 
 ---
 
-## Tests — 15 total
+## Tests — 13 total
 
-### Create schema — status field (5 tests)
-1. `status: 'draft'` → stored as `'draft'`
-2. No status → defaults to `'active'`
-3. `status: 'active'` → `'active'`
-4. `status: 'sold'` → rejected on create
-5. `status: 'sold_elsewhere'` → rejected (not in this slice)
+| # | Test | Proves |
+|---|------|--------|
+| 1 | Valid CSV → all created as draft | Core pipeline works; status=draft, external_source=csv |
+| 2 | Re-run same CSV → duplicates | Dedup index catches re-imports |
+| 3 | Unknown category → row fails, rest succeed | Per-row isolation; category validation |
+| 4 | Missing required fields → rows fail | title/price/subcategory/parcel_size/shipping_cost all required |
+| 5 | 201 rows → parsed (controller cap tested separately) | Row count available for cap check |
+| 6 | parcel_size: Small→small, Extra Large→extra_large | Normalization to lowercase enum |
+| 7 | category: Shafts Grips & Heads → Shafts, Grips & Heads | Comma fix for web wizard mismatch |
+| 8 | shipping_cost from row, not overwritten | Seller-set shipping preserved end-to-end |
+| 9 | condition: Like New → 4, Fair → 1 | Condition mapping |
+| 10 | sku → external_id; no sku → stable content hash | Dedup key derivation + stability |
+| 11 | Created listings are status:draft | Draft safety (I-01 guarantees public exclusion) |
+| 12 | Spec fields → specifications JSON | Field assembly |
+| 13 | accepts_offers → is_negotiable | Boolean mapping |
 
-### Update schema — draft in enum (2 tests)
-6. `'draft'` accepted in update
-7. `'active'` still accepted in update
-
-### Migration SQL shape (3 tests)
-8. Adds `external_source` column
-9. Adds `external_id` column
-10. Creates partial unique index with correct columns and WHERE clause
-
-### Cart validation — draft rejected (2 tests)
-11. Draft listing → `listing_inactive` error
-12. Active listing → valid (baseline)
-
-### Checkout validation — draft blocked (3 tests)
-13. Cart with draft → unavailable, not proceedable
-14. Cart with active → proceedable (baseline)
-15. Mixed cart (active + draft) → not proceedable, only draft in unavailable
-
-### Teeth-checks:
-- Tests 1, 4, 5 FAIL if the `z.enum` is wrong (wrong values accepted/rejected)
-- Test 2 FAILS if the `.default('active')` is removed
-- Tests 11, 13, 15 FAIL if `validateListingForCart`/`validateCheckout` stops checking `status !== 'active'`
-- Test 14 FAILS if active listings are incorrectly blocked
+### Teeth checks:
+- Test 2 FAILS if the service's duplicate-handling branch is removed (but see note: the mock simulates the constraint — real proof is the dev re-import)
+- Test 8 FAILS if shipping_cost is overwritten by a fixed map
+- Test 10 FAILS if content hash changes (different inputs or algorithm)
+- Test 11 FAILS if status is changed from 'draft'
+- Test 14 FAILS if IDs are not valid v4 UUIDs or if any collision exists
+- Test 15 FAILS if PK-collision P2002 is mislabelled as 'duplicate'
 
 ---
 
-## I-01a Amendment — Fix Owner-Draft 404 + Missing Tests
+## I-02a Amendment — ID generation + honest dedup test
 
-**Amend SHA:** `f916857` (I-01 commit)
+**Amend SHA:** `f9a58d5` (I-02 commit)
 **Date:** 2026-06-23
-**Why:** I-01's draft visibility guard in `getListingById` always 404'd the owner because `GET /api/listings/:id` had no auth middleware — `req.user` was always `undefined`, so `listing.seller_id !== viewerId` was always true. The CHANGES.md audit table claimed "owner → 200" but no test verified it, and the route definition was never checked.
 
-### Change A1: `optionalAuth` middleware (NEW — none existed)
+### Why this amendment exists
 
-**File:** `src/middleware/auth.ts` (lines 70-90)
+1. **Bug — ID generation.** `importService` used `lst_${Date.now()}_${Math.random().toString(36).substr(2,9)}` for listing IDs and the same pattern for attribute IDs. In a 200-row import loop `Date.now()` repeats for many rows, so collision protection rested on `Math.random()`. A collision would throw P2002 on the primary key, which the catch block mislabelled as a generic error. `substr` is also deprecated.
+2. **Toothless test.** Test 2 (dedup) used a hand-written Prisma mock that re-implemented the dedup check in JS. The test proved the mock, not the constraint — it would stay green even if the real DB index was dropped. (Anti-pattern rule 1: never mock the behaviour the test claims to prove.)
 
-Added `optionalAuth`: if a valid Bearer token is present, decodes it and attaches `req.user` (reusing the same `jwt.verify` + payload extraction as `authenticateToken`). If the token is missing OR invalid, calls `next()` with `req.user` left `undefined`. **Never returns 401 or 403.** Does not check `is_banned` (the full `authenticateToken` does that; optional-auth is for read-only public routes where we want to enrich the response for logged-in users, not gate access).
+### Change A1: UUIDs for all generated IDs
 
-### Change A2: Wire optional-auth to GET /:id
+**File:** `src/services/importService.ts`
 
-**File:** `src/routes/listingRoutes.ts` (line 63)
+- Listing IDs: `uuidv4()` (was `lst_${Date.now()}_...`)
+- Attribute IDs: `uuidv4()` (was `attr_${Date.now()}_...`)
+- Import: `import { v4 as uuidv4 } from 'uuid'` — matches the existing repo style (`disputeController.ts`, `s3Service.ts`, etc.)
+- `uuid` is already a dependency — no `package.json` change.
 
-Before: `router.get('/:id', ListingController.getListingById)`
-After: `router.get('/:id', optionalAuth, ListingController.getListingById)`
+### Change A2: Catch block distinguishes error codes
 
-No other route changed.
+**File:** `src/services/importService.ts`
 
-### Change A3: Draft visibility tests (5 new tests, real route + middleware)
+- P2002 with `target` including `listings_external_dedup` → `reason: 'duplicate'` (unchanged)
+- P2002 with any other target (e.g. PK collision) → `reason: 'id collision (constraint: <target>) — retry'`
+- Non-P2002 errors → `reason: err.message` (unchanged)
 
-**File:** `src/__tests__/unit/draftVisibility.test.ts` (NEW)
+### Change A3: Test 2 relabelled as mock-level
 
-Each test builds a minimal Express app mounting the REAL `listingRoutes` (with `optionalAuth` wired), creates real JWTs, and makes HTTP requests via `http.get`. The real middleware chain is exercised, not bypassed.
+**File:** `src/__tests__/unit/csvImport.test.ts`
 
-| # | Test | Token | Expected | Would fail without fix? |
-|---|------|-------|----------|-------------------------|
-| 1 | Owner requests own draft | Owner JWT | 200 + listing body | **YES** — without optionalAuth, req.user is undefined → owner gets 404 |
-| 2 | Non-owner requests draft | Other JWT | 404 | No (was already 404) |
-| 3 | Anonymous requests draft | None | 404 | No (was already 404) |
-| 4 | Anyone requests active listing | None | 200 | No (active path unchanged) |
-| 5 | getAllListings excludes drafts | None | 200, no drafts in results | No (existing status filter) |
+- Renamed to `'2. re-run same CSV → service surfaces duplicate reason (mock-level; real index proven on dev)'`
+- Added inline comment stating the Prisma mock simulates the constraint, real proof is the dev re-import in `questions.md`.
+- Test is kept (it still checks the service's duplicate-handling branch wires through correctly) — it just no longer masquerades as constraint proof.
 
-Test 1 is the critical regression test: it would have failed against the I-01 code (no optionalAuth on route → req.user always undefined → owner 404'd on own draft).
+### Change A4: Two new tests
 
-### Change A4: Dev dedup verification step
+| # | Test | Proves |
+|---|------|--------|
+| 14 | Listing and attribute IDs are distinct valid UUIDs | No Date.now() collision surface; all IDs are v4 UUIDs and globally unique across listings + attributes |
+| 15 | PK-collision P2002 (non-dedup target) → distinct reason, not 'duplicate' | Catch block classifies correctly — this IS unit-testable because the classification logic is the thing under test |
 
-**File:** `questions.md` — added a clearly-labelled SQL verification block (4 INSERT statements) that proves the partial unique index works behaviourally on a live DB. The unit tests only assert migration SQL text; this dev step proves enforcement.
+### Change A5: Dev re-import verification step
+
+**File:** `questions.md` — added explicit dev verification: import a small CSV twice via `POST /api/listings/import`, confirm first import creates and second import fails all rows with `reason: 'duplicate'`. This — not the unit test — is the proof the index enforces dedup.
 
 ---
 
 ## Verification
 
 - `npx tsc --noEmit` — clean
-- `npx jest --selectProjects unit` — 346 pass, 2 skip (pre-existing registration.test.ts TS error, unrelated)
-- `package-lock.json` unchanged
-- No changes to: `package.json`, `checkoutState.ts`, any checkout/payment/escrow/Stripe code, fee calculations, or any money path
+- `npx jest --selectProjects unit` — 361 pass, 2 skip (pre-existing registration.test.ts TS error, unrelated)
+- `package-lock.json` unchanged (uuid already a dependency)
+- No changes to: checkout, payment, escrow, refund, fee, or Stripe code
+- Files touched: `importService.ts`, `csvImport.test.ts`, `CHANGES.md`, `questions.md` — nothing else

@@ -1,6 +1,7 @@
 // src/routes/listingRoutes.ts
 import { Router } from 'express';
 import { ListingController } from '../controllers/listingController';
+import { ImportController } from '../controllers/importController';
 import { authenticateToken, optionalAuth } from '../middleware/auth';
 import multer from 'multer';
 import { validate, createListingSchema } from '../middleware/validation';
@@ -15,8 +16,16 @@ const listingLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const importLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: 'Too many imports, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
  * ⚠️ ROUTE ORDER MATTERS - Specific routes MUST come before generic ones!
@@ -31,6 +40,9 @@ router.get('/featured', ListingController.getFeaturedListings);
 /**
  * Protected routes (require login)
  */
+// CSV import (must be before /:id routes)
+router.post('/import', authenticateToken, importLimiter, upload.single('file'), ImportController.importCsv);
+
 // Create listing WITHOUT images
 router.post('/', authenticateToken, listingLimiter, validate(createListingSchema), ListingController.createListing);
 

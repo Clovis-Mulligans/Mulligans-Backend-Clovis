@@ -288,3 +288,45 @@ Statement 2 must fail. Statements 1, 3, 4 must succeed. I-02's re-import test wi
 3. **No enum weakening:** The create schema accepts only `['active', 'draft']`. The update schema adds `'draft'` to the existing enum without removing any values.
 4. **No auth path altered:** No changes to `authenticateToken`, JWT handling, or any middleware. The draft visibility check uses the existing `req.user?.id` pattern.
 5. **Listing existence not leaked:** Draft listings return the same 404 response as non-existent listings — no information disclosure.
+
+---
+
+# Questions — I-02: CSV Adapter + Import Service
+
+**Date:** 2026-06-23
+
+## Security scan — POST /api/listings/import
+
+1. **Row cap:** 200 rows max, enforced before any listing creation (controller checks `totalParsedRows > 200` → 400). Prevents bulk abuse.
+2. **File size cap:** 5 MB via multer `limits.fileSize`. Prevents memory exhaustion.
+3. **Rate limit:** `importLimiter` — 5 imports per hour per IP. Prevents repeated bulk creation.
+4. **Auth:** `authenticateToken` required. All created listings are owned by `req.user.id` only. No `seller_id` parameter accepted — a seller cannot create listings for another seller.
+5. **CSV-injection:** Values starting with `= + - @` are a risk only if later re-exported to a spreadsheet. Mulligans stores CSV values to the DB and renders them in the app — no Excel export path exists. Low risk; noted but not blocked. If an export feature is added later, sanitize on export.
+6. **No auth path changed:** `authenticateToken` is reused as-is. No new auth mechanism.
+7. **No money path touched:** Import creates listings only. No checkout/payment/escrow/fee code modified.
+
+## Dependency added
+
+`csv-parse` v7 — the `csv-parse/sync` module for synchronous CSV parsing. No native bindings, pure JS. MIT licensed. Used only in `csvAdapter.ts`.
+
+## Follow-up reminder
+
+**I-02b (publish draft→active, Stripe-gated)** and **I-03 (images)** are required before sellers can actually go live from an import. Imported listings land as `draft` with no images — they're invisible and unbuyable until published.
+
+## `external_id` hash inputs
+
+When a CSV row has no `sku` column, the `external_id` is a deterministic SHA-256 hash (first 16 hex chars) of:
+```
+normalize(title) | normalize(brand) | normalize(model) | normalize(category) | price
+```
+Where normalize = `trim().toLowerCase()`. Pipe-delimited. This ensures the same row produces the same hash across re-imports, catching duplicates even without a SKU.
+
+## Dev re-import verification — dedup proof (I-02a)
+
+The unit test for dedup (Test 2) uses a Prisma mock that simulates the P2002 — it proves the service's duplicate-handling branch wires through correctly, but NOT that the real DB index enforces uniqueness. The real proof is:
+
+On dev, after deploy: import a small CSV twice via `POST /api/listings/import`.
+- **First import:** rows created (all `status:'draft'`, `external_source:'csv'`).
+- **Second import (same CSV, same seller):** every row returns `failed` with `reason: 'duplicate'`.
+
+This — not the unit test — is the proof the `listings_external_dedup` index enforces dedup through the real import path. The I-01 `questions.md` also has raw SQL INSERT statements for manual index verification.

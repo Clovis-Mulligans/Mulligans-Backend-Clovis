@@ -11,7 +11,8 @@ process.env.JWT_SECRET = TEST_SECRET;
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid' }));
 jest.mock('../../services/s3Service', () => ({ S3Service: { uploadImage: jest.fn(), deleteImage: jest.fn() } }));
 jest.mock('multer', () => {
-  const m = () => ({ array: () => (_req: any, _res: any, next: any) => next() });
+  const noop = (_req: any, _res: any, next: any) => next();
+  const m = () => ({ array: () => noop, single: () => noop });
   m.memoryStorage = () => ({});
   return m;
 });
