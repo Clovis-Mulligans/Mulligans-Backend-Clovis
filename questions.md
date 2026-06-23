@@ -256,6 +256,31 @@ The following types enumerate listing statuses and should learn about `'draft'` 
 3. **Mobile:** No `ListingStatus` type found in the mobile repo. The mobile app doesn't create listings, so no change needed for v1.
 4. **Backend `cartValidation.ts`:** `ListingStatus` type — updated in this slice to include `'draft'` ✓
 
+## Dev behavioural verification — dedup partial index (I-01a)
+
+The unit tests verify the migration SQL text, but cannot prove the partial unique index works without a live DB. After applying the migration on dev, run these four statements to verify:
+
+```sql
+-- 1. First import: succeeds
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Test', 'Test', 'Clubs', 100, 'draft', 'csv', 'x1');
+
+-- 2. Duplicate import (same seller + source + id): MUST fail with unique violation
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Test', 'Test', 'Clubs', 100, 'draft', 'csv', 'x1');
+-- Expected error: duplicate key value violates unique constraint "listings_external_dedup"
+
+-- 3. Manual listing (NULL source): succeeds
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Manual', 'Manual', 'Clubs', 50, 'active', NULL, NULL);
+
+-- 4. Another manual listing (NULL source): also succeeds (partial index doesn't apply)
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Manual 2', 'Manual 2', 'Clubs', 60, 'active', NULL, NULL);
+```
+
+Statement 2 must fail. Statements 1, 3, 4 must succeed. I-02's re-import test will also cover this behaviourally.
+
 ## Security scan result
 
 1. **Non-owner cannot see a draft:** `getListingById` now returns 404 for draft listings when the requester is not the owner (new guard at lines 838-842). All other public queries already filter `status: 'active'`.

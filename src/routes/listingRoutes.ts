@@ -1,7 +1,7 @@
 // src/routes/listingRoutes.ts
 import { Router } from 'express';
 import { ListingController } from '../controllers/listingController';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken, optionalAuth } from '../middleware/auth';
 import multer from 'multer';
 import { validate, createListingSchema } from '../middleware/validation';
 import rateLimit from 'express-rate-limit';
@@ -60,7 +60,7 @@ router.get('/seller/:seller_id', ListingController.getSellerListings);
 // Track listing view (no auth required)
 router.post('/:id/view', ListingController.trackView);
 
-router.get('/:id', ListingController.getListingById);
+router.get('/:id', optionalAuth, ListingController.getListingById);
 router.get('/', ListingController.getAllListings);
 
 export default router;

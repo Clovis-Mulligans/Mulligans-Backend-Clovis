@@ -153,8 +153,52 @@ All checkout paths already gate on `status === 'active'`. No changes needed to a
 
 ---
 
+## I-01a Amendment — Fix Owner-Draft 404 + Missing Tests
+
+**Amend SHA:** `f916857` (I-01 commit)
+**Date:** 2026-06-23
+**Why:** I-01's draft visibility guard in `getListingById` always 404'd the owner because `GET /api/listings/:id` had no auth middleware — `req.user` was always `undefined`, so `listing.seller_id !== viewerId` was always true. The CHANGES.md audit table claimed "owner → 200" but no test verified it, and the route definition was never checked.
+
+### Change A1: `optionalAuth` middleware (NEW — none existed)
+
+**File:** `src/middleware/auth.ts` (lines 70-90)
+
+Added `optionalAuth`: if a valid Bearer token is present, decodes it and attaches `req.user` (reusing the same `jwt.verify` + payload extraction as `authenticateToken`). If the token is missing OR invalid, calls `next()` with `req.user` left `undefined`. **Never returns 401 or 403.** Does not check `is_banned` (the full `authenticateToken` does that; optional-auth is for read-only public routes where we want to enrich the response for logged-in users, not gate access).
+
+### Change A2: Wire optional-auth to GET /:id
+
+**File:** `src/routes/listingRoutes.ts` (line 63)
+
+Before: `router.get('/:id', ListingController.getListingById)`
+After: `router.get('/:id', optionalAuth, ListingController.getListingById)`
+
+No other route changed.
+
+### Change A3: Draft visibility tests (5 new tests, real route + middleware)
+
+**File:** `src/__tests__/unit/draftVisibility.test.ts` (NEW)
+
+Each test builds a minimal Express app mounting the REAL `listingRoutes` (with `optionalAuth` wired), creates real JWTs, and makes HTTP requests via `http.get`. The real middleware chain is exercised, not bypassed.
+
+| # | Test | Token | Expected | Would fail without fix? |
+|---|------|-------|----------|-------------------------|
+| 1 | Owner requests own draft | Owner JWT | 200 + listing body | **YES** — without optionalAuth, req.user is undefined → owner gets 404 |
+| 2 | Non-owner requests draft | Other JWT | 404 | No (was already 404) |
+| 3 | Anonymous requests draft | None | 404 | No (was already 404) |
+| 4 | Anyone requests active listing | None | 200 | No (active path unchanged) |
+| 5 | getAllListings excludes drafts | None | 200, no drafts in results | No (existing status filter) |
+
+Test 1 is the critical regression test: it would have failed against the I-01 code (no optionalAuth on route → req.user always undefined → owner 404'd on own draft).
+
+### Change A4: Dev dedup verification step
+
+**File:** `questions.md` — added a clearly-labelled SQL verification block (4 INSERT statements) that proves the partial unique index works behaviourally on a live DB. The unit tests only assert migration SQL text; this dev step proves enforcement.
+
+---
+
 ## Verification
 
 - `npx tsc --noEmit` — clean
-- `npx jest --selectProjects unit` — 341 pass, 2 skip (pre-existing registration.test.ts TS error, unrelated)
+- `npx jest --selectProjects unit` — 346 pass, 2 skip (pre-existing registration.test.ts TS error, unrelated)
 - `package-lock.json` unchanged
+- No changes to: `package.json`, `checkoutState.ts`, any checkout/payment/escrow/Stripe code, fee calculations, or any money path
