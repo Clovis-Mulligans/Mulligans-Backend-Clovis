@@ -1,6 +1,18 @@
 import { parseCsv, IncomingListing } from '../../services/csvAdapter';
-import { importListings } from '../../services/importService';
 import crypto from 'crypto';
+
+// ── Mock uuid (ESM module needs mocking before import) ──────────────────
+let uuidCounter = 0;
+jest.mock('uuid', () => ({
+  v4: () => {
+    uuidCounter++;
+    // Generate a valid v4 UUID format with a unique counter
+    const hex = uuidCounter.toString(16).padStart(12, '0');
+    return `00000000-0000-4000-a000-${hex}`;
+  },
+}));
+
+import { importListings } from '../../services/importService';
 
 // ── Prisma mock ─────────────────────────────────────────────────────────
 const createdListings: any[] = [];
@@ -38,6 +50,7 @@ jest.mock('../../lib/prisma', () => ({
 beforeEach(() => {
   createdListings.length = 0;
   createdAttributes.length = 0;
+  uuidCounter = 0;
   jest.clearAllMocks();
 });
 
@@ -100,9 +113,12 @@ describe('csvAdapter + importService', () => {
     }
   });
 
-  // ── Test 2: Re-run same CSV → duplicates ────────────────────────────
+  // ── Test 2: Re-run same CSV → duplicates (mock-level) ──────────────
+  // The Prisma mock simulates the dedup P2002. This tests the service's
+  // duplicate-handling branch, NOT the real DB index. The real proof is
+  // a dev re-import (see questions.md "Dev re-import verification").
 
-  test('2. re-run same CSV → all rows fail with reason duplicate', async () => {
+  test('2. re-run same CSV → service surfaces duplicate reason (mock-level; real index proven on dev)', async () => {
     const buf = csvBuffer(HEADERS, validRow({ sku: 'SKU-DUP' }));
     const parsed = parseCsv(buf);
     await importListings(parsed.rows, SELLER_ID, parsed.failed, parsed.warnings);
@@ -273,5 +289,61 @@ describe('csvAdapter + importService', () => {
     const { rows } = parseCsv(buf);
     expect(rows[0].is_negotiable).toBe(true);
     expect(rows[1].is_negotiable).toBe(false);
+  });
+
+  // ── Test 14: All IDs are valid UUIDs and unique ───────────────────────
+
+  test('14. listing and attribute IDs are distinct valid UUIDs', async () => {
+    const buf = csvBuffer(
+      HEADERS,
+      validRow({ sku: 'UUID-1', club_type: 'Driver', shaft_flex: 'Stiff' }),
+      validRow({ sku: 'UUID-2', club_type: 'Iron', shaft_flex: 'Regular' }),
+      validRow({ sku: 'UUID-3', club_type: 'Wedge' }),
+    );
+    const { rows, failed, warnings } = parseCsv(buf);
+    const result = await importListings(rows, SELLER_ID, failed, warnings);
+    expect(result.created).toHaveLength(3);
+
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    const listingIds = createdListings.map(l => l.id);
+    for (const id of listingIds) {
+      expect(id).toMatch(uuidRe);
+    }
+    expect(new Set(listingIds).size).toBe(listingIds.length);
+
+    const attrIds = createdAttributes.map(a => a.id);
+    for (const id of attrIds) {
+      expect(id).toMatch(uuidRe);
+    }
+    const allIds = [...listingIds, ...attrIds];
+    expect(new Set(allIds).size).toBe(allIds.length);
+  });
+
+  // ── Test 15: PK-collision P2002 is NOT labelled 'duplicate' ───────────
+
+  test('15. PK-collision P2002 (non-dedup target) → distinct reason, not duplicate', async () => {
+    const { prisma } = require('../../lib/prisma');
+    const originalCreate = prisma.listings.create;
+
+    // Simulate a PK collision on the first create call
+    prisma.listings.create = jest.fn().mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), {
+        code: 'P2002',
+        meta: { target: ['listings_pkey'] },
+      }),
+    );
+
+    const buf = csvBuffer(HEADERS, validRow({ sku: 'PK-COLLIDE' }));
+    const { rows, failed, warnings } = parseCsv(buf);
+    const result = await importListings(rows, SELLER_ID, failed, warnings);
+
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].reason).not.toBe('duplicate');
+    expect(result.failed[0].reason).toContain('id collision');
+    expect(result.failed[0].reason).toContain('listings_pkey');
+
+    // Restore
+    prisma.listings.create = originalCreate;
   });
 });

@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../lib/prisma';
 import { createListingSchema } from '../middleware/validation';
 import { IncomingListing } from './csvAdapter';
@@ -34,7 +35,7 @@ export async function importListings(
 
       const validData = parsed.data.body;
 
-      const listingId = `lst_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const listingId = uuidv4();
 
       const listing = await prisma.listings.create({
         data: {
@@ -71,7 +72,7 @@ export async function importListings(
           if (key === 'setMakeup' && Array.isArray(value)) {
             value.forEach((iron: string) => {
               attributeRecords.push({
-                id: `attr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: uuidv4(),
                 listing_id: listing.id,
                 key: 'setMakeup',
                 value: iron,
@@ -80,7 +81,7 @@ export async function importListings(
             });
           } else {
             attributeRecords.push({
-              id: `attr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: uuidv4(),
               listing_id: listing.id,
               key,
               value: typeof value === 'string' ? value : JSON.stringify(value),
@@ -95,8 +96,13 @@ export async function importListings(
 
       created.push({ id: listing.id, title: listing.title, external_id: row.external_id });
     } catch (err: any) {
-      if (err?.code === 'P2002' && err?.meta?.target?.includes('listings_external_dedup')) {
-        failed.push({ row: rowNum, reason: 'duplicate' });
+      if (err?.code === 'P2002') {
+        const target = err.meta?.target;
+        if (Array.isArray(target) && target.includes('listings_external_dedup')) {
+          failed.push({ row: rowNum, reason: 'duplicate' });
+        } else {
+          failed.push({ row: rowNum, reason: `id collision (constraint: ${target}) — retry` });
+        }
       } else {
         failed.push({ row: rowNum, reason: err.message || 'unexpected error' });
       }

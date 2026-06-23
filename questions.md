@@ -320,3 +320,13 @@ When a CSV row has no `sku` column, the `external_id` is a deterministic SHA-256
 normalize(title) | normalize(brand) | normalize(model) | normalize(category) | price
 ```
 Where normalize = `trim().toLowerCase()`. Pipe-delimited. This ensures the same row produces the same hash across re-imports, catching duplicates even without a SKU.
+
+## Dev re-import verification — dedup proof (I-02a)
+
+The unit test for dedup (Test 2) uses a Prisma mock that simulates the P2002 — it proves the service's duplicate-handling branch wires through correctly, but NOT that the real DB index enforces uniqueness. The real proof is:
+
+On dev, after deploy: import a small CSV twice via `POST /api/listings/import`.
+- **First import:** rows created (all `status:'draft'`, `external_source:'csv'`).
+- **Second import (same CSV, same seller):** every row returns `failed` with `reason: 'duplicate'`.
+
+This — not the unit test — is the proof the `listings_external_dedup` index enforces dedup through the real import path. The I-01 `questions.md` also has raw SQL INSERT statements for manual index verification.

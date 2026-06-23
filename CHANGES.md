@@ -129,16 +129,67 @@ Takes `IncomingListing[]` + `sellerId` → `ImportResult { created, failed, warn
 | 13 | accepts_offers → is_negotiable | Boolean mapping |
 
 ### Teeth checks:
-- Test 2 FAILS if duplicate detection is removed (P2002 catch)
+- Test 2 FAILS if the service's duplicate-handling branch is removed (but see note: the mock simulates the constraint — real proof is the dev re-import)
 - Test 8 FAILS if shipping_cost is overwritten by a fixed map
 - Test 10 FAILS if content hash changes (different inputs or algorithm)
 - Test 11 FAILS if status is changed from 'draft'
+- Test 14 FAILS if IDs are not valid v4 UUIDs or if any collision exists
+- Test 15 FAILS if PK-collision P2002 is mislabelled as 'duplicate'
+
+---
+
+## I-02a Amendment — ID generation + honest dedup test
+
+**Amend SHA:** `f9a58d5` (I-02 commit)
+**Date:** 2026-06-23
+
+### Why this amendment exists
+
+1. **Bug — ID generation.** `importService` used `lst_${Date.now()}_${Math.random().toString(36).substr(2,9)}` for listing IDs and the same pattern for attribute IDs. In a 200-row import loop `Date.now()` repeats for many rows, so collision protection rested on `Math.random()`. A collision would throw P2002 on the primary key, which the catch block mislabelled as a generic error. `substr` is also deprecated.
+2. **Toothless test.** Test 2 (dedup) used a hand-written Prisma mock that re-implemented the dedup check in JS. The test proved the mock, not the constraint — it would stay green even if the real DB index was dropped. (Anti-pattern rule 1: never mock the behaviour the test claims to prove.)
+
+### Change A1: UUIDs for all generated IDs
+
+**File:** `src/services/importService.ts`
+
+- Listing IDs: `uuidv4()` (was `lst_${Date.now()}_...`)
+- Attribute IDs: `uuidv4()` (was `attr_${Date.now()}_...`)
+- Import: `import { v4 as uuidv4 } from 'uuid'` — matches the existing repo style (`disputeController.ts`, `s3Service.ts`, etc.)
+- `uuid` is already a dependency — no `package.json` change.
+
+### Change A2: Catch block distinguishes error codes
+
+**File:** `src/services/importService.ts`
+
+- P2002 with `target` including `listings_external_dedup` → `reason: 'duplicate'` (unchanged)
+- P2002 with any other target (e.g. PK collision) → `reason: 'id collision (constraint: <target>) — retry'`
+- Non-P2002 errors → `reason: err.message` (unchanged)
+
+### Change A3: Test 2 relabelled as mock-level
+
+**File:** `src/__tests__/unit/csvImport.test.ts`
+
+- Renamed to `'2. re-run same CSV → service surfaces duplicate reason (mock-level; real index proven on dev)'`
+- Added inline comment stating the Prisma mock simulates the constraint, real proof is the dev re-import in `questions.md`.
+- Test is kept (it still checks the service's duplicate-handling branch wires through correctly) — it just no longer masquerades as constraint proof.
+
+### Change A4: Two new tests
+
+| # | Test | Proves |
+|---|------|--------|
+| 14 | Listing and attribute IDs are distinct valid UUIDs | No Date.now() collision surface; all IDs are v4 UUIDs and globally unique across listings + attributes |
+| 15 | PK-collision P2002 (non-dedup target) → distinct reason, not 'duplicate' | Catch block classifies correctly — this IS unit-testable because the classification logic is the thing under test |
+
+### Change A5: Dev re-import verification step
+
+**File:** `questions.md` — added explicit dev verification: import a small CSV twice via `POST /api/listings/import`, confirm first import creates and second import fails all rows with `reason: 'duplicate'`. This — not the unit test — is the proof the index enforces dedup.
 
 ---
 
 ## Verification
 
 - `npx tsc --noEmit` — clean
-- `npx jest --selectProjects unit` — 359 pass, 2 skip (pre-existing registration.test.ts TS error, unrelated)
-- `package-lock.json` changed (csv-parse added)
+- `npx jest --selectProjects unit` — 361 pass, 2 skip (pre-existing registration.test.ts TS error, unrelated)
+- `package-lock.json` unchanged (uuid already a dependency)
 - No changes to: checkout, payment, escrow, refund, fee, or Stripe code
+- Files touched: `importService.ts`, `csvImport.test.ts`, `CHANGES.md`, `questions.md` — nothing else
