@@ -66,6 +66,7 @@ export const createListingSchema = z.object({
     condition_shaft: z.number().int().min(1).max(5).optional(),
     condition_grip: z.number().int().min(1).max(5).optional(),
     specifications: z.record(z.string(), z.any()).optional(),
+    status: z.enum(['active', 'draft']).optional().default('active'),
   }),
 });
 
@@ -88,7 +89,7 @@ export const updateListingSchema = z.object({
     location: z.string().min(1).max(200).optional(),
     brand: z.string().max(100).optional().nullable(),
     model: z.string().max(100).optional().nullable(),
-    status: z.enum(['active', 'sold', 'reserved', 'removed']).optional(),
+    status: z.enum(['active', 'sold', 'reserved', 'removed', 'draft']).optional(),
     is_negotiable: z.boolean().optional(),
     parcel_size: z.enum(['small', 'medium', 'large', 'extra_large','oversized']).optional(),
     shipping_cost: z.number().min(0).max(100).optional(),

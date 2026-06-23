@@ -220,3 +220,71 @@ Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbo
 - **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
 - **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
 - **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.
+
+---
+
+# Questions — I-01: Import Dedup Fields + Safe Draft Status
+
+**Date:** 2026-06-23
+
+## Partial unique index — manual apply on DEV
+
+The `listings_external_dedup` partial unique index uses a `WHERE` clause, which Prisma cannot express in `@@unique`. It is defined only in the raw SQL migration file:
+
+```
+prisma/migrations/20260623000000_listing_import_dedup/migration.sql
+```
+
+**On DEV:** `prisma db push` will NOT create this index. Apply it manually:
+```bash
+npx prisma db execute --file prisma/migrations/20260623000000_listing_import_dedup/migration.sql
+```
+Or run it directly via psql.
+
+**On PROD:** `prisma migrate deploy` applies the migration folder automatically. **RDS snapshot before prod migrate** (standing rule).
+
+## Migration folder name
+
+`20260623000000_listing_import_dedup` — lexicographically after `20260619000000_fee_snapshot_fields` (the latest existing migration).
+
+## Shared-type follow-ups (do not change in this slice)
+
+The following types enumerate listing statuses and should learn about `'draft'` in a future slice:
+
+1. **Web api-client:** `packages/api-client/src/endpoints/listings.ts:50` — `CreateListingData.status` already includes `'draft'` ✓ (no change needed)
+2. **Web api-client:** `UpdateListingData` extends `Partial<CreateListingData>` — inherits `'draft'` ✓
+3. **Mobile:** No `ListingStatus` type found in the mobile repo. The mobile app doesn't create listings, so no change needed for v1.
+4. **Backend `cartValidation.ts`:** `ListingStatus` type — updated in this slice to include `'draft'` ✓
+
+## Dev behavioural verification — dedup partial index (I-01a)
+
+The unit tests verify the migration SQL text, but cannot prove the partial unique index works without a live DB. After applying the migration on dev, run these four statements to verify:
+
+```sql
+-- 1. First import: succeeds
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Test', 'Test', 'Clubs', 100, 'draft', 'csv', 'x1');
+
+-- 2. Duplicate import (same seller + source + id): MUST fail with unique violation
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Test', 'Test', 'Clubs', 100, 'draft', 'csv', 'x1');
+-- Expected error: duplicate key value violates unique constraint "listings_external_dedup"
+
+-- 3. Manual listing (NULL source): succeeds
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Manual', 'Manual', 'Clubs', 50, 'active', NULL, NULL);
+
+-- 4. Another manual listing (NULL source): also succeeds (partial index doesn't apply)
+INSERT INTO listings (id, seller_id, title, description, category, price, status, external_source, external_id)
+VALUES (gen_random_uuid(), 's1', 'Manual 2', 'Manual 2', 'Clubs', 60, 'active', NULL, NULL);
+```
+
+Statement 2 must fail. Statements 1, 3, 4 must succeed. I-02's re-import test will also cover this behaviourally.
+
+## Security scan result
+
+1. **Non-owner cannot see a draft:** `getListingById` now returns 404 for draft listings when the requester is not the owner (new guard at lines 838-842). All other public queries already filter `status: 'active'`.
+2. **Non-owner cannot buy a draft:** `addToCart` rejects `status !== 'active'` (line 331). All checkout paths filter/reject non-active listings. No checkout/payment code was modified.
+3. **No enum weakening:** The create schema accepts only `['active', 'draft']`. The update schema adds `'draft'` to the existing enum without removing any values.
+4. **No auth path altered:** No changes to `authenticateToken`, JWT handling, or any middleware. The draft visibility check uses the existing `req.user?.id` pattern.
+5. **Listing existence not leaked:** Draft listings return the same 404 response as non-existent listings — no information disclosure.

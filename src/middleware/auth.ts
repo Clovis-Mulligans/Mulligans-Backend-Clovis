@@ -68,6 +68,34 @@ export const authenticateToken = async (
 };
 
 /**
+ * Optional auth: if a valid Bearer token is present, decode and attach req.user.
+ * If the token is missing or invalid, continue without req.user (never 401/403).
+ */
+export const optionalAuth = async (
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token) {
+      const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
+      req.user = {
+        id: payload.userId || payload.id,
+        email: payload.email,
+        username: payload.username || payload.display_name,
+        sub: payload.userId || payload.id,
+      } as any;
+    }
+  } catch {
+    // Invalid/expired token — proceed without req.user
+  }
+  next();
+};
+
+/**
  * Middleware to verify user owns the resource
  */
 export const authorizeOwner = (userIdParam: string = 'userId') => {

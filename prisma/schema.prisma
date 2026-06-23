@@ -103,6 +103,8 @@ model listings {
   shipping_cost       Decimal?             @db.Decimal(10, 2)
   quantity            Int                  @default(1)
   deleted_at          DateTime?
+  external_source     String?
+  external_id         String?
   cart_items          cart_items[]
   conversations       conversations[]
   favorites           favorites[]
