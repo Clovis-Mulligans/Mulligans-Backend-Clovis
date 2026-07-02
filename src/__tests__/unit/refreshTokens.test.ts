@@ -49,10 +49,16 @@ const mockUsers = {
   create: jest.fn(),
   update: jest.fn(),
 };
+const mockTransaction = jest.fn(async (cb: any) => {
+  return cb({
+    refresh_tokens: mockRefreshTokens,
+  });
+});
 jest.mock('../../lib/prisma', () => ({
   prisma: {
     users: mockUsers,
     refresh_tokens: mockRefreshTokens,
+    $transaction: mockTransaction,
   },
 }));
 
@@ -307,6 +313,9 @@ describe('POST /api/auth/refresh', () => {
       users: user,
     });
 
+    // Atomic claim succeeds (count=1)
+    mockRefreshTokens.updateMany.mockResolvedValueOnce({ count: 1 });
+
     const newRow = { id: 'rt_new', token_hash: 'newhash', expires_at: new Date(Date.now() + 86400000 * 90), user_id: user.id };
     mockRefreshTokens.create.mockResolvedValueOnce(newRow);
     mockRefreshTokens.update.mockResolvedValueOnce({});
@@ -316,23 +325,84 @@ describe('POST /api/auth/refresh', () => {
       .send({ refreshToken: rawToken });
 
     expect(res.status).toBe(200);
-    expect(res.body.token).toBeDefined();
+    expect(res.body.accessToken).toBeDefined();
+    expect(res.body.idToken).toBe(res.body.accessToken);
     expect(res.body.refreshToken).toBeDefined();
     expect(res.body.refreshExpiresAt).toBeDefined();
 
     // New access token is valid
-    const decoded = jwt.verify(res.body.token, process.env.JWT_SECRET!) as any;
+    const decoded = jwt.verify(res.body.accessToken, process.env.JWT_SECRET!) as any;
     expect(decoded.userId).toBe(user.id);
     expect(decoded.type).toBe('access');
 
-    // Old row revoked with replaced_by pointing to new row
+    // replaced_by set on old row
     expect(mockRefreshTokens.update).toHaveBeenCalledWith({
       where: { id: 'rt_current' },
-      data: { revoked_at: expect.any(Date), replaced_by: newRow.id },
+      data: { replaced_by: newRow.id },
     });
 
-    // New refresh token created
+    // New refresh token created inside transaction
     expect(mockRefreshTokens.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('atomic claim uses revoked_at: null guard (prevents concurrent rotation race)', async () => {
+    const user = makeUser();
+    const rawToken = crypto.randomBytes(32).toString('hex');
+
+    mockRefreshTokens.findUnique.mockResolvedValueOnce({
+      id: 'rt_race',
+      user_id: user.id,
+      token_hash: hashToken(rawToken),
+      expires_at: new Date(Date.now() + 86400000),
+      revoked_at: null,
+      replaced_by: null,
+      users: user,
+    });
+
+    // Claim succeeds
+    mockRefreshTokens.updateMany.mockResolvedValueOnce({ count: 1 });
+    mockRefreshTokens.create.mockResolvedValueOnce({ id: 'rt_new2', token_hash: 'h', expires_at: new Date(), user_id: user.id });
+    mockRefreshTokens.update.mockResolvedValueOnce({});
+
+    await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: rawToken });
+
+    // The claim updateMany must include revoked_at: null in the where clause
+    const claimCall = mockRefreshTokens.updateMany.mock.calls[0][0];
+    expect(claimCall.where).toEqual({ id: 'rt_race', revoked_at: null });
+    expect(claimCall.data).toEqual({ revoked_at: expect.any(Date) });
+  });
+
+  test('concurrent rotation (claim count=0) → 401 REFRESH_REUSE + all user tokens revoked', async () => {
+    const user = makeUser();
+    const rawToken = crypto.randomBytes(32).toString('hex');
+
+    mockRefreshTokens.findUnique.mockResolvedValueOnce({
+      id: 'rt_lost_race',
+      user_id: user.id,
+      token_hash: hashToken(rawToken),
+      expires_at: new Date(Date.now() + 86400000),
+      revoked_at: null,
+      replaced_by: null,
+      users: user,
+    });
+
+    // Claim fails — another request got there first
+    mockRefreshTokens.updateMany
+      .mockResolvedValueOnce({ count: 0 })   // claim fails
+      .mockResolvedValueOnce({ count: 2 });  // bulk revoke all user tokens
+
+    const res = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: rawToken });
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('REFRESH_REUSE');
+
+    // Second updateMany call revokes all active tokens for the user
+    const bulkRevokeCall = mockRefreshTokens.updateMany.mock.calls[1][0];
+    expect(bulkRevokeCall.where).toEqual({ user_id: user.id, revoked_at: null });
   });
 
   test('banned user → 403 ACCOUNT_BANNED', async () => {

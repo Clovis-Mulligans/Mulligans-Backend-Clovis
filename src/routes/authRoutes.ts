@@ -17,7 +17,8 @@ import {
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from '../services/emailService';
-import { buildTokenResponse, hashToken, signAccessToken, issueRefreshToken, wantsRefresh } from '../lib/tokens';
+import crypto from 'crypto';
+import { buildTokenResponse, hashToken, signAccessToken, wantsRefresh } from '../lib/tokens';
 
 if (!process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET environment variable is not set. Exiting.');
@@ -747,8 +748,6 @@ router.post('/refresh', refreshLimiter, async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Refresh token expired', code: 'REFRESH_INVALID' });
     }
 
-    // Reuse detection: if the token was already revoked, someone replayed it.
-    // Revoke ALL active tokens for this user as a theft countermeasure.
     if (row.revoked_at) {
       await prisma.refresh_tokens.updateMany({
         where: { user_id: row.user_id, revoked_at: null },
@@ -762,16 +761,48 @@ router.post('/refresh', refreshLimiter, async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_BANNED' });
     }
 
-    // Rotate: revoke current, issue new
-    const { rawToken, expiresAt, rowId } = await issueRefreshToken(
-      row.user_id,
-      (req.headers['user-agent'] as string) || null,
-    );
+    // Atomic rotation: claim-the-row inside a transaction.
+    // The conditional updateMany (revoked_at: null) prevents concurrent
+    // requests from both succeeding — only one gets count=1.
+    const rotation = await prisma.$transaction(async (tx: any) => {
+      const claimed = await tx.refresh_tokens.updateMany({
+        where: { id: row.id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
 
-    await prisma.refresh_tokens.update({
-      where: { id: row.id },
-      data: { revoked_at: new Date(), replaced_by: rowId },
+      if (claimed.count === 0) {
+        await tx.refresh_tokens.updateMany({
+          where: { user_id: row.user_id, revoked_at: null },
+          data: { revoked_at: new Date() },
+        });
+        return { reuse: true as const };
+      }
+
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const newTokenHash = hashToken(rawToken);
+      const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+
+      const newRow = await tx.refresh_tokens.create({
+        data: {
+          user_id: row.user_id,
+          token_hash: newTokenHash,
+          expires_at: expiresAt,
+          user_agent: (req.headers['user-agent'] as string) || null,
+        },
+      });
+
+      await tx.refresh_tokens.update({
+        where: { id: row.id },
+        data: { replaced_by: newRow.id },
+      });
+
+      return { reuse: false as const, rawToken, expiresAt };
     });
+
+    if (rotation.reuse) {
+      console.log(`[AUTH] REFRESH_REUSE (race) user=${row.user_id} token_id=${row.id}`);
+      return res.status(401).json({ error: 'Refresh token reuse detected — all sessions revoked', code: 'REFRESH_REUSE' });
+    }
 
     const accessToken = signAccessToken(
       { id: row.users.id, email: row.users.email, display_name: row.users.display_name },
@@ -779,9 +810,10 @@ router.post('/refresh', refreshLimiter, async (req: Request, res: Response) => {
     );
 
     res.json({
-      token: accessToken,
-      refreshToken: rawToken,
-      refreshExpiresAt: expiresAt.toISOString(),
+      accessToken,
+      idToken: accessToken,
+      refreshToken: rotation.rawToken,
+      refreshExpiresAt: rotation.expiresAt.toISOString(),
     });
   } catch (error: any) {
     console.error('❌ Refresh token error:', error);
