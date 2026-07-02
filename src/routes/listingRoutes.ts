@@ -54,8 +54,11 @@ router.post(
   ListingController.uploadListingImage
 );
 
+router.put('/publish-bulk', authenticateToken, ListingController.publishListingsBulk);
+
 router.put('/:id/off-sale', authenticateToken, ListingController.markOffSale);
 router.put('/:id/relist', authenticateToken, ListingController.relistListing);
+router.put('/:id/publish', authenticateToken, ListingController.publishListing);
 
 router.put('/:id', authenticateToken, ListingController.updateListing);
 

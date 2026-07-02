@@ -5,6 +5,7 @@ import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
 import { expireOffersForSoldItem } from '../jobs/offerJobs';
+import { sellerIsPayoutReady } from '../lib/payoutReadiness';
 
 
 // ✅ SIZE VARIANT: Helper to calculate total quantity from size quantities
@@ -1376,13 +1377,8 @@ if (keyword) {
         return;
       }
 
-      // Same gate as escrowService.sellerCanReceivePayout — seller must have active Stripe Connect
-      const seller = await prisma.users.findUnique({
-        where: { id: userId },
-        select: { stripe_connect_id: true, stripe_connect_status: true },
-      });
-
-      if (!seller?.stripe_connect_id || seller.stripe_connect_status !== 'active') {
+      const payoutCheck = await sellerIsPayoutReady(userId);
+      if (!payoutCheck.ready) {
         res.status(409).json({
           error: 'Cannot relist: your Stripe payout account must be active. Please complete Stripe Connect setup.',
         });
@@ -1399,6 +1395,149 @@ if (keyword) {
     } catch (error) {
       console.error('Relist listing error:', error);
       res.status(500).json({ error: 'Failed to relist listing' });
+    }
+  }
+
+  static validateListingCompleteness(listing: any, imageCount: number): string | null {
+    if (!listing.title || listing.title.length < 3) return 'title is required (min 3 characters)';
+    if (!listing.description || listing.description.length < 10) return 'description is required (min 10 characters)';
+    if (listing.price == null || parseFloat(listing.price) < 0.50) return 'price must be at least £0.50';
+    if (!listing.category) return 'category is required';
+    if (!listing.subcategory) return 'subcategory is required';
+    if (!listing.location) return 'location is required';
+    if (!listing.parcel_size) return 'parcel_size is required';
+    if (listing.shipping_cost == null) return 'shipping_cost is required';
+    if (listing.quantity == null || listing.quantity < 1) return 'quantity must be at least 1';
+    if (imageCount < 1) return 'at least 1 image is required';
+    return null;
+  }
+
+  static async publishListing(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user!.id;
+
+      const listing = await prisma.listings.findUnique({
+        where: { id },
+        include: { images: true },
+      });
+
+      if (!listing || listing.status === 'deleted') {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      if (listing.seller_id !== userId) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      if (listing.status !== 'draft') {
+        res.status(409).json({
+          error: `Cannot publish from "${listing.status}" status. Only draft listings can be published.`,
+        });
+        return;
+      }
+
+      const payoutCheck = await sellerIsPayoutReady(userId);
+      if (!payoutCheck.ready) {
+        res.status(409).json({
+          error: 'Cannot publish: your Stripe payout account must be active. Please complete Stripe Connect setup.',
+        });
+        return;
+      }
+
+      const completenessError = ListingController.validateListingCompleteness(listing, listing.images.length);
+      if (completenessError) {
+        res.status(409).json({ error: `Cannot publish: ${completenessError}` });
+        return;
+      }
+
+      const updated = await prisma.listings.update({
+        where: { id },
+        data: { status: 'active', updated_at: new Date() },
+        include: { images: { orderBy: PRIMARY_IMAGE_ORDER } },
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error('Publish listing error:', error);
+      res.status(500).json({ error: 'Failed to publish listing' });
+    }
+  }
+
+  static async publishListingsBulk(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.id;
+      const { listing_ids } = req.body;
+
+      if (!listing_ids || !Array.isArray(listing_ids) || listing_ids.length === 0) {
+        res.status(400).json({ error: 'listing_ids must be a non-empty array' });
+        return;
+      }
+
+      if (listing_ids.length > 500) {
+        res.status(400).json({ error: 'Maximum 500 listings per batch' });
+        return;
+      }
+
+      const payoutCheck = await sellerIsPayoutReady(userId);
+      if (!payoutCheck.ready) {
+        res.json({
+          published: [],
+          skipped: listing_ids.map((id: string) => ({ id, reason: 'payout_not_ready' })),
+        });
+        return;
+      }
+
+      const listings = await prisma.listings.findMany({
+        where: { id: { in: listing_ids } },
+        include: { images: true },
+      });
+
+      const listingMap = new Map(listings.map((l) => [l.id, l]));
+
+      const published: string[] = [];
+      const skipped: { id: string; reason: string }[] = [];
+
+      for (const id of listing_ids) {
+        const listing = listingMap.get(id);
+
+        if (!listing) {
+          skipped.push({ id, reason: 'not_found' });
+          continue;
+        }
+
+        if (listing.seller_id !== userId) {
+          res.status(403).json({ error: 'You do not own all of these listings' });
+          return;
+        }
+
+        if (listing.status !== 'draft') {
+          skipped.push({ id, reason: 'not_draft' });
+          continue;
+        }
+
+        const completenessError = ListingController.validateListingCompleteness(listing, listing.images.length);
+        if (completenessError) {
+          skipped.push({ id, reason: `invalid: ${completenessError}` });
+          continue;
+        }
+
+        published.push(id);
+      }
+
+      if (published.length > 0) {
+        await prisma.listings.updateMany({
+          where: { id: { in: published } },
+          data: { status: 'active', updated_at: new Date() },
+        });
+      }
+
+      res.json({ published, skipped });
+    } catch (error) {
+      console.error('Bulk publish listings error:', error);
+      res.status(500).json({ error: 'Failed to bulk publish listings' });
     }
   }
 

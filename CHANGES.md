@@ -1,44 +1,38 @@
-# PRO-IMPORT-I-04: `off_sale` status primitive + "mark sold elsewhere"
+# PRO-IMPORT-I-02b: Publish draft → active (Stripe-gated) + payout-readiness extraction
 
-Branch: `task/pro-import-i04-off-sale` from `clovis/pro-seller-foundation` at `1fd4973`
+Branch: `task/pro-import-i02b-publish` from `clovis/pro-seller-foundation` at `42276ba`
 
 ## Investigation Findings
 
-### Where listing status values live
+### Listing completeness rule-set (mirrors create-listing Zod schema)
 
-| Location | Values | Type |
+The `createListingSchema` (`validation.ts:41-71`) requires these fields at creation time:
+
+| Field | Requirement | Publish check |
 |---|---|---|
-| Prisma schema (`prisma/schema.prisma:96`) | `status String @default("active")` | Plain string — no migration needed |
-| Zod create schema (`validation.ts:69`) | `['active', 'draft']` | Not modified (off_sale is not a create-time status) |
-| Zod update schema (`validation.ts:92`) | `['active', 'sold', 'reserved', 'removed', 'draft']` | **Added `off_sale`** |
+| `title` | string, 3-200 chars | Required, min 3 |
+| `description` | string, 10-5000 chars | Required, min 10 |
+| `price` | number, 0.50-50000 | Required, min £0.50 |
+| `category` | enum (8 values) | Required, non-null |
+| `subcategory` | string, 1-100 chars | Required, non-null |
+| `location` | string, 1-200 chars | Required, non-null |
+| `parcel_size` | enum (5 values) | Required, non-null |
+| `shipping_cost` | number, 0-100 | Required, non-null |
+| `quantity` | int, 1-999 (optional, defaults 1) | Required, min 1 |
+| `images` | Not in Zod (separate upload) | **Required: ≥1 image** |
 
-### Status reference sites — fail-closed analysis
+**Images note:** Normal creation (`POST /api/listings`) does not require images in the request body — they're uploaded separately via `POST /:id/images`. However, listings created via normal flow always have images attached by the mobile/web UI before going live. The publish endpoint enforces ≥1 image at the API level. Imported drafts (I-02) land with zero images — they stay as drafts until images are attached (I-03 will handle image import).
 
-Every buyer-facing query filters on `status: 'active'`, meaning `off_sale` is automatically excluded without code changes:
+### Payout-readiness extraction
 
-| Site | File:line | Filter | Result |
-|---|---|---|---|
-| Search/browse | `searchController.ts:356,466,713,722` | `status: 'active'` | Excluded |
-| Featured listings | `listingController.ts:58` | `status: 'active'` | Excluded |
-| Seller public listings | `listingController.ts:925` | `status: 'active'` | Excluded |
-| Cart add validation | `cartValidation.ts:68,134` | `status === 'active'` | Blocked |
-| Checkout (Stripe) | `stripeController.ts:137` | `status !== 'active'` → 400 | Blocked |
-| Checkout (native) | `nativePaymentController.ts:133` | `status !== 'active'` → 400 | Blocked |
-| Cart checkout | `cartCheckoutController.ts:153` | filters non-active | Excluded |
-| Cart controller | `cartController.ts:331,581,801` | `status === 'active'` | Blocked |
-| Offer creation | `offerController.ts:147` | `status !== 'active'` → blocked | Blocked |
-| getListingById | `listingController.ts:833,839` | `deleted` → 404; `draft` → 404 to non-owners | **Added `off_sale` → 404 to non-owners** |
+The Stripe-Connect payout gate was previously:
+- **escrowService.ts:151** — private `sellerCanReceivePayout(seller)` (takes a seller object, synchronous)
+- **listingController.ts (I-04)** — inline check in `relistListing` (comment: "Same gate as escrowService.sellerCanReceivePayout")
 
-### Side-effect patterns reused
+Extracted to: **`src/lib/payoutReadiness.ts`** — `sellerIsPayoutReady(userId)` (async, queries DB, returns `{ready, reason?}`).
 
-- **Offer expiry:** `expireOffersForSoldItem(listingId)` at `src/jobs/offerJobs.ts:387` — expires all offers with status in `['PENDING', 'ACCEPTED', 'COUNTERED', 'COUNTER_ACCEPTED']`, batch-deletes associated offer-linked cart items, sends notifications to affected buyers.
-- **Cart cleanup:** `prisma.cart_items.deleteMany({ where: { listing_id } })` — removes all remaining direct cart items (non-offer-linked). Called after `expireOffersForSoldItem` to catch both.
-- **Active order guard:** `ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered']` at `listingController.ts:1137` — reused in `markOffSale`.
-- **Stripe payout gate:** `sellerCanReceivePayout()` at `escrowService.ts:151` — `!!stripe_connect_id && stripe_connect_status === 'active'`. Same logic inlined in `relistListing` (function is private to escrowService, documented for future extraction).
-
-### `reserved` status decision
-
-`reserved` exists only in the Zod update enum — no code path ever sets it. The active-order guard independently blocks listings with active orders. Decision: allow `reserved` → `off_sale` transition (harmless given guard), but it will never fire in practice. Documented, no risk.
+- `relistListing` refactored to use the shared util. Behaviour identical — same Stripe fields checked, same 409 message.
+- `escrowService.sellerCanReceivePayout` left untouched — it's a private synchronous helper that takes an already-fetched seller object. Different calling convention (sync vs async, object vs userId). Consolidation would change escrow internals with no benefit. Noted for future cleanup.
 
 ## Implementation
 
@@ -46,64 +40,78 @@ Every buyer-facing query filters on `status: 'active'`, meaning `off_sale` is au
 
 | File | Change |
 |---|---|
-| `src/middleware/validation.ts` | Added `'off_sale'` to update schema Zod enum |
-| `src/controllers/listingController.ts` | Added `import { expireOffersForSoldItem }`, added `off_sale` visibility guard in `getListingById`, added `markOffSale` and `relistListing` static methods |
-| `src/routes/listingRoutes.ts` | Added `PUT /:id/off-sale` and `PUT /:id/relist` routes (before generic `PUT /:id`) |
-| `src/__tests__/unit/offSale.test.ts` | 24 tests across 3 describe blocks |
+| `src/lib/payoutReadiness.ts` | **New** — shared `sellerIsPayoutReady(userId)` util |
+| `src/controllers/listingController.ts` | Added `import { sellerIsPayoutReady }`, refactored `relistListing` to use it, added `validateListingCompleteness`, `publishListing`, `publishListingsBulk` |
+| `src/routes/listingRoutes.ts` | Added `PUT /publish-bulk` (before `/:id` routes), `PUT /:id/publish` |
+| `src/__tests__/unit/publishListing.test.ts` | 21 tests across 3 describe blocks |
 
 ### Status transition table
 
-| From | To | Endpoint | Guard | Side-effects |
+| From | To | Endpoint | Gates | Side-effects |
 |---|---|---|---|---|
-| `active` | `off_sale` | `PUT /:id/off-sale` | Owner + no active orders | Expire offers, remove all cart items |
-| `reserved` | `off_sale` | `PUT /:id/off-sale` | Owner + no active orders | Expire offers, remove all cart items |
-| `off_sale` | `active` | `PUT /:id/relist` | Owner + Stripe Connect active | None |
-| `draft` | `off_sale` | — | 409 | — |
-| `sold` | `off_sale` | — | 409 | — |
-| `deleted` | `off_sale` | — | 404 | — |
-| `removed` | `off_sale` | — | 409 | — |
-| `active` | `off_sale` (with active order) | — | 409 | — |
-| `off_sale` | `active` (no Stripe) | — | 409 | — |
+| `draft` | `active` | `PUT /:id/publish` | Owner + payout-ready + listing complete | None |
+| `draft` (bulk) | `active` | `PUT /publish-bulk` | Owner + payout-ready (once) + per-listing completeness | None |
+| `active`/`sold`/`off_sale`/`removed` | — | `PUT /:id/publish` | 409 | — |
+| `deleted` | — | `PUT /:id/publish` | 404 | — |
 
 ### Endpoint spec
 
-**`PUT /api/listings/:id/off-sale`** (auth: owner only)
+**`PUT /api/listings/:id/publish`** (auth: owner only)
 - 200 + updated listing on success
 - 404 if not found, deleted, or not owner
-- 409 if wrong status or active order (with descriptive message + `order_status` field)
+- 409 if not `draft`, not payout-ready, or listing incomplete (with specific field in error message)
 
-**`PUT /api/listings/:id/relist`** (auth: owner only)
-- 200 + updated listing on success
-- 404 if not found, deleted, or not owner
-- 409 if not `off_sale` or Stripe not active
+**`PUT /api/listings/publish-bulk`** (auth: owner only)
+- 200 + `{ published: string[], skipped: [{id, reason}] }` — always 200 (partial success)
+- Payout-readiness checked once per request; if fails, all IDs returned as `skipped` with reason `payout_not_ready`
+- Per-listing: `not_found`, `not_draft`, `invalid: <field>` reasons
+- 403 if any listing belongs to a different seller
+- 400 if `listing_ids` empty or >500
+- Cap: 500 listings per batch
+
+### Listing completeness validation
+
+`validateListingCompleteness(listing, imageCount)` checks:
+1. `title` present, ≥3 chars
+2. `description` present, ≥10 chars
+3. `price` ≥ £0.50
+4. `category` present
+5. `subcategory` present
+6. `location` present
+7. `parcel_size` present
+8. `shipping_cost` present
+9. `quantity` ≥ 1
+10. `imageCount` ≥ 1
+
+Returns `null` if valid, or a human-readable error string naming the failing field.
 
 ## Tests — teeth-checks
 
 | # | Test | What it proves | Teeth-check |
 |---|---|---|---|
-| 1 | active → off_sale happy path | Status changes, offers expired, cart cleared | Remove `expireOffersForSoldItem` call → test fails (offers not expired) |
-| 2 | reserved → off_sale | Transition allowed from reserved | Change guard to exclude reserved → test fails |
-| 3 | 409 with active order | Active order blocks off-sale | Remove order check → test fails (200 instead of 409) |
-| 4 | non-owner → 404 | Ownership enforced | Remove seller_id check → test fails |
-| 5 | no auth → 401 | Auth middleware works | Remove `authenticateToken` from route → test fails |
-| 6-8 | draft/sold/removed → 409 | Invalid transitions blocked | Widen status guard → tests fail |
-| 9 | deleted → 404 | Deleted listings invisible | Remove deleted check → test fails |
-| 10 | nonexistent → 404 | Missing listing handled | N/A (framework) |
-| 11 | off_sale → active (Stripe active) | Relist happy path | Remove status update → test fails |
-| 12 | 409 when Stripe not active | Stripe gate enforced | Remove Stripe check → test fails (200 instead of 409) |
-| 13 | 409 when Stripe pending | Pending != active | Relax check to truthy → test fails |
-| 14-17 | active/sold/draft/removed → relist 409 | Only off_sale can relist | Widen status guard → tests fail |
-| 18 | non-owner relist → 404 | Ownership enforced | Remove seller_id check → test fails |
-| 19 | no auth relist → 401 | Auth middleware works | Remove `authenticateToken` → test fails |
-| 20 | deleted relist → 404 | Deleted invisible | Remove deleted check → test fails |
-| 21 | owner sees own off_sale | Visibility correct for owner | Remove off_sale from visibility guard → always 404 |
-| 22 | non-owner → 404 for off_sale | Hidden from non-owners | Remove off_sale from guard → non-owner sees it |
-| 23 | anonymous → 404 for off_sale | Hidden from anonymous | Same as above |
-| 24 | search filters status=active | Fail-closed for search | N/A (existing behaviour, verified) |
+| 1 | publish happy path: draft → active | Complete draft publishes | Remove status update → test fails |
+| 2 | 409 not payout-ready | Stripe gate enforced | Remove payout check → test fails (200) |
+| 3 | 409 no images | Image requirement enforced | Remove image check → test fails (200) |
+| 4 | 409 quantity 0 | Quantity gate enforced | Remove quantity check → test fails |
+| 5 | 409 missing category | Required field enforced | Remove category check → test fails |
+| 6 | 409 price below minimum | Price floor enforced | Remove price check → test fails |
+| 7-10 | active/sold/off_sale/removed → 409 | Only drafts publishable | Widen status guard → tests fail |
+| 11 | non-owner → 404 | Ownership enforced | Remove seller_id check → test fails |
+| 12 | no auth → 401 | Auth middleware works | Remove authenticateToken → test fails |
+| 13 | deleted → 404 | Deleted invisible | Remove deleted check → test fails |
+| 14 | relist still works (payout-ready) | Extraction didn't break relist | N/A (regression) |
+| 15 | relist still gates (not payout-ready) | Extraction preserved gate | Break shared util → test fails |
+| 16 | bulk: mixed batch | Correct published/skipped split | Remove per-listing validation → wrong split |
+| 17 | bulk: payout short-circuit | All skipped when not payout-ready | Remove payout check → test fails |
+| 18 | bulk: foreign ids → 403 | Ownership enforced across batch | Remove ownership check → test fails |
+| 19 | bulk: empty array → 400 | Input validation | Remove array check → test fails |
+| 20 | bulk: no auth → 401 | Auth middleware | Remove authenticateToken → test fails |
+| 21 | bulk: all valid → all published | Happy path for batch | Remove updateMany → test fails |
 
 ## Deploy notes
 
-1. No database migration required — `status` is a plain String field in Prisma
-2. No `npx prisma generate` needed — no schema.prisma changes
+1. No database migration — no schema changes
+2. No `npx prisma generate` needed
 3. Backend deploy: standard `npm run build` + PM2 restart
-4. Backwards-compatible: existing clients won't encounter `off_sale` unless they use the new endpoints
+4. New file: `src/lib/payoutReadiness.ts` — ensure it's included in build output
+5. Backwards-compatible: new endpoints only, no changes to existing API surface
