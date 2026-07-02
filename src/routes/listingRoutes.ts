@@ -54,6 +54,9 @@ router.post(
   ListingController.uploadListingImage
 );
 
+router.put('/:id/off-sale', authenticateToken, ListingController.markOffSale);
+router.put('/:id/relist', authenticateToken, ListingController.relistListing);
+
 router.put('/:id', authenticateToken, ListingController.updateListing);
 
 router.patch('/bulk', authenticateToken, ListingController.bulkUpdateListings);

@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { S3Service } from '../services/s3Service';
+import { expireOffersForSoldItem } from '../jobs/offerJobs';
 
 
 // ✅ SIZE VARIANT: Helper to calculate total quantity from size quantities
@@ -836,7 +837,7 @@ if (keyword) {
       }
 
       const viewerId = req.user?.id;
-      if (listing.status === 'draft' && listing.seller_id !== viewerId) {
+      if ((listing.status === 'draft' || listing.status === 'off_sale') && listing.seller_id !== viewerId) {
         res.status(404).json({ error: 'Listing not found' });
         return;
       }
@@ -1279,6 +1280,125 @@ if (keyword) {
     } catch (error) {
       console.error('❌ Track view error:', error);
       res.status(500).json({ error: 'Failed to track view' });
+    }
+  }
+
+  static async markOffSale(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user!.id;
+
+      const listing = await prisma.listings.findUnique({
+        where: { id },
+      });
+
+      if (!listing || listing.status === 'deleted') {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      if (listing.seller_id !== userId) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      if (listing.status !== 'active' && listing.status !== 'reserved') {
+        res.status(409).json({
+          error: `Cannot mark as off-sale from "${listing.status}" status. Only active listings can be marked off-sale.`,
+        });
+        return;
+      }
+
+      const ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered'];
+      const activeOrder = await prisma.orders.findFirst({
+        where: {
+          listing_id: id,
+          status: { in: ACTIVE_ORDER_STATUSES },
+        },
+        select: { id: true, status: true },
+      });
+
+      if (activeOrder) {
+        let message = 'This listing has an active order and cannot be taken off sale.';
+        if (['pending', 'paid', 'to_ship'].includes(activeOrder.status)) {
+          message = 'This listing has an order waiting to be shipped. Please complete the order first.';
+        } else if (['shipped', 'in_transit'].includes(activeOrder.status)) {
+          message = 'This listing has an order in transit. Please wait until delivery.';
+        } else if (activeOrder.status === 'delivered') {
+          message = 'This listing has a recently delivered order. Please wait until the transaction completes.';
+        }
+        res.status(409).json({ error: message, order_status: activeOrder.status });
+        return;
+      }
+
+      await expireOffersForSoldItem(id);
+
+      await prisma.cart_items.deleteMany({
+        where: { listing_id: id },
+      });
+
+      const updated = await prisma.listings.update({
+        where: { id },
+        data: { status: 'off_sale', updated_at: new Date() },
+        include: { images: { orderBy: PRIMARY_IMAGE_ORDER } },
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error('Mark off-sale error:', error);
+      res.status(500).json({ error: 'Failed to mark listing as off-sale' });
+    }
+  }
+
+  static async relistListing(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user!.id;
+
+      const listing = await prisma.listings.findUnique({
+        where: { id },
+      });
+
+      if (!listing || listing.status === 'deleted') {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      if (listing.seller_id !== userId) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+      }
+
+      if (listing.status !== 'off_sale') {
+        res.status(409).json({
+          error: `Cannot relist from "${listing.status}" status. Only off-sale listings can be relisted.`,
+        });
+        return;
+      }
+
+      // Same gate as escrowService.sellerCanReceivePayout — seller must have active Stripe Connect
+      const seller = await prisma.users.findUnique({
+        where: { id: userId },
+        select: { stripe_connect_id: true, stripe_connect_status: true },
+      });
+
+      if (!seller?.stripe_connect_id || seller.stripe_connect_status !== 'active') {
+        res.status(409).json({
+          error: 'Cannot relist: your Stripe payout account must be active. Please complete Stripe Connect setup.',
+        });
+        return;
+      }
+
+      const updated = await prisma.listings.update({
+        where: { id },
+        data: { status: 'active', updated_at: new Date() },
+        include: { images: { orderBy: PRIMARY_IMAGE_ORDER } },
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error('Relist listing error:', error);
+      res.status(500).json({ error: 'Failed to relist listing' });
     }
   }
 

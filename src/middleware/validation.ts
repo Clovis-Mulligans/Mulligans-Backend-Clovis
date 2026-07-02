@@ -89,7 +89,7 @@ export const updateListingSchema = z.object({
     location: z.string().min(1).max(200).optional(),
     brand: z.string().max(100).optional().nullable(),
     model: z.string().max(100).optional().nullable(),
-    status: z.enum(['active', 'sold', 'reserved', 'removed', 'draft']).optional(),
+    status: z.enum(['active', 'sold', 'reserved', 'removed', 'draft', 'off_sale']).optional(),
     is_negotiable: z.boolean().optional(),
     parcel_size: z.enum(['small', 'medium', 'large', 'extra_large','oversized']).optional(),
     shipping_cost: z.number().min(0).max(100).optional(),
