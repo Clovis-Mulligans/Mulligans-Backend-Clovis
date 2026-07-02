@@ -317,6 +317,7 @@ model users {
   fitting_profile                          fitting_profiles?
   chip_conversations                       chip_conversations[]
   pro_store_applications                   pro_store_applications[]
+  refresh_tokens                           refresh_tokens[]
 }
 
 model notifications {
@@ -720,4 +721,19 @@ model pro_store_applications {
   @@index([status])
   @@index([created_at])
   @@map("pro_store_applications")
+}
+
+model refresh_tokens {
+  id           String    @id @default(uuid())
+  user_id      String
+  token_hash   String    @unique
+  expires_at   DateTime
+  revoked_at   DateTime?
+  replaced_by  String?
+  user_agent   String?
+  created_at   DateTime  @default(now())
+  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([expires_at])
 }
