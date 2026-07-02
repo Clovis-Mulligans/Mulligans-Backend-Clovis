@@ -6,10 +6,18 @@ let uuidCounter = 0;
 jest.mock('uuid', () => ({
   v4: () => {
     uuidCounter++;
-    // Generate a valid v4 UUID format with a unique counter
     const hex = uuidCounter.toString(16).padStart(12, '0');
     return `00000000-0000-4000-a000-${hex}`;
   },
+}));
+
+const mockExpireOffers = jest.fn().mockResolvedValue(0);
+jest.mock('../../jobs/offerJobs', () => ({
+  expireOffersForSoldItem: (...args: any[]) => mockExpireOffers(...args),
+}));
+
+jest.mock('../../lib/payoutReadiness', () => ({
+  sellerIsPayoutReady: jest.fn().mockResolvedValue({ ready: false, reason: 'payout_not_ready' }),
 }));
 
 import { importListings } from '../../services/importService';
@@ -21,9 +29,19 @@ const createdAttributes: any[] = [];
 jest.mock('../../lib/prisma', () => ({
   prisma: {
     listings: {
+      findFirst: jest.fn(({ where }: any) => {
+        const match = createdListings.find(
+          (l: any) => l.seller_id === where.seller_id &&
+               l.external_source === where.external_source &&
+               l.external_id === where.external_id &&
+               l.external_source !== null,
+        );
+        if (match) return Promise.resolve({ ...match, images: [] });
+        return Promise.resolve(null);
+      }),
       create: jest.fn(({ data }: any) => {
         const dup = createdListings.find(
-          l => l.seller_id === data.seller_id &&
+          (l: any) => l.seller_id === data.seller_id &&
                l.external_source === data.external_source &&
                l.external_id === data.external_id &&
                l.external_source !== null,
@@ -37,12 +55,27 @@ jest.mock('../../lib/prisma', () => ({
         createdListings.push(data);
         return Promise.resolve(data);
       }),
+      update: jest.fn(({ where, data }: any) => {
+        const idx = createdListings.findIndex((l: any) => l.id === where.id);
+        if (idx >= 0) {
+          createdListings[idx] = { ...createdListings[idx], ...data };
+          return Promise.resolve(createdListings[idx]);
+        }
+        return Promise.resolve(null);
+      }),
+    },
+    orders: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    cart_items: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     listing_attributes: {
       createMany: jest.fn(({ data }: any) => {
         createdAttributes.push(...data);
         return Promise.resolve({ count: data.length });
       }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   },
 }));
@@ -113,12 +146,9 @@ describe('csvAdapter + importService', () => {
     }
   });
 
-  // ── Test 2: Re-run same CSV → duplicates (mock-level) ──────────────
-  // The Prisma mock simulates the dedup P2002. This tests the service's
-  // duplicate-handling branch, NOT the real DB index. The real proof is
-  // a dev re-import (see questions.md "Dev re-import verification").
+  // ── Test 2: Re-run same CSV → upsert (update, not reject) ──────────
 
-  test('2. re-run same CSV → service surfaces duplicate reason (mock-level; real index proven on dev)', async () => {
+  test('2. re-run same CSV → rows updated (not rejected as duplicate)', async () => {
     const buf = csvBuffer(HEADERS, validRow({ sku: 'SKU-DUP' }));
     const parsed = parseCsv(buf);
     await importListings(parsed.rows, SELLER_ID, parsed.failed, parsed.warnings);
@@ -127,8 +157,9 @@ describe('csvAdapter + importService', () => {
     const parsed2 = parseCsv(buf);
     const result2 = await importListings(parsed2.rows, SELLER_ID, parsed2.failed, parsed2.warnings);
     expect(result2.created).toHaveLength(0);
-    expect(result2.failed).toHaveLength(1);
-    expect(result2.failed[0].reason).toBe('duplicate');
+    expect(result2.updated).toHaveLength(1);
+    expect(result2.updated[0].external_id).toBe('SKU-DUP');
+    expect(result2.failed).toHaveLength(0);
   });
 
   // ── Test 3: Unknown category → row fails, others succeed ─────────────
@@ -265,8 +296,6 @@ describe('csvAdapter + importService', () => {
     const result = await importListings(rows, SELLER_ID, failed, warnings);
     expect(result.created).toHaveLength(1);
     expect(createdListings[0].status).toBe('draft');
-    // I-01's getAllListings already filters status:'active', so drafts are excluded.
-    // The draftVisibility test suite (I-01a) proves this end-to-end.
   });
 
   // ── Additional: specs assembled correctly ─────────────────────────────
@@ -306,13 +335,13 @@ describe('csvAdapter + importService', () => {
 
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-    const listingIds = createdListings.map(l => l.id);
+    const listingIds = createdListings.map((l: any) => l.id);
     for (const id of listingIds) {
       expect(id).toMatch(uuidRe);
     }
     expect(new Set(listingIds).size).toBe(listingIds.length);
 
-    const attrIds = createdAttributes.map(a => a.id);
+    const attrIds = createdAttributes.map((a: any) => a.id);
     for (const id of attrIds) {
       expect(id).toMatch(uuidRe);
     }
@@ -326,7 +355,6 @@ describe('csvAdapter + importService', () => {
     const { prisma } = require('../../lib/prisma');
     const originalCreate = prisma.listings.create;
 
-    // Simulate a PK collision on the first create call
     prisma.listings.create = jest.fn().mockRejectedValueOnce(
       Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), {
         code: 'P2002',
@@ -343,7 +371,18 @@ describe('csvAdapter + importService', () => {
     expect(result.failed[0].reason).toContain('id collision');
     expect(result.failed[0].reason).toContain('listings_pkey');
 
-    // Restore
     prisma.listings.create = originalCreate;
+  });
+
+  // ── Test 16: Create path stamps qty_at_last_import + last_imported_at ─
+
+  test('16. create path stamps anchors: qty_at_last_import and last_imported_at', async () => {
+    const buf = csvBuffer(HEADERS, validRow({ sku: 'ANCHOR-CREATE', quantity: '5' }));
+    const { rows, failed, warnings } = parseCsv(buf);
+    const result = await importListings(rows, SELLER_ID, failed, warnings);
+    expect(result.created).toHaveLength(1);
+
+    expect(createdListings[0].qty_at_last_import).toBe(5);
+    expect(createdListings[0].last_imported_at).toBeInstanceOf(Date);
   });
 });

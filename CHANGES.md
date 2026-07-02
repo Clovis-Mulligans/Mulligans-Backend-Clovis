@@ -1,38 +1,94 @@
-# PRO-IMPORT-I-02b: Publish draft → active (Stripe-gated) + payout-readiness extraction
+# PRO-IMPORT-I-06: Re-import upsert (SKU sync with delta-method quantity reconciliation)
 
-Branch: `task/pro-import-i02b-publish` from `clovis/pro-seller-foundation` at `42276ba`
+Branch: `task/pro-import-i06-upsert` from `clovis/pro-seller-foundation` at `4160e0d`
 
-## Investigation Findings
+## I-02c Findings Followed
 
-### Listing completeness rule-set (mirrors create-listing Zod schema)
+- Delta-method formula from `PRO-IMPORT-I-02c-MAP.md` section 1.5
+- Active-order guard pattern from section 3 (reuse `ACTIVE_ORDER_STATUSES`)
+- Price snapshot safety analysis from section 2 (Stripe locks amount at session creation — no new risk)
+- Dedup-index lookup from section 4.3 (`findFirst` by seller+source+external_id)
+- Full field re-sync scope from sections 6.1/6.2
 
-The `createListingSchema` (`validation.ts:41-71`) requires these fields at creation time:
+## Reconciliation Logic
 
-| Field | Requirement | Publish check |
-|---|---|---|
-| `title` | string, 3-200 chars | Required, min 3 |
-| `description` | string, 10-5000 chars | Required, min 10 |
-| `price` | number, 0.50-50000 | Required, min £0.50 |
-| `category` | enum (8 values) | Required, non-null |
-| `subcategory` | string, 1-100 chars | Required, non-null |
-| `location` | string, 1-200 chars | Required, non-null |
-| `parcel_size` | enum (5 values) | Required, non-null |
-| `shipping_cost` | number, 0-100 | Required, non-null |
-| `quantity` | int, 1-999 (optional, defaults 1) | Required, min 1 |
-| `images` | Not in Zod (separate upload) | **Required: ≥1 image** |
+### Delta method (from I-02c, proven correct)
 
-**Images note:** Normal creation (`POST /api/listings`) does not require images in the request body — they're uploaded separately via `POST /:id/images`. However, listings created via normal flow always have images attached by the mobile/web UI before going live. The publish endpoint enforces ≥1 image at the API level. Imported drafts (I-02) land with zero images — they stay as drafts until images are attached (I-03 will handle image import).
+```
+units_consumed = qty_at_last_import - current_listing.quantity
+new_quantity   = MAX(0, csv_qty - units_consumed)
+```
 
-### Payout-readiness extraction
+**Worked example:** Import qty 5 -> 2 sell -> 1 returned (qty now 4) -> CSV says 4
+- `units_consumed = 5 - 4 = 1`
+- `new_quantity = MAX(0, 4 - 1) = 3`
 
-The Stripe-Connect payout gate was previously:
-- **escrowService.ts:151** — private `sellerCanReceivePayout(seller)` (takes a seller object, synchronous)
-- **listingController.ts (I-04)** — inline check in `relistListing` (comment: "Same gate as escrowService.sellerCanReceivePayout")
+**NULL-anchor rule (first touch):** If `qty_at_last_import` is NULL (legacy listing, never imported with this feature), treat `units_consumed = 0`. Result: `new_quantity = csv_qty`. This "start from now" anchor means the first re-import after deployment trusts the CSV verbatim — correct for listings that have no import baseline.
 
-Extracted to: **`src/lib/payoutReadiness.ts`** — `sellerIsPayoutReady(userId)` (async, queries DB, returns `{ready, reason?}`).
+**MAX(0) clamp:** If `units_consumed > csv_qty`, new_quantity floors at 0. This triggers the off_sale transition. Example: import qty 2, 3 sell (impossible normally but handles concurrent edge cases) -> consumed=3, csv says 1 -> MAX(0, 1-3) = 0.
 
-- `relistListing` refactored to use the shared util. Behaviour identical — same Stripe fields checked, same 409 message.
-- `escrowService.sellerCanReceivePayout` left untouched — it's a private synchronous helper that takes an already-fetched seller object. Different calling convention (sync vs async, object vs userId). Consolidation would change escrow internals with no benefit. Noted for future cleanup.
+### Anchors
+
+- `qty_at_last_import`: Set to the CSV quantity value (not the reconciled quantity) on every create and update. NOT set on skipped rows (their anchor must stay consistent with their untouched qty).
+- `last_imported_at`: Set to `NOW()` on every create and update. NOT set on skipped rows.
+
+## Status Transition Matrix
+
+| Current status | new_qty | Gates pass? | New status | Side-effects | Response |
+|---|---|---|---|---|---|
+| `draft` | any | N/A | `draft` | None | `updated` |
+| `active` | >= 1 | N/A | `active` | None | `updated` |
+| `active` | 0 | N/A | `off_sale` | Clear carts + expire offers (reuse I-04 pattern) | `updated` |
+| `off_sale` | >= 1 | Yes | `active` | None | `updated (reactivated)` |
+| `off_sale` | >= 1 | No | `off_sale` | None | `updated` + warning `restock_blocked` |
+| `off_sale` | 0 | N/A | `off_sale` | None | `updated` |
+| `sold` | >= 1 | Yes | `active` | None | `updated (reactivated)` |
+| `sold` | >= 1 | No | `sold` | None | `updated` + warning `restock_blocked` |
+| `sold` | 0 | N/A | `sold` | None | `updated` |
+| `deleted` | >= 1 | Yes | `active` | None | `updated (reactivated)` |
+| `deleted` | >= 1 | No | `draft` | None | `updated (reactivated)` |
+| `deleted` | 0 | N/A | `draft` | None | `updated (reactivated)` |
+| `removed` | any | N/A | `removed` | None | `skipped (removed)` |
+| any with active order | any | N/A | unchanged | None | `skipped (active_order)` |
+
+**Gates:** `sellerIsPayoutReady` (checked ONCE per import run, cached) AND `validateListingCompleteness` (per-listing).
+
+**Reactivation gate for completeness:** uses merged listing data (existing + CSV updates) and existing image count. Imported listings typically have 0 images until I-03, so completeness will fail on the image gate — listings reactivate to `draft` instead of `active`. This is correct: a listing without images should not go live.
+
+## Guard Order (per matched row)
+
+1. `removed` status -> skip (platform moderation wins over CSV)
+2. Active-order check (`ACTIVE_ORDER_STATUSES`) -> skip (in-flight order safety)
+3. Apply reconciliation + field sync + status transition
+
+## Field Re-sync Scope
+
+**CSV wins (syncable):** title, description, price, category, subcategory, brand, model, condition_overall, location, is_negotiable, parcel_size, shipping_cost, specifications
+
+**Frozen (never touched):** id, seller_id, status (managed by transition rules above), original_price, currency, is_featured, views, favorites_count, created_at, updated_at (system-managed), deleted_at, ball_condition_type, condition_head, condition_shaft, condition_grip, images (separate system)
+
+**Change tracking:** Response includes `changed_fields[]` per updated row. Price changes generate a warning: `"price changed: <old> -> <new>"`.
+
+## Response Schema (additive, backwards-compatible)
+
+```typescript
+interface ImportResult {
+  created:  Array<{ id, title, external_id }>;                                    // existing
+  updated:  Array<{ id, title, external_id, changed_fields[], reactivated? }>;    // NEW
+  skipped:  Array<{ row, external_id, reason }>;                                  // NEW
+  failed:   Array<{ row, reason }>;                                               // existing
+  warnings: string[];                                                              // existing
+}
+```
+
+Existing consumers reading only `created`, `failed`, `warnings` are unaffected. The `updated` and `skipped` arrays are additive. Rows previously reported as `failed: 'duplicate'` now appear in `updated` or `skipped`.
+
+## Out of Scope (explicitly deferred)
+
+- Absent-from-file auto-deactivation + >20-30% safety guard (needs import-session concept)
+- Image handling (I-03)
+- Dashboard wiring (I-05)
+- XLSX support
 
 ## Implementation
 
@@ -40,78 +96,52 @@ Extracted to: **`src/lib/payoutReadiness.ts`** — `sellerIsPayoutReady(userId)`
 
 | File | Change |
 |---|---|
-| `src/lib/payoutReadiness.ts` | **New** — shared `sellerIsPayoutReady(userId)` util |
-| `src/controllers/listingController.ts` | Added `import { sellerIsPayoutReady }`, refactored `relistListing` to use it, added `validateListingCompleteness`, `publishListing`, `publishListingsBulk` |
-| `src/routes/listingRoutes.ts` | Added `PUT /publish-bulk` (before `/:id` routes), `PUT /:id/publish` |
-| `src/__tests__/unit/publishListing.test.ts` | 21 tests across 3 describe blocks |
+| `prisma/schema.prisma` | Added `last_imported_at DateTime?`, `qty_at_last_import Int?` to listings model |
+| `prisma/migrations/20260702000000_import_reconciliation_fields/migration.sql` | Additive migration: two nullable columns |
+| `src/lib/listingCompleteness.ts` | **New** — extracted `validateListingCompleteness` from controller |
+| `src/services/importService.ts` | Rewritten: lookup-first upsert, delta reconciliation, status transitions, full field re-sync |
+| `src/controllers/listingController.ts` | Imports shared `validateListingCompleteness`, removes static method duplicate |
+| `src/__tests__/unit/csvImport.test.ts` | Updated: extended mock for upsert, test 2 updated for upsert behaviour |
+| `src/__tests__/unit/importUpsert.test.ts` | **New** — comprehensive upsert tests |
 
-### Status transition table
+### Architecture decision: lookup-first vs P2002-catch
 
-| From | To | Endpoint | Gates | Side-effects |
-|---|---|---|---|---|
-| `draft` | `active` | `PUT /:id/publish` | Owner + payout-ready + listing complete | None |
-| `draft` (bulk) | `active` | `PUT /publish-bulk` | Owner + payout-ready (once) + per-listing completeness | None |
-| `active`/`sold`/`off_sale`/`removed` | — | `PUT /:id/publish` | 409 | — |
-| `deleted` | — | `PUT /:id/publish` | 404 | — |
+The I-02 create path used try-create / catch-P2002-as-duplicate. The upsert changes to lookup-first:
 
-### Endpoint spec
+1. `findFirst` by (seller_id, external_source, external_id) — indexed by `listings_external_dedup`
+2. If found -> update path (guards, reconciliation, status transition)
+3. If not found -> create path (existing I-02 logic + anchor stamps)
+4. P2002 catch remains as a race-condition fallback
 
-**`PUT /api/listings/:id/publish`** (auth: owner only)
-- 200 + updated listing on success
-- 404 if not found, deleted, or not owner
-- 409 if not `draft`, not payout-ready, or listing incomplete (with specific field in error message)
-
-**`PUT /api/listings/publish-bulk`** (auth: owner only)
-- 200 + `{ published: string[], skipped: [{id, reason}] }` — always 200 (partial success)
-- Payout-readiness checked once per request; if fails, all IDs returned as `skipped` with reason `payout_not_ready`
-- Per-listing: `not_found`, `not_draft`, `invalid: <field>` reasons
-- Foreign-owned listings treated as `not_found` (skipped, not 403) — consistent with single-endpoint 404 pattern, avoids existence oracle and mid-batch partial-state incoherence
-- 400 if `listing_ids` empty or >500
-- Cap: 500 listings per batch
-
-### Listing completeness validation
-
-`validateListingCompleteness(listing, imageCount)` checks:
-1. `title` present, ≥3 chars
-2. `description` present, ≥10 chars
-3. `price` ≥ £0.50 (from `createListingSchema` at `validation.ts:45`: `z.number().min(0.50)`)
-4. `category` present
-5. `subcategory` present
-6. `location` present
-7. `parcel_size` present
-8. `shipping_cost` present
-9. `quantity` ≥ 1
-10. `imageCount` ≥ 1
-
-Returns `null` if valid, or a human-readable error string naming the failing field.
+Rationale: the update path needs the existing listing data anyway for guards and reconciliation. A create-then-catch wastes a DB round-trip on every match. The TOCTOU gap is acceptable — concurrent imports by the same seller for the same CSV are operationally impossible (rate-limited, single-session).
 
 ## Tests — teeth-checks
 
 | # | Test | What it proves | Teeth-check |
 |---|---|---|---|
-| 1 | publish happy path: draft → active | Complete draft publishes | Remove status update → test fails |
-| 2 | 409 not payout-ready | Stripe gate enforced | Remove payout check → test fails (200) |
-| 3 | 409 no images | Image requirement enforced | Remove image check → test fails (200) |
-| 4 | 409 quantity 0 | Quantity gate enforced | Remove quantity check → test fails |
-| 5 | 409 missing category | Required field enforced | Remove category check → test fails |
-| 6 | 409 price below minimum | Price floor enforced | Remove price check → test fails |
-| 7-10 | active/sold/off_sale/removed → 409 | Only drafts publishable | Widen status guard → tests fail |
-| 11 | non-owner → 404 | Ownership enforced | Remove seller_id check → test fails |
-| 12 | no auth → 401 | Auth middleware works | Remove authenticateToken → test fails |
-| 13 | deleted → 404 | Deleted invisible | Remove deleted check → test fails |
-| 14 | relist still works (payout-ready) | Extraction didn't break relist | N/A (regression) |
-| 15 | relist still gates (not payout-ready) | Extraction preserved gate | Break shared util → test fails |
-| 16 | bulk: mixed batch | Correct published/skipped split | Remove per-listing validation → wrong split |
-| 17 | bulk: payout short-circuit | All skipped when not payout-ready | Remove payout check → test fails |
-| 18 | bulk: foreign ids skipped as not_found, valid rows publish | No existence oracle, no partial-state halt | Remove ownership→not_found mapping → test fails |
-| 19 | bulk: empty array → 400 | Input validation | Remove array check → test fails |
-| 20 | bulk: no auth → 401 | Auth middleware | Remove authenticateToken → test fails |
-| 21 | bulk: all valid → all published | Happy path for batch | Remove updateMany → test fails |
+| 1 | I-02c worked example: 5->sell 2->return 1->CSV 4->result 3 | Delta formula correctness | Change formula -> wrong qty |
+| 2 | MAX(0) clamp: consumed > CSV -> 0 -> off_sale fires | Floor clamp + off_sale transition | Remove MAX(0) -> negative qty |
+| 3 | Active-order row: nothing mutates, reason correct | Active-order guard | Remove guard -> row updated |
+| 4 | `removed` skip | Platform moderation respected | Remove guard -> row updated |
+| 5 | `deleted` reactivation (gates pass) -> active | Reactivation from deleted | Remove reactivation -> stays deleted |
+| 6 | `deleted` reactivation (gates fail) -> draft | Failed-gate fallback | Remove fallback -> stays deleted |
+| 7 | off_sale restock (gates pass) -> active | Reactivation from off_sale | Remove gate -> stays off_sale |
+| 8 | off_sale restock (gates fail) -> stays off_sale + warning | Warning on blocked restock | Remove gate -> reactivates without check |
+| 9 | sold restock (gates pass) -> active | Reactivation from sold | Remove reactivation -> stays sold |
+| 10 | NULL-anchor first touch -> csv_qty verbatim | Start-from-now anchor | Set consumed=NaN -> wrong qty |
+| 11 | Full re-sync: changed fields reported, price warning | Change tracking fidelity | Remove field tracking -> empty changed_fields |
+| 12 | Anchors stamped on create | Create path stamps both columns | Remove stamps -> null |
+| 13 | Anchors stamped on update, NOT on skip | Skip preserves anchor consistency | Stamp on skip -> wrong baseline |
+| 14 | Create-path regression: new rows still create as draft | Upsert doesn't break creates | Break create path -> test fails |
+| 15 | Same batch: one create + one update | Mixed batch correctness | N/A (integration) |
+| 16 | off_sale side-effects: carts cleared, offers expired | I-04 pattern reuse | Remove side-effects -> test fails |
+| 17 | Payout readiness cached (checked once) | Performance: 1 DB call not N | Mock tracks call count |
+| 18 | sold restock (gates fail) -> stays sold + warning | Warning on blocked sold restock | Remove gate -> reactivates |
 
 ## Deploy notes
 
-1. No database migration — no schema changes
-2. No `npx prisma generate` needed
-3. Backend deploy: standard `npm run build` + PM2 restart
-4. New file: `src/lib/payoutReadiness.ts` — ensure it's included in build output
-5. Backwards-compatible: new endpoints only, no changes to existing API surface
+1. **Database migration:** `npx prisma generate` before build; `npx prisma migrate deploy` on production (after RDS snapshot). Two nullable columns, no data backfill.
+2. **Dev environment:** Use `npx prisma db push` (dev migration history is broken — project convention).
+3. Backend deploy: standard `npm run build` + PM2 restart.
+4. New file: `src/lib/listingCompleteness.ts` — ensure included in build output.
+5. Backwards-compatible: same endpoint, richer response.

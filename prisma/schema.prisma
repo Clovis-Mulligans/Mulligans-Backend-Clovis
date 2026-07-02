@@ -105,6 +105,8 @@ model listings {
   deleted_at          DateTime?
   external_source     String?
   external_id         String?
+  last_imported_at    DateTime?
+  qty_at_last_import  Int?
   cart_items          cart_items[]
   conversations       conversations[]
   favorites           favorites[]
