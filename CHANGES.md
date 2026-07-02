@@ -65,7 +65,7 @@ Extracted to: **`src/lib/payoutReadiness.ts`** — `sellerIsPayoutReady(userId)`
 - 200 + `{ published: string[], skipped: [{id, reason}] }` — always 200 (partial success)
 - Payout-readiness checked once per request; if fails, all IDs returned as `skipped` with reason `payout_not_ready`
 - Per-listing: `not_found`, `not_draft`, `invalid: <field>` reasons
-- 403 if any listing belongs to a different seller
+- Foreign-owned listings treated as `not_found` (skipped, not 403) — consistent with single-endpoint 404 pattern, avoids existence oracle and mid-batch partial-state incoherence
 - 400 if `listing_ids` empty or >500
 - Cap: 500 listings per batch
 
@@ -74,7 +74,7 @@ Extracted to: **`src/lib/payoutReadiness.ts`** — `sellerIsPayoutReady(userId)`
 `validateListingCompleteness(listing, imageCount)` checks:
 1. `title` present, ≥3 chars
 2. `description` present, ≥10 chars
-3. `price` ≥ £0.50
+3. `price` ≥ £0.50 (from `createListingSchema` at `validation.ts:45`: `z.number().min(0.50)`)
 4. `category` present
 5. `subcategory` present
 6. `location` present
@@ -103,7 +103,7 @@ Returns `null` if valid, or a human-readable error string naming the failing fie
 | 15 | relist still gates (not payout-ready) | Extraction preserved gate | Break shared util → test fails |
 | 16 | bulk: mixed batch | Correct published/skipped split | Remove per-listing validation → wrong split |
 | 17 | bulk: payout short-circuit | All skipped when not payout-ready | Remove payout check → test fails |
-| 18 | bulk: foreign ids → 403 | Ownership enforced across batch | Remove ownership check → test fails |
+| 18 | bulk: foreign ids skipped as not_found, valid rows publish | No existence oracle, no partial-state halt | Remove ownership→not_found mapping → test fails |
 | 19 | bulk: empty array → 400 | Input validation | Remove array check → test fails |
 | 20 | bulk: no auth → 401 | Auth middleware | Remove authenticateToken → test fails |
 | 21 | bulk: all valid → all published | Happy path for batch | Remove updateMany → test fails |

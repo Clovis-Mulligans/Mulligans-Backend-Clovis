@@ -409,16 +409,21 @@ describe('PUT /api/listings/publish-bulk', () => {
     expect(mockListingsModel.updateMany).not.toHaveBeenCalled();
   });
 
-  test('foreign ids rejected (403)', async () => {
+  test('foreign ids skipped as not_found, valid rows still publish', async () => {
     mockListings['lst_foreign'] = { ...COMPLETE_DRAFT, id: 'lst_foreign', seller_id: OTHER_ID, status: 'draft' };
+    mockListings['lst_owned'] = { ...COMPLETE_DRAFT, id: 'lst_owned', status: 'draft' };
     mockUsersData[OWNER_ID] = { ...PAYOUT_READY_SELLER };
     const token = makeToken(OWNER_ID);
 
     const res = await httpRequest(server, 'PUT', url, token, {
-      listing_ids: ['lst_foreign'],
+      listing_ids: ['lst_foreign', 'lst_owned'],
     });
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(res.body.published).toEqual(['lst_owned']);
+    expect(res.body.skipped).toEqual([
+      expect.objectContaining({ id: 'lst_foreign', reason: 'not_found' }),
+    ]);
   });
 
   test('empty array → 400', async () => {

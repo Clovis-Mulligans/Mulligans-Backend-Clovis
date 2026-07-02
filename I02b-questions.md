@@ -24,9 +24,9 @@ Normal listing creation doesn't enforce images at the API level (they're uploade
 
 This is intentional — a listing with no images shouldn't be active on the marketplace. Confirming this is the right call.
 
-### Q2: Bulk publish partial success vs. strict
+### Q2: Bulk publish partial success — foreign IDs as not_found
 
-The bulk endpoint uses partial-success semantics: valid drafts publish, invalid ones are skipped with reasons. The one exception is foreign-listing detection (403 immediate halt) — this prevents a user from inferring other users' listing IDs through the skip response.
+The bulk endpoint uses partial-success semantics throughout: valid drafts publish, invalid ones are skipped with reasons. Foreign-owned listings are treated identically to nonexistent IDs (`not_found`) — consistent with the single-publish endpoint's 404-for-non-owner pattern, avoids an existence oracle, and prevents mid-batch 403 from leaving earlier rows published while reporting failure.
 
 Alternative: strict mode where any invalid listing fails the whole batch. I went with partial success because the brief specified it and it's more practical for 50-500 item batches.
 

@@ -1509,8 +1509,8 @@ if (keyword) {
         }
 
         if (listing.seller_id !== userId) {
-          res.status(403).json({ error: 'You do not own all of these listings' });
-          return;
+          skipped.push({ id, reason: 'not_found' });
+          continue;
         }
 
         if (listing.status !== 'draft') {
