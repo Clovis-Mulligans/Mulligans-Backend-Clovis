@@ -50,6 +50,7 @@ new_quantity   = MAX(0, csv_qty - units_consumed)
 | `deleted` | 0 | N/A | `draft` | None | `updated (reactivated)` |
 | `removed` | any | N/A | `removed` | None | `skipped (removed)` |
 | any with active order | any | N/A | unchanged | None | `skipped (active_order)` |
+| size-variant (sizeQuantities) | any | N/A | unchanged | None | `skipped (size_variant_unsupported)` |
 
 **Gates:** `sellerIsPayoutReady` (checked ONCE per import run, cached) AND `validateListingCompleteness` (per-listing).
 
@@ -59,7 +60,8 @@ new_quantity   = MAX(0, csv_qty - units_consumed)
 
 1. `removed` status -> skip (platform moderation wins over CSV)
 2. Active-order check (`ACTIVE_ORDER_STATUSES`) -> skip (in-flight order safety)
-3. Apply reconciliation + field sync + status transition
+3. Size-variant check (`specifications.sizeQuantities` non-null object) -> skip (per-size stock not reconcilable by flat CSV qty — QTY-AUDIT C-1 family)
+4. Apply reconciliation + field sync + status transition
 
 ## Field Re-sync Scope
 
@@ -86,6 +88,7 @@ Existing consumers reading only `created`, `failed`, `warnings` are unaffected. 
 ## Out of Scope (explicitly deferred)
 
 - Absent-from-file auto-deactivation + >20-30% safety guard (needs import-session concept)
+- Size-variant import support (per-size qty in CSV → sizeQuantities reconciliation)
 - Image handling (I-03)
 - Dashboard wiring (I-05)
 - XLSX support
@@ -137,6 +140,9 @@ Rationale: the update path needs the existing listing data anyway for guards and
 | 16 | off_sale side-effects: carts cleared, offers expired | I-04 pattern reuse | Remove side-effects -> test fails |
 | 17 | Payout readiness cached (checked once) | Performance: 1 DB call not N | Mock tracks call count |
 | 18 | sold restock (gates fail) -> stays sold + warning | Warning on blocked sold restock | Remove gate -> reactivates |
+| 22 | Size-variant listing -> skipped, all fields + anchors unchanged | sizeQuantities guard | Remove guard -> row updated, per-size stock corrupted |
+| 23 | removed + size-variant -> skipped as "removed" | Guard order: removed before size-variant | Swap order -> wrong skip reason |
+| 24 | Non-size-variant specs -> updated normally | Guard doesn't over-match | Widen check -> false positives |
 
 ## Deploy notes
 

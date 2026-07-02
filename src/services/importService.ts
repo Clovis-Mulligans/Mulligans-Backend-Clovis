@@ -94,6 +94,12 @@ export async function importListings(
           continue;
         }
 
+        const specs = existing.specifications as any;
+        if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+          skipped.push({ row: rowNum, external_id: row.external_id, reason: 'size_variant_unsupported' });
+          continue;
+        }
+
         const csvQty = validData.quantity ?? 1;
         const unitsConsumed = existing.qty_at_last_import != null
           ? existing.qty_at_last_import - existing.quantity

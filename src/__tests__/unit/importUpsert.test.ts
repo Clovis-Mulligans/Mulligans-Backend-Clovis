@@ -660,4 +660,78 @@ describe('importService — upsert (I-06)', () => {
     const listing = mockListings['lst-deleted-noimg'];
     expect(listing.status).toBe('draft');
   });
+
+  // 22. size-variant listing → skipped, nothing mutated
+  test('22. size-variant listing (sizeQuantities in specs) → skipped, every field + anchors unchanged', async () => {
+    const originalImportDate = new Date('2026-06-28');
+    seedListing({
+      id: 'lst-sizevar',
+      external_id: 'SKU-SIZEVAR',
+      quantity: 10,
+      qty_at_last_import: 12,
+      last_imported_at: originalImportDate,
+      status: 'active',
+      title: 'Size Variant Polo',
+      price: 39.99,
+      specifications: { sizeQuantities: { S: 3, M: 4, L: 3 }, gender: 'mens' },
+    });
+
+    const buf = csvBuffer(HEADERS, validRow({
+      sku: 'SKU-SIZEVAR',
+      quantity: '20',
+      price: '49.99',
+      title: 'Changed Polo Title',
+    }));
+    const { rows, failed, warnings } = parseCsv(buf);
+    const result = await importListings(rows, SELLER_ID, failed, warnings);
+
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toBe('size_variant_unsupported');
+    expect(result.skipped[0].external_id).toBe('SKU-SIZEVAR');
+    expect(result.updated).toHaveLength(0);
+
+    const listing = mockListings['lst-sizevar'];
+    expect(listing.quantity).toBe(10);
+    expect(listing.qty_at_last_import).toBe(12);
+    expect(listing.last_imported_at).toEqual(originalImportDate);
+    expect(listing.title).toBe('Size Variant Polo');
+    expect(listing.price).toBe(39.99);
+    expect(listing.status).toBe('active');
+  });
+
+  // 23. guard order: removed checked before size-variant
+  test('23. removed + size-variant → skipped as "removed" (guard order correct)', async () => {
+    seedListing({
+      id: 'lst-removed-sv',
+      external_id: 'SKU-REM-SV',
+      status: 'removed',
+      specifications: { sizeQuantities: { S: 2, M: 3 } },
+    });
+
+    const buf = csvBuffer(HEADERS, validRow({ sku: 'SKU-REM-SV' }));
+    const { rows, failed, warnings } = parseCsv(buf);
+    const result = await importListings(rows, SELLER_ID, failed, warnings);
+
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toBe('removed');
+  });
+
+  // 24. non-size-variant specs pass through normally
+  test('24. listing with specs but no sizeQuantities → updated normally', async () => {
+    seedListing({
+      id: 'lst-normal-specs',
+      external_id: 'SKU-NOSPECS',
+      quantity: 5,
+      qty_at_last_import: 5,
+      status: 'active',
+      specifications: { club_type: 'Driver', shaft_flex: 'Regular' },
+    });
+
+    const buf = csvBuffer(HEADERS, validRow({ sku: 'SKU-NOSPECS', quantity: '5' }));
+    const { rows, failed, warnings } = parseCsv(buf);
+    const result = await importListings(rows, SELLER_ID, failed, warnings);
+
+    expect(result.updated).toHaveLength(1);
+    expect(result.skipped).toHaveLength(0);
+  });
 });
