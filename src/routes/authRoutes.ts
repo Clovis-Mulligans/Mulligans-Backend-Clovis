@@ -17,6 +17,8 @@ import {
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from '../services/emailService';
+import crypto from 'crypto';
+import { buildTokenResponse, hashToken, signAccessToken, wantsRefresh } from '../lib/tokens';
 
 if (!process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET environment variable is not set. Exiting.');
@@ -269,21 +271,14 @@ const email = rawEmail?.trim().toLowerCase();
     }
 
     // Auto-login after verification
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        id: user.id,
-        email: user.email,
-        username: user.display_name,
-        display_name: user.display_name,
-      },
-      process.env.JWT_SECRET!,
-      { expiresIn: '60d' }
+    const tokens = await buildTokenResponse(
+      { id: user.id, email: user.email, display_name: user.display_name },
+      req,
     );
 
     res.json({
       message: 'Email verified successfully!',
-      accessToken: token,
+      ...tokens,
       user: {
         id: user.id,
         email: user.email,
@@ -595,23 +590,13 @@ const email = rawEmail?.trim().toLowerCase();
 
     console.log('✅ Login successful:', email);
 
-    // Create JWT token
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        id: user.id,
-        email: user.email,
-        username: user.display_name,
-        display_name: user.display_name,
-      },
-      process.env.JWT_SECRET!,
-      { expiresIn: '60d' }
+    const tokens = await buildTokenResponse(
+      { id: user.id, email: user.email, display_name: user.display_name },
+      req,
     );
 
     res.json({
-      accessToken: token,
-      idToken: token,
-      refreshToken: token,
+      ...tokens,
       user: {
         id: user.id,
         email: user.email,
@@ -724,6 +709,138 @@ router.put('/sending-address', authenticateToken, async (req: any, res: Response
   } catch (error) {
     console.error('Update sending address error:', error);
     res.status(500).json({ error: 'Failed to update sending address' });
+  }
+});
+
+// Rate limiter: 10 refresh attempts per 15 minutes per IP
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many refresh attempts, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
+ * Refresh access token using a valid refresh token.
+ * Implements token rotation with reuse detection.
+ */
+router.post('/refresh', refreshLimiter, async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken || typeof refreshToken !== 'string' || refreshToken.length < 16) {
+      return res.status(400).json({ error: 'refreshToken is required', code: 'REFRESH_MISSING' });
+    }
+
+    const tokenHash = hashToken(refreshToken);
+
+    const row = await prisma.refresh_tokens.findUnique({
+      where: { token_hash: tokenHash },
+      include: { users: { select: { id: true, email: true, display_name: true, is_banned: true } } },
+    });
+
+    if (!row) {
+      return res.status(401).json({ error: 'Invalid refresh token', code: 'REFRESH_INVALID' });
+    }
+
+    if (row.expires_at < new Date()) {
+      return res.status(401).json({ error: 'Refresh token expired', code: 'REFRESH_INVALID' });
+    }
+
+    if (row.revoked_at) {
+      await prisma.refresh_tokens.updateMany({
+        where: { user_id: row.user_id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+      console.log(`[AUTH] REFRESH_REUSE user=${row.user_id} token_id=${row.id}`);
+      return res.status(401).json({ error: 'Refresh token reuse detected — all sessions revoked', code: 'REFRESH_REUSE' });
+    }
+
+    if (row.users.is_banned) {
+      return res.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_BANNED' });
+    }
+
+    // Atomic rotation: claim-the-row inside a transaction.
+    // The conditional updateMany (revoked_at: null) prevents concurrent
+    // requests from both succeeding — only one gets count=1.
+    const rotation = await prisma.$transaction(async (tx: any) => {
+      const claimed = await tx.refresh_tokens.updateMany({
+        where: { id: row.id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+
+      if (claimed.count === 0) {
+        await tx.refresh_tokens.updateMany({
+          where: { user_id: row.user_id, revoked_at: null },
+          data: { revoked_at: new Date() },
+        });
+        return { reuse: true as const };
+      }
+
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const newTokenHash = hashToken(rawToken);
+      const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+
+      const newRow = await tx.refresh_tokens.create({
+        data: {
+          user_id: row.user_id,
+          token_hash: newTokenHash,
+          expires_at: expiresAt,
+          user_agent: (req.headers['user-agent'] as string) || null,
+        },
+      });
+
+      await tx.refresh_tokens.update({
+        where: { id: row.id },
+        data: { replaced_by: newRow.id },
+      });
+
+      return { reuse: false as const, rawToken, expiresAt };
+    });
+
+    if (rotation.reuse) {
+      console.log(`[AUTH] REFRESH_REUSE (race) user=${row.user_id} token_id=${row.id}`);
+      return res.status(401).json({ error: 'Refresh token reuse detected — all sessions revoked', code: 'REFRESH_REUSE' });
+    }
+
+    const accessToken = signAccessToken(
+      { id: row.users.id, email: row.users.email, display_name: row.users.display_name },
+      '1h',
+    );
+
+    res.json({
+      accessToken,
+      idToken: accessToken,
+      refreshToken: rotation.rawToken,
+      refreshExpiresAt: rotation.expiresAt.toISOString(),
+    });
+  } catch (error: any) {
+    console.error('❌ Refresh token error:', error);
+    res.status(500).json({ error: 'Failed to refresh token' });
+  }
+});
+
+/**
+ * Logout — revoke a refresh token (server-side session termination).
+ * Always returns 200 (idempotent; does not leak whether the token existed).
+ */
+router.post('/logout', async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (refreshToken && typeof refreshToken === 'string' && refreshToken.length >= 16) {
+      const tokenHash = hashToken(refreshToken);
+      await prisma.refresh_tokens.updateMany({
+        where: { token_hash: tokenHash, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('❌ Logout error:', error);
+    res.json({ success: true });
   }
 });
 

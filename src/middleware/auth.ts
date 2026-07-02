@@ -28,7 +28,7 @@ export const authenticateToken = async (
 
     if (!token) {
       console.log('❌ No token provided');
-      res.status(401).json({ error: 'Access token required' });
+      res.status(401).json({ error: 'Access token required', code: 'TOKEN_MISSING' });
       return;
     }
 
@@ -63,7 +63,11 @@ export const authenticateToken = async (
     next();
   } catch (error) {
     console.error('❌ Token verification error:', error);
-    res.status(403).json({ error: 'Invalid or expired token' });
+    if (error instanceof jwt.TokenExpiredError) {
+      res.status(403).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
+    } else {
+      res.status(403).json({ error: 'Invalid token', code: 'TOKEN_INVALID' });
+    }
   }
 };
 
