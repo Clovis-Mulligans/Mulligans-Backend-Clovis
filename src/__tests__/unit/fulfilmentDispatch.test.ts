@@ -245,23 +245,29 @@ describe('SC-03: single-seller fulfilment produces correct fee snapshot + reconc
 // IDEMPOTENCY — fulfillCartOrder (webhook path)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('SC-03: idempotency — fulfillCartOrder guard', () => {
-  // Teeth: commenting out the `if (existingOrders.length > 0) return;` guard
-  // makes the first test fail ($transaction WOULD be called).
+describe('SC-03: idempotency — fulfillCartOrder guard (inside transaction)', () => {
+  // H-1 fix: idempotency check moved inside $transaction.
+  // Teeth: the tx callback checks for existing orders and returns early if found.
 
-  test('returns early (no $transaction) when orders already exist for this PI', async () => {
+  test('tx callback exits early when orders already exist for this PI', async () => {
     mockPrisma.listings.findMany.mockResolvedValue([fakeListing()]);
-    mockPrisma.orders.findMany.mockResolvedValue([{ id: 'existing_order_1' }]);
+    mockPrisma.users.findUnique.mockResolvedValue({
+      id: 'buyer_1', email: 'buyer@test.com', display_name: 'Test Buyer',
+    });
+
+    const mockTxOrders = { findMany: jest.fn().mockResolvedValue([{ id: 'existing_order_1' }]) };
+    const mockTxObj = { orders: mockTxOrders };
+    mockPrisma.$transaction.mockImplementation(async (fn: any) => fn(mockTxObj));
 
     await CartCheckoutController.fulfillCartOrder(fakeStripeSession() as any);
 
-    expect(mockPrisma.orders.findMany).toHaveBeenCalledWith({
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+    expect(mockTxOrders.findMany).toHaveBeenCalledWith({
       where: { stripe_payment_intent_id: 'pi_test_123' },
     });
-    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  test('proceeds to $transaction when no existing orders found', async () => {
+  test('proceeds with order creation when no existing orders in tx', async () => {
     mockPrisma.listings.findMany.mockResolvedValue([fakeListing()]);
     mockPrisma.orders.findMany.mockResolvedValue([]);
     mockPrisma.users.findUnique.mockResolvedValue({
@@ -300,9 +306,11 @@ describe('SC-03: idempotency — confirmPayment guard', () => {
     },
   });
 
-  test('returns "Order already created" when order exists for this PI', async () => {
+  test('returns "Order already created" when fulfillCart signals skipped', async () => {
     mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(fakePI('seller_native'));
-    mockPrisma.orders.findFirst.mockResolvedValue({ id: 'existing_order_99' });
+
+    const fulfillCartSpy = jest.spyOn(NativePaymentController as any, 'fulfillCart')
+      .mockResolvedValue({ skipped: true, existing: [{ id: 'existing_order_99' }] });
 
     const req = { body: { paymentIntentId: 'pi_test_native' }, user: { id: 'buyer_1' }, headers: {} } as any;
     const res = makeMockRes();
@@ -312,11 +320,12 @@ describe('SC-03: idempotency — confirmPayment guard', () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true, message: 'Order already created' }),
     );
+
+    fulfillCartSpy.mockRestore();
   });
 
   test('calls fulfillCart for seller_native when no existing order', async () => {
     mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(fakePI('seller_native'));
-    mockPrisma.orders.findFirst.mockResolvedValue(null);
 
     const fulfillCartSpy = jest.spyOn(NativePaymentController as any, 'fulfillCart')
       .mockResolvedValue([{ id: 'new_order_1' }]);
@@ -334,7 +343,6 @@ describe('SC-03: idempotency — confirmPayment guard', () => {
 
   test('calls fulfillSingleItem for native_single_item (regression)', async () => {
     mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(fakePI('native_single_item'));
-    mockPrisma.orders.findFirst.mockResolvedValue(null);
 
     const fulfillSingleSpy = jest.spyOn(NativePaymentController as any, 'fulfillSingleItem')
       .mockResolvedValue({ id: 'single_order_1' });

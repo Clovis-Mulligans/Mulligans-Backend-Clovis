@@ -592,9 +592,9 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
       return res.status(500).json({ error: stripeErr.message || 'Stripe refund failed' });
     }
 
-    // Final state: persist refund ID on both tables
-    await prisma.$transaction([
-      prisma.return_requests.update({
+    // Final state: persist refund ID, order status, and stock restore atomically
+    await prisma.$transaction(async (tx) => {
+      await tx.return_requests.update({
         where: { id: returnId },
         data: {
           status: 'completed',
@@ -603,8 +603,8 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
           stripe_refund_id: refund.id,
           updated_at: now,
         },
-      }),
-      prisma.orders.update({
+      });
+      await tx.orders.update({
         where: { id: claimedReturn.order_id },
         data: {
           status: 'returned',
@@ -613,18 +613,18 @@ router.post('/returns/:id/refund', adminAuth, adminActionLimiter, async (req, re
           stripe_refund_id: refund.id,
           updated_at: now,
         },
-      }),
-    ]);
+      });
 
-    if (claimedReturn.orders.listing_id) {
-      await restoreListingStock(
-        prisma,
-        claimedReturn.orders.listing_id,
-        claimedReturn.orders.quantity || 1,
-        'return_refund',
-        claimedReturn.orders.selected_size,
-      );
-    }
+      if (claimedReturn.orders.listing_id) {
+        await restoreListingStock(
+          tx,
+          claimedReturn.orders.listing_id,
+          claimedReturn.orders.quantity || 1,
+          'return_refund',
+          claimedReturn.orders.selected_size,
+        );
+      }
+    });
 
     console.log(`✅ Admin processed refund for return ${returnId}: £${refundAmount.toFixed(2)}`);
 

@@ -927,18 +927,6 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       // in stripeController.ts:443 which logs, emails info@mulligans.uk.com, and returns 200
       validateShippingAddress(shippingAddressJson);
 
-      // Check if orders already exist (idempotency)
-      const existingOrders = await prisma.orders.findMany({
-        where: {
-          stripe_payment_intent_id: session.payment_intent as string,
-        },
-      });
-
-      if (existingOrders.length > 0) {
-        console.log('[CART] Orders already exist for this session');
-        return;
-      }
-
       // Get buyer info for email
       const buyer = await prisma.users.findUnique({
         where: { id: buyerId },
@@ -958,6 +946,15 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
       // Use transaction to ensure atomicity for stock updates
       await prisma.$transaction(async (tx) => {
+        const existingOrders = await tx.orders.findMany({
+          where: {
+            stripe_payment_intent_id: session.payment_intent as string,
+          },
+        });
+        if (existingOrders.length > 0) {
+          console.log('[CART] Orders already exist (in-tx check)');
+          return;
+        }
 
         // H1 cosmetic fix: only highest-shipping listing per seller carries the cost
       const allListingIds = sellerBreakdown.flatMap(s => (s.cart_items || []).map((ci: any) => ci.listing_id));

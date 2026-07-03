@@ -49,7 +49,7 @@ import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
-import { logStockDecrement } from '../lib/stockUtils';
+import { logStockDecrement, restoreListingStock } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
@@ -563,6 +563,7 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               where: { stripe_payment_intent_id: dispute.payment_intent as string },
               data: {
                 status: 'disputed',
+                escrow_release_at: null,
                 updated_at: new Date(),
               },
             });
@@ -592,6 +593,104 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         const transfer = event.data.object as Stripe.Transfer;
         console.log('Escrow transfer created to Connect account:', transfer.destination);
         break;
+
+      case 'charge.dispute.closed': {
+        const closedDispute = event.data.object as Stripe.Dispute;
+        const closedPiId = closedDispute.payment_intent as string;
+
+        try {
+          const disputedOrders = await prisma.orders.findMany({
+            where: {
+              stripe_payment_intent_id: closedPiId,
+              status: 'disputed',
+            },
+            select: {
+              id: true,
+              listing_id: true,
+              quantity: true,
+              selected_size: true,
+            },
+          });
+
+          if (disputedOrders.length === 0) {
+            console.warn(`[WEBHOOK] No disputed orders for PI ${closedPiId} on dispute.closed`);
+            break;
+          }
+
+          if (closedDispute.status === 'lost') {
+            await prisma.$transaction(async (tx) => {
+              const claimed = await tx.orders.updateMany({
+                where: {
+                  stripe_payment_intent_id: closedPiId,
+                  status: 'disputed',
+                },
+                data: {
+                  status: 'refunded',
+                  refunded_at: new Date(),
+                  updated_at: new Date(),
+                },
+              });
+
+              if (claimed.count === 0) return;
+
+              for (const order of disputedOrders) {
+                if (order.listing_id) {
+                  await restoreListingStock(
+                    tx,
+                    order.listing_id,
+                    order.quantity || 1,
+                    'dispute_refund',
+                    order.selected_size,
+                  );
+                }
+              }
+            });
+
+            await prisma.notifications.create({
+              data: {
+                id: `notif_${crypto.randomUUID()}`,
+                user_id: 'admin',
+                type: 'dispute',
+                title: 'DISPUTE LOST — Stock Restored',
+                message: `Dispute ${closedDispute.id} lost. ${disputedOrders.length} order(s) marked refunded, stock restored.`,
+                related_id: disputedOrders[0].id,
+              },
+            }).catch(err => console.error('[WEBHOOK] Dispute-lost notification failed:', err));
+
+            console.log(`[WEBHOOK] Dispute ${closedDispute.id} lost — ${disputedOrders.length} order(s) refunded, stock restored`);
+
+          } else if (closedDispute.status === 'won') {
+            await prisma.orders.updateMany({
+              where: {
+                stripe_payment_intent_id: closedPiId,
+                status: 'disputed',
+              },
+              data: {
+                status: 'to_ship',
+                updated_at: new Date(),
+              },
+            });
+
+            await prisma.notifications.create({
+              data: {
+                id: `notif_${crypto.randomUUID()}`,
+                user_id: 'admin',
+                type: 'dispute',
+                title: 'DISPUTE WON — Order Resumed',
+                message: `Dispute ${closedDispute.id} won. ${disputedOrders.length} order(s) returned to to_ship.`,
+                related_id: disputedOrders[0].id,
+              },
+            }).catch(err => console.error('[WEBHOOK] Dispute-won notification failed:', err));
+
+            console.log(`[WEBHOOK] Dispute ${closedDispute.id} won — ${disputedOrders.length} order(s) resumed`);
+          } else {
+            console.log(`[WEBHOOK] Dispute ${closedDispute.id} closed with status: ${closedDispute.status}`);
+          }
+        } catch (err) {
+          console.error('[WEBHOOK] Error handling dispute.closed:', err);
+        }
+        break;
+      }
 
       default:
         console.log(`Unhandled event type: ${event.type}`);
@@ -623,20 +722,6 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       const orderQuantity = parseInt(metadata.quantity || '1');
       const selectedSize = metadata.selected_size || null;  // SIZE VARIANT
       const offerId = metadata.offer_id || null;  // OFFER SYSTEM
-
-      // Check if order already exists (prevent duplicate processing)
-      const existingOrder = await prisma.orders.findFirst({
-        where: {
-          listing_id,
-          buyer_id,
-          stripe_payment_intent_id: session.payment_intent as string
-        },
-      });
-
-      if (existingOrder) {
-        console.log('Order already exists:', existingOrder.id);
-        return;
-      }
 
       // [D-C1] Get listing for metadata (image, title) -- NOT for stock decisions
       const listing = await prisma.listings.findUnique({
@@ -723,6 +808,18 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
       try {
         // [D-C1] Use transaction to ensure atomicity -- stock check happens INSIDE
         const txResult = await prisma.$transaction(async (tx) => {
+          const existingOrder = await tx.orders.findFirst({
+            where: {
+              listing_id,
+              buyer_id,
+              stripe_payment_intent_id: session.payment_intent as string,
+            },
+          });
+          if (existingOrder) {
+            console.log('Order already exists (in-tx check):', existingOrder.id);
+            return { skipped: true as const };
+          }
+
           // Row lock: prevents concurrent size-variant oversell (plain-quantity
           // path uses atomic decrement, but JSON sizeQuantities needs a lock).
           await (tx as any).$queryRawUnsafe(
@@ -853,6 +950,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
           return { createdOrder, shouldMarkSold: computedShouldMarkSold };
         });
+
+        if ('skipped' in txResult) return;
 
         // Extract results from the transaction
         order = txResult.createdOrder;

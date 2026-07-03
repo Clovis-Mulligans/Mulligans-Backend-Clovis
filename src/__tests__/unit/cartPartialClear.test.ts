@@ -24,7 +24,7 @@ jest.mock('stripe', () => jest.fn(() => mockStripeInstance));
 // inspect what prisma calls happen inside the transaction.
 const mockTx: any = {
   listings: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
-  orders: { create: jest.fn() },
+  orders: { create: jest.fn(), findMany: jest.fn() },
   cart_items: { deleteMany: jest.fn() },
   offers: { update: jest.fn() },
   $queryRawUnsafe: jest.fn().mockResolvedValue([]),
@@ -139,6 +139,8 @@ function setupTransactionMock(listings: any[]) {
   mockTx.listings.update.mockResolvedValue({});
   // tx.listings.updateMany (stock guard)
   mockTx.listings.updateMany.mockResolvedValue({ count: 1 });
+  // tx.orders.findMany (idempotency check — no existing orders)
+  mockTx.orders.findMany.mockResolvedValue([]);
   // tx.orders.create
   mockTx.orders.create.mockImplementation(({ data }: any) => ({
     id: `order_${data.listing_id}`,

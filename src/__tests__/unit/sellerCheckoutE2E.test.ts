@@ -19,7 +19,7 @@ jest.mock('stripe', () => jest.fn(() => mockStripeInstance));
 // ─── Prisma mock ───
 const mockTx: any = {
   listings: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
-  orders: { create: jest.fn() },
+  orders: { create: jest.fn(), findMany: jest.fn() },
   cart_items: { deleteMany: jest.fn() },
   offers: { update: jest.fn() },
   $queryRawUnsafe: jest.fn().mockResolvedValue([]),
@@ -146,6 +146,7 @@ function setupTxMock(listings: any[]) {
     listings.map(l => ({ id: l.id, seller_id: l.seller_id, shipping_cost: l.shipping_cost })));
   mockTx.listings.update.mockResolvedValue({});
   mockTx.listings.updateMany.mockResolvedValue({ count: 1 });
+  mockTx.orders.findMany.mockResolvedValue([]);
   mockTx.orders.create.mockImplementation(({ data }: any) => ({
     id: `order_${data.listing_id}`, listing_id: data.listing_id,
     quantity: data.quantity || 1, image_url: 'img.jpg', listing_title: data.listing_id, ...data,
@@ -499,15 +500,21 @@ describe('Scenario 4: idempotency — replayed webhook', () => {
     await CartCheckoutController.fulfillCartOrder(session as any);
     expect(mockTx.orders.create).toHaveBeenCalledTimes(2);
 
-    // Replay — orders already exist
+    // Replay — orders already exist (H-1: idempotency check is now INSIDE tx)
     jest.clearAllMocks();
     mockPrisma.listings.findMany.mockResolvedValue(listings);
-    mockPrisma.orders.findMany.mockResolvedValue([{ id: 'existing_1' }, { id: 'existing_2' }]);
+    mockPrisma.users.findUnique.mockResolvedValue({
+      id: 'buyer_1', email: 'buyer@test.com', display_name: 'Buyer',
+    });
+    mockTx.orders.findMany.mockResolvedValue([{ id: 'existing_1' }, { id: 'existing_2' }]);
+    mockTx.orders.create.mockReset();
+    mockPrisma.$transaction.mockImplementation(async (fn: any) => fn(mockTx));
 
     await CartCheckoutController.fulfillCartOrder(session as any);
 
-    // No transaction = no duplicate orders
-    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    // Transaction IS called, but callback exits early — no orders created
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+    expect(mockTx.orders.create).not.toHaveBeenCalled();
   });
 });
 

@@ -231,6 +231,7 @@ model orders {
   @@index([auto_cancel_at])
   @@index([offer_id], map: "idx_orders_offer_id")
   @@index([payout_blocked_at])
+  @@index([stripe_payment_intent_id])
 }
 
 model reviews {

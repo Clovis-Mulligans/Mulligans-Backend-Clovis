@@ -61,7 +61,7 @@ export async function restoreListingStock(
   const specs = listing.specifications as any;
   const hasSizeVariants = selectedSize && specs?.sizeQuantities && typeof specs.sizeQuantities === 'object';
 
-  const newStatus = listing.status === 'deleted' ? 'deleted' : 'active';
+  const newStatus = (listing.status === 'deleted' || listing.status === 'off_sale') ? listing.status : 'active';
 
   if (hasSizeVariants) {
     // Row lock: prevent concurrent read-modify-write races on JSON sizeQuantities.
@@ -88,7 +88,7 @@ export async function restoreListingStock(
     const lockedSpecs = locked.specifications as any;
     const lockedStatus = locked.status as string;
     const lockedPrevQty = locked.quantity;
-    const lockedNewStatus = lockedStatus === 'deleted' ? 'deleted' : 'active';
+    const lockedNewStatus = (lockedStatus === 'deleted' || lockedStatus === 'off_sale') ? lockedStatus : 'active';
 
     const currentSizeQty: number = lockedSpecs.sizeQuantities[selectedSize!] || 0;
     const updatedSpecs = {

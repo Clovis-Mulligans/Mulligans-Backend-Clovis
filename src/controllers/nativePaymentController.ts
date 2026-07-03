@@ -764,19 +764,6 @@ export class NativePaymentController {
         return res.status(403).json({ error: 'Unauthorized' });
       }
 
-      // Check if already processed
-      const existingOrder = await prisma.orders.findFirst({
-        where: { stripe_payment_intent_id: paymentIntentId },
-      });
-
-      if (existingOrder) {
-        return res.json({
-          success: true,
-          order_id: existingOrder.id,
-          message: 'Order already created',
-        });
-      }
-
       // Calculate auto-cancel date (5 weekday deadline)
       const autoCancelAt = calculateShippingDeadline(new Date());
 
@@ -801,6 +788,14 @@ export class NativePaymentController {
         return res.status(400).json({ error: 'Unknown payment type' });
       }
 
+      if (orders?.skipped) {
+        return res.json({
+          success: true,
+          order_id: orders.existing.id || orders.existing[0]?.id,
+          message: 'Order already created',
+        });
+      }
+
       res.json({
         success: true,
         order_id: Array.isArray(orders) ? orders[0]?.id : orders?.id,
@@ -808,8 +803,23 @@ export class NativePaymentController {
       });
     } catch (error: any) {
       console.error('[PAY] Error confirming payment:', error);
+
+      let refundIssued = false;
+      const piId = req.body?.paymentIntentId;
+      if (piId) {
+        try {
+          await stripe.refunds.create({ payment_intent: piId });
+          refundIssued = true;
+          console.log(`[PAY] Refund issued for failed confirmation: ${piId}`);
+        } catch (refundErr: any) {
+          console.error(`[PAY] Refund failed for ${piId} (safety net will retry):`, refundErr.message);
+        }
+      }
+
       const userMessage = error.message?.includes('Insufficient stock')
-        ? 'This item is no longer available. Your payment has been refunded.'
+        ? (refundIssued
+            ? 'This item is no longer available. Your payment has been refunded.'
+            : 'This item is no longer available. Your refund is being processed.')
         : (error.message || 'Failed to confirm payment');
       res.status(500).json({ error: userMessage });
     }
@@ -859,7 +869,15 @@ export class NativePaymentController {
       : 0;
 
     // [D-C1] Transaction with fresh stock read and atomic decrement
-    const { createdOrder, shouldMarkSold } = await prisma.$transaction(async (tx) => {
+    const txResult = await prisma.$transaction(async (tx) => {
+      const existingOrder = await tx.orders.findFirst({
+        where: { stripe_payment_intent_id: paymentIntent.id },
+      });
+      if (existingOrder) {
+        console.log('[PAY] Order already exists (in-tx check):', existingOrder.id);
+        return { skipped: true as const, existing: existingOrder };
+      }
+
       // Row lock: prevents concurrent size-variant oversell (plain-quantity
       // path uses atomic decrement, but JSON sizeQuantities needs a lock).
       await (tx as any).$queryRawUnsafe(
@@ -983,8 +1001,11 @@ export class NativePaymentController {
         console.log(`[PAY] Offer ${offerId} marked as PURCHASED`);
       }
 
-      return { createdOrder, shouldMarkSold };
+      return { skipped: false as const, createdOrder, shouldMarkSold };
     });
+
+    if (txResult.skipped) return txResult;
+    const { createdOrder, shouldMarkSold } = txResult;
 
     // [Issue #2] Expire all other active offers for this listing when item is sold
     if (shouldMarkSold) {
@@ -1201,7 +1222,14 @@ export class NativePaymentController {
     const soldListingIds: string[] = [];
     const sellerFixedFeeApplied = new Set<string>();
 
-    await prisma.$transaction(async (tx) => {
+    const cartTxResult = await prisma.$transaction(async (tx) => {
+      const existingOrders = await tx.orders.findMany({
+        where: { stripe_payment_intent_id: paymentIntent.id },
+      });
+      if (existingOrders.length > 0) {
+        console.log('[PAY] Cart orders already exist (in-tx check)');
+        return { skipped: true as const, existing: existingOrders };
+      }
 
       // H1 cosmetic fix: only highest-shipping listing per seller carries the cost
       const shippingLookup = await tx.listings.findMany({
@@ -1354,7 +1382,11 @@ export class NativePaymentController {
           listing_id: { in: itemsData.map((i: any) => i.listing_id) },
         },
       });
+
+      return null;
     });
+
+    if (cartTxResult?.skipped) return cartTxResult;
 
     // [Issue #2] Expire all other active offers for sold listings (outside transaction)
     for (const soldListingId of soldListingIds) {
