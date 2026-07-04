@@ -1,137 +1,112 @@
-# QTY-FIX-01: Money-Critical Bug Fixes
+# QTY-FIX-02: Internal Dispute Stock-Restore Investigation (S-4)
 
-Branch: `task/qty-fix-01-money` based from `clovis/pro-seller-foundation` at `a24e1c5`
+Branch: `task/qty-fix-02-internal-disputes` based from `clovis/pro-seller-foundation` at `ccbdded`
 
-## Fixes implemented
+## Investigation: Resolution Path Map
 
-### C-2 — Missing `charge.dispute.closed` handler (CRITICAL)
+The dispute controller (`src/controllers/disputeController.ts`, 2174 lines) has three user-triggered resolution paths and three system-automated paths. The forced return service (`src/services/forcedReturnService.ts`) adds a >60% threshold backstop.
 
-**File:** `src/controllers/stripeController.ts`
+### Resolution Paths
 
-Stripe fires `charge.dispute.closed` with status `won` or `lost`. Before this fix, there was no handler — a lost dispute left orders stuck in `disputed` status forever, stock never restored, and no admin notification.
+| # | Function | File | Actor | Trigger |
+|---|----------|------|-------|---------|
+| 1 | `respondToDispute` (accept) | disputeController.ts:771 | Seller | `PUT /api/disputes/:id/respond` |
+| 2 | `acceptCounterOffer` | disputeController.ts:1130 | Buyer | `PUT /api/disputes/:id/accept-counter` |
+| 3 | `adminResolveDispute` | disputeController.ts:1520 | Admin | `PUT /api/disputes/:id/resolve` |
+| 4 | `autoEscalateDisputes` | escrowService.ts:1508 | System | Cron (72h timeout) |
+| 5 | `autoExpireReturns` | escrowService.ts:1258 | System | Cron (buyer didn't ship return) |
+| 6 | `autoConfirmForcedReturns` | escrowService.ts:1657 | System | Cron (seller didn't confirm receipt) |
+| 7 | `confirmReturnDelivered` | returnController.ts:1003 | Seller | `POST /api/returns/confirm-delivered` |
 
-**Fix:** Added full `charge.dispute.closed` case in the webhook switch. On `lost`: single `$transaction` updates claims from `disputed` -> `refunded`, calls `restoreListingStock(tx, ...)` per order, sends admin notification. On `won`: updates claims from `disputed` -> `to_ship`, sends admin notification. Idempotent — if no rows match the status filter, the handler exits cleanly.
+### Threshold Logic (key to understanding S-4)
 
-**Status transitions:**
+`isForceReturnThreshold(amount, itemCost)` returns true when `amount > itemCost * 0.6`. This means:
+- **>60% of item cost** -> forced return (buyer must send item back, refund on completion)
+- **<=60% of item cost** -> money-only partial refund (buyer keeps item)
 
-| Event | From | To |
-|-------|------|----|
-| dispute.closed (lost) | disputed | refunded |
-| dispute.closed (won) | disputed | to_ship |
+Counter offers are restricted to 10-60% in 10% steps (`isAllowedCounterPercent`).
+Buyer refund requests allow 10-60% (partial) or 100% (full).
 
-### H-1 — TOCTOU race in idempotency checks (HIGH x 3 controllers)
+### Status Transitions per Resolution Outcome
 
-**Files:** `src/controllers/stripeController.ts` (H-1a), `src/controllers/cartCheckoutController.ts` (H-1b), `src/controllers/nativePaymentController.ts` (H-1c)
+| Path | Condition | Dispute status | Order status | Refund? | Stock restore? |
+|------|-----------|---------------|-------------|---------|----------------|
+| 1a. Seller accept, >60% | Forced return | seller_accepted | (unchanged, stays disputed) | Deferred to return completion | Via paths 6 or 7 |
+| 1b. Seller accept, <=60% | Money-only | seller_accepted | completed | Stripe refund (partial) | NO (buyer keeps item) |
+| 2a. Buyer accept counter, >60% | Forced return (legacy only) | buyer_accepted | (unchanged) | Deferred | Via paths 6 or 7 |
+| 2b. Buyer accept counter, <=60% | Money-only | buyer_accepted | completed | Stripe refund (partial) | NO (buyer keeps item) |
+| 3a. Admin full_refund, >60% | Forced return | admin_resolved | (unchanged) | Deferred | Via paths 6 or 7 |
+| 3b. Admin partial, <=60% | Money-only | admin_resolved | completed | Stripe refund (partial) | NO (buyer keeps item) |
+| 3c. Admin no_refund | Sale stands | admin_resolved | completed | None | NO (sale stands) |
+| 4. Auto-escalate | Not terminal | escalated | (unchanged) | None | N/A |
+| 5. Auto-expire return | Buyer didn't ship | admin_resolved | delivered | None | NO (buyer kept item) |
+| 6. Auto-confirm return | Seller timeout | N/A | returned | Stripe refund (full) | YES (restoreListingStock inside $transaction) |
+| 7. Seller confirms return | Manual | N/A | returned | Stripe refund (full) | YES (restoreListingStock inside $transaction) |
 
-All three checkout controllers had the same pattern: check for existing orders *outside* the `$transaction`, then create orders *inside* it. Under concurrent Stripe webhooks, both checks pass, both transactions create orders -> duplicate fulfilment.
+### Critical Finding: Why Full Refund Always Triggers Forced Return
 
-**Fix:** Moved the idempotency check inside each `$transaction` callback so the check and the create share the same serializable transaction. Uses a skip sentinel (`{ skipped: true as const }`) to signal early exit without throwing. The transaction commits as a no-op; post-tx code checks the sentinel and returns early.
+For a 100% buyer request: `requested_refund_amount = orderAmount * 1.0 = orderAmount`. Since `orderAmount >= itemCost` (includes shipping/fees), and `orderAmount > itemCost * 0.6`, the threshold ALWAYS triggers forced return.
 
-- **H-1a** (`stripeController.ts` `fulfillOrder`): `tx.orders.findFirst` inside tx
-- **H-1b** (`cartCheckoutController.ts` `fulfillCartOrder`): `tx.orders.findMany` inside tx
-- **H-1c** (`nativePaymentController.ts` `fulfillSingleItem` + `fulfillCart`): `tx.orders.findFirst` / `tx.orders.findMany` inside tx
+For admin `full_refund`: `finalRefundAmount = orderAmount` (line 1565). Same logic applies.
 
-### H-3 — Admin refund callback-form tx (HIGH)
+Counter offers are capped at 60%, so `counterOfferAmount <= itemCost * 0.6` -- they NEVER trigger forced return through the current allowlist.
 
-**File:** `src/routes/adminRoutes.ts`
+**Conclusion:** Every full-refund resolution goes through the forced return lifecycle, which restores stock via path 6 or 7. There is no code path where a buyer receives a full refund without the forced return mechanism engaging.
 
-The admin refund endpoint used `prisma.$transaction([...])` (array form), which runs Prisma operations in sequence but does NOT roll back on failure. `restoreListingStock` was called *after* the transaction, so a stock-restore failure left the order marked `refunded` with no stock returned.
+### Stock Restore Verification
 
-**Fix:** Converted to callback-form `prisma.$transaction(async (tx) => { ... })` and moved `restoreListingStock(tx, ...)` inside the callback. Now if stock restore fails, the entire transaction (including the order status update) rolls back.
+Forced return stock restore happens in two places:
+1. **`returnController.ts:1096-1115`** (seller confirms receipt): `restoreListingStock(tx, listing_id, quantity || 1, 'return_refund', selected_size)` inside `$transaction`
+2. **`escrowService.ts:1750-1768`** (auto-confirm, seller timeout): `restoreListingStock(tx, listing_id, quantity || 1, 'return_refund', selected_size)` inside `$transaction`
 
-### S-5 — Null escrow on `charge.dispute.created` (SWEEP)
+Both use claim-the-row idempotency (`SELECT ... FOR UPDATE` with status + `stripe_refund_id IS NULL` guard). Both call `restoreListingStock` inside the same transaction that updates the return request and order status. Both benefit from QTY-FIX-01's S-6 fix (off_sale status preserved).
 
-**File:** `src/controllers/stripeController.ts`
+### S-4 Assessment
 
-When a dispute opens, orders move to `disputed` but `escrow_release_at` was left populated. If the merchant wins the dispute, the escrow timer could fire during the dispute window and release funds prematurely.
+**The original S-4 finding is a false positive** for the specific scenario described ("buyer receives full refund, stock not restored"). The auditor examined `disputeController.ts` in isolation and correctly observed it never calls `restoreListingStock`. However, full refunds always route through the forced return lifecycle (`returnController` + `escrowService`), where stock IS restored inside transactions with claim-the-row idempotency.
 
-**Fix:** Added `escrow_release_at: null` to the `updateMany` data in the `charge.dispute.created` handler.
+**Partial refunds (<=60%)** correctly do NOT restore stock -- the buyer keeps the item. The sale transitions to `completed`, not `refunded`. Restoring stock here would overcount the seller's available inventory.
 
-### S-6 — Stock restore clobbers `off_sale` status (SWEEP)
+### No Code Changes Required in disputeController.ts
 
-**File:** `src/lib/stockUtils.ts`
+There are no resolution paths where stock should be restored but isn't. The forced return mechanism provides the correct separation of concerns: the dispute controller handles the resolution decision; the return controller handles the physical return and stock accounting.
 
-`restoreListingStock` set any non-deleted listing back to `active`. Listings that were `off_sale` before the order would be resurrected as `active` — the seller's intent to hide the listing was lost.
+## Partial Refund Decision (flagged for Harry)
 
-**Fix:** Changed status logic to preserve both `deleted` and `off_sale`:
-```
-const newStatus = (listing.status === 'deleted' || listing.status === 'off_sale')
-  ? listing.status : 'active';
-```
-Applied to both the simple path (line 64) and the size-variant path (line 91).
+See `output/questions.md` -- the question is whether partial refunds (buyer keeps item, gets <=60% money back, order `completed`) should also restore stock. Current behavior: NO restore. Analysis: this is correct because the buyer physically has the item. Restoring stock would inflate the seller's available inventory beyond what they can actually fulfill.
 
-### M-4 — No real refund in native payment error path (MEDIUM)
-
-**File:** `src/controllers/nativePaymentController.ts`
-
-When `confirmPayment` threw after the PI succeeded (e.g. stock exhausted during fulfilment), the catch block returned an error message to the user but never issued a Stripe refund. The orphaned-payment safety net would eventually catch it, but users saw "payment failed" with money taken and no immediate refund.
-
-**Fix:** Added `stripe.refunds.create({ payment_intent: piId })` in the catch block. On success, user message says "Your payment has been refunded." On refund failure, says "Your refund is being processed" (safety net will retry). No double-refund risk: the safety net checks for existing orders before refunding, and Stripe rejects refunding an already-fully-refunded PI.
-
-### Schema — Non-unique index on `stripe_payment_intent_id`
-
-**File:** `prisma/schema.prisma`
-
-Cart checkout creates multiple order rows per payment intent (one per seller). A `@@unique` constraint would break this. Added `@@index([stripe_payment_intent_id])` (non-unique) to the orders model for query performance on idempotency lookups and dispute handlers.
+The C-2 chargeback precedent (restore stock even though buyer keeps item) does NOT apply here because:
+- Chargeback: unilateral card network decision, sale voided against seller's will, order -> `refunded`
+- Internal partial refund: negotiated compromise, sale stands at reduced price, order -> `completed`
 
 ## Tests
 
-**File:** `src/__tests__/unit/qtyFix01.test.ts` — 30 tests, all pass.
+**File:** `src/__tests__/unit/qtyFix02DisputeStock.test.ts`
 
-| Fix | Functional tests | Structural tests | Total |
-|-----|-----------------|------------------|-------|
-| S-6 | 4 (invoke restoreListingStock, verify status preserved) | 0 | 4 |
-| C-2 | 3 (simulate dispute handler logic, verify status transitions) | 5 (handler exists, imports, tx wrapping) | 8 |
-| H-1 | 0 | 7 (verify findFirst/findMany inside tx callback, all 3 controllers) | 7 |
-| H-3 | 2 (simulate tx rollback on stock-restore failure) | 2 (callback-form tx, restoreListingStock inside) | 4 |
-| S-5 | 0 | 1 (escrow_release_at: null in handler) | 1 |
-| M-4 | 2 (user message logic with/without refund) | 3 (stripe.refunds.create in catch, req.body fallback) | 5 |
-| Schema | 0 | 1 (@@index present, not @@unique) | 1 |
+Tests verify the current behavior is correct:
 
-Structural tests follow the `checkoutOversellLock.test.ts` pattern and are clearly labelled.
+| # | Test | What it proves | Teeth-check |
+|---|------|----------------|-------------|
+| 1 | Seller accept 100% -> createForcedReturn called | Full refund always routes to forced return | Remove threshold check -> test fails |
+| 2 | Seller accept 30% -> Stripe refund, no createForcedReturn | Partial stays money-only | Lower threshold -> test fails |
+| 3 | Admin full_refund -> createForcedReturn called | Admin full refund routes to forced return | Remove threshold check -> test fails |
+| 4 | Admin no_refund -> no refund, sale stands | No-refund path has no stock restore | Add unwanted refund -> test fails |
+| 5 | confirmReturnDelivered -> restoreListingStock inside tx | Forced return completion restores stock | Remove restock call -> test fails |
+| 6 | off_sale listing stays off_sale after restore | S-6 fix integration | Revert S-6 fix -> test fails |
+| 7 | Claim-the-row blocks double restore | Idempotency on forced return | Remove guard -> test fails |
 
-**Existing tests updated** (to match H-1 in-transaction pattern):
-- `cartPartialClear.test.ts` — added `findMany` mock to tx object (4 tests pass)
-- `fulfilmentDispatch.test.ts` — updated idempotency assertions (15 tests pass)
-- `sellerCheckoutE2E.test.ts` — added `findMany` mock, updated replay test (13 tests pass)
+## Concerns (not bugs, noted for awareness)
 
-**Test suite results:** 19 suites pass, 461 tests pass. 3 pre-existing failures (registration.test.ts TS errors, refreshTokens.test.ts missing supertest, apiEndpoints.test.ts no server).
+1. **Non-transactional resolution writes**: In all three dispute controller resolution functions, the Stripe refund, order update, dispute update, and seller payout transfer are separate non-transactional operations. If any step fails mid-way, there's no rollback. This is a pre-existing design pattern -- flagged but NOT in scope per brief instructions ("Do NOT change refund/escrow money logic").
 
-**TypeScript:** `npx tsc --noEmit` clean (4 pre-existing auth errors only, none from these changes).
+2. **Dead code**: `dispute.requested_refund_percent === 100` checks at lines 981 and 1299 are dead code -- 100% requests always trigger forced return before reaching these lines. Counter offers are capped at 60%, so `counter_offer_percent === 100` is also dead code. Harmless but confusing.
 
 ## Diff stats
 
 ```
- prisma/schema.prisma                          |   1 +
- src/__tests__/unit/cartPartialClear.test.ts   |   4 +-
- src/__tests__/unit/fulfilmentDispatch.test.ts |  32 ++++---
- src/__tests__/unit/sellerCheckoutE2E.test.ts  |  17 +++-
- src/controllers/cartCheckoutController.ts     |  21 ++---
- src/controllers/nativePaymentController.ts    |  66 +++++++++----
- src/controllers/stripeController.ts           | 129 +++++++++++++++++++++++---
- src/lib/stockUtils.ts                         |   4 +-
- src/routes/adminRoutes.ts                     |  32 +++----
- 9 files changed, 226 insertions(+), 80 deletions(-)
- 1 new file: src/__tests__/unit/qtyFix01.test.ts
+ CHANGES.md                                         | (this file)
+ src/__tests__/unit/qtyFix02DisputeStock.test.ts     | new file (tests)
+ 0 production code files changed
 ```
 
-## Deploy notes
-
-1. **Schema migration required:** Run `npx prisma migrate dev --name add-order-pi-index` to create the non-unique index on `stripe_payment_intent_id`. Additive index only -- no data migration, no downtime. Can be applied while the server is running.
-
-2. **No env changes.** No new dependencies.
-
-3. **Stripe webhook:** The `charge.dispute.closed` handler is new. Ensure this event type is enabled in the Stripe webhook dashboard (Dashboard -> Developers -> Webhooks -> select endpoint -> add `charge.dispute.closed`). The `charge.dispute.created` event should already be enabled.
-
-4. **Rollback:** All fixes are backward-compatible. The schema index can be dropped without code changes. The dispute handler simply won't fire if the event isn't enabled.
-
-## Security checklist
-
-- [x] No new env vars or secrets
-- [x] No new API endpoints (webhook handler is a new case in existing endpoint)
-- [x] Transaction boundaries verified -- all money-touching writes are inside $transaction callbacks
-- [x] Idempotency checks are inside transactions (no TOCTOU window)
-- [x] Stripe refund in catch block uses req.body?.paymentIntentId (safe -- already validated by Stripe retrieve)
-- [x] Admin route change is within existing auth middleware (no new exposure)
-- [x] No SQL injection vectors (all queries use Prisma ORM)
-- [x] Status transitions are uni-directional (disputed -> refunded/to_ship, never backward)
+No schema changes. No deploy required.
