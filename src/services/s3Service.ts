@@ -10,7 +10,11 @@ const s3Client = new S3Client({
   },
 });
 
-const BUCKET_NAME = 'mulligans-golf-images-mvp';
+const DEFAULT_BUCKET_NAME = 'mulligans-golf-images-mvp';
+
+function getBucketName(): string {
+  return process.env.S3_BUCKET_NAME || DEFAULT_BUCKET_NAME;
+}
 
 // CloudFront CDN domain - falls back to direct S3 URL if not set
 const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN;
@@ -19,7 +23,7 @@ function buildImageUrl(key: string): string {
   if (CLOUDFRONT_DOMAIN) {
     return `https://${CLOUDFRONT_DOMAIN}/${key}`;
   }
-  return `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${key}`;
+  return `https://${getBucketName()}.s3.${process.env.AWS_REGION || 'eu-west-2'}.amazonaws.com/${key}`;
 }
 
 export interface UploadResult {
@@ -37,7 +41,7 @@ export class S3Service {
     const key = `listings/${uuidv4()}.${fileExtension}`;
 
     const command = new PutObjectCommand({
-      Bucket: BUCKET_NAME,
+      Bucket: getBucketName(),
       Key: key,
       Body: file,
       ContentType: mimetype,
@@ -61,7 +65,7 @@ export class S3Service {
     const key = `support/${ticketId}/${uuidv4()}.${fileExtension}`;
 
     const command = new PutObjectCommand({
-      Bucket: BUCKET_NAME,
+      Bucket: getBucketName(),
       Key: key,
       Body: file,
       ContentType: mimetype,
@@ -76,7 +80,7 @@ export class S3Service {
 
   static async deleteImage(key: string): Promise<void> {
     const command = new DeleteObjectCommand({
-      Bucket: BUCKET_NAME,
+      Bucket: getBucketName(),
       Key: key,
     });
 
