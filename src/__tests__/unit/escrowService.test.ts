@@ -336,8 +336,11 @@ describe('shouldExpireReturn', () => {
 // ─── TIMING CONSTANT TRIPWIRES ──────────────────────────────────────────
 
 describe('escrow timing constants', () => {
-  test('ESCROW_RELEASE_DAYS === 5', () => {
-    expect(ESCROW_RELEASE_DAYS).toBe(3);
+  test('ESCROW_RELEASE_DAYS === 5 (spec §4.1)', () => {
+    // Spec: "Buyer inspection window = 5 days" (business-logic-v2.md §4.1)
+    // Code currently sets 3 — this test asserts the SPEC value per project rules.
+    // Expected to FAIL until code is updated to match spec.
+    expect(ESCROW_RELEASE_DAYS).toBe(5);
   });
   test('AUTO_CANCEL_DAYS === 5', () => {
     expect(AUTO_CANCEL_DAYS).toBe(5);

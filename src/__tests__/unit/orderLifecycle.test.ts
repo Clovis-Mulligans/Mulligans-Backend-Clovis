@@ -20,10 +20,12 @@ import {
 } from '../../lib/feeCalculations';
 
 type OrderStatus =
+  | 'paid'
   | 'pending'
   | 'to_ship'
   | 'in_transit'
   | 'delivered'
+  | 'delivery_failed'
   | 'completed'
   | 'cancelled'
   | 'disputed'
@@ -31,15 +33,17 @@ type OrderStatus =
   | 'returned';
 
 const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  pending:    ['to_ship', 'cancelled'],
-  to_ship:    ['in_transit', 'cancelled'],
-  in_transit: ['delivered'],
-  delivered:  ['completed', 'disputed'],
-  disputed:   ['completed', 'refunded', 'returned'],
-  completed:  [],
-  cancelled:  [],
-  refunded:   [],
-  returned:   [],
+  paid:             ['pending', 'cancelled'],
+  pending:          ['to_ship', 'cancelled'],
+  to_ship:          ['in_transit', 'cancelled'],
+  in_transit:       ['delivered', 'delivery_failed'],
+  delivered:        ['completed', 'disputed'],
+  delivery_failed:  ['in_transit', 'refunded', 'disputed'],
+  disputed:         ['completed', 'refunded', 'returned'],
+  completed:        [],
+  cancelled:        [],
+  refunded:         [],
+  returned:         [],
 };
 
 const TERMINAL_ORDER_STATUSES: OrderStatus[] = ['completed', 'cancelled', 'refunded', 'returned'];
@@ -51,12 +55,17 @@ function canOrderTransition(from: OrderStatus, to: OrderStatus): boolean {
 
 describe('order state machine — valid transitions', () => {
   const valid: [OrderStatus, OrderStatus][] = [
+    ['paid', 'pending'],
     ['pending', 'to_ship'],
     ['to_ship', 'in_transit'],
     ['in_transit', 'delivered'],
+    ['in_transit', 'delivery_failed'],
     ['delivered', 'completed'],
     ['to_ship', 'cancelled'],
     ['delivered', 'disputed'],
+    ['delivery_failed', 'in_transit'],
+    ['delivery_failed', 'refunded'],
+    ['delivery_failed', 'disputed'],
     ['disputed', 'completed'],
     ['disputed', 'refunded'],
     ['disputed', 'returned'],
@@ -87,8 +96,8 @@ describe('order state machine — terminal statuses', () => {
   });
 
   const allStatuses: OrderStatus[] = [
-    'pending', 'to_ship', 'in_transit', 'delivered',
-    'completed', 'cancelled', 'disputed', 'refunded', 'returned',
+    'paid', 'pending', 'to_ship', 'in_transit', 'delivered',
+    'delivery_failed', 'completed', 'cancelled', 'disputed', 'refunded', 'returned',
   ];
 
   test.each(allStatuses)('%s has a defined transition set', (status) => {
@@ -185,8 +194,11 @@ describe('timing constants — tripwires', () => {
     expect(SHIPPING_DEADLINE_DAYS).toBe(5);
     expect(AUTO_CANCEL_DAYS).toBe(5);
   });
-  test('Escrow release after delivery = 3 days', () => {
-    expect(ESCROW_RELEASE_DAYS).toBe(3);
+  test('Escrow release after delivery = 5 days (spec §4.1)', () => {
+    // Spec: "Buyer inspection window = 5 days" (business-logic-v2.md §4.1)
+    // Code currently sets 3 — this test asserts the SPEC value per project rules.
+    // Expected to FAIL until code is updated to match spec.
+    expect(ESCROW_RELEASE_DAYS).toBe(5);
   });
   test('Return shipping deadline = 5 days', () => {
     expect(RETURN_SHIPPING_DEADLINE_DAYS).toBe(5);

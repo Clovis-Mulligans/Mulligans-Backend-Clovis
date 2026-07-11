@@ -232,8 +232,11 @@ describe('fee constants — tripwires', () => {
   test('MAX_OFFER_PERCENT is 100%', () => {
     expect(MAX_OFFER_PERCENT).toBe(1.0);
   });
-  test('ESCROW_RELEASE_DAYS is 5', () => {
-    expect(ESCROW_RELEASE_DAYS).toBe(3);
+  test('ESCROW_RELEASE_DAYS is 5 (spec §4.1)', () => {
+    // Spec: "Buyer inspection window = 5 days" (business-logic-v2.md §4.1)
+    // Code currently sets 3 — this test asserts the SPEC value per project rules.
+    // Expected to FAIL until code is updated to match spec.
+    expect(ESCROW_RELEASE_DAYS).toBe(5);
   });
   test('AUTO_CANCEL_DAYS is 5', () => {
     expect(AUTO_CANCEL_DAYS).toBe(5);
