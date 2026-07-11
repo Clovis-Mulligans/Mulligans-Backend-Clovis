@@ -62,6 +62,12 @@ router.post('/register', signupLimiter, async (req: Request, res: Response) => {
     const { email: rawEmail, password, display_name, phone_number, marketing_emails } = req.body;
 const email = rawEmail?.trim().toLowerCase();
 
+    const VALID_PLATFORMS = ['ios', 'android', 'web'];
+    const rawPlatform = typeof req.body.signup_platform === 'string'
+      ? req.body.signup_platform.trim().toLowerCase()
+      : null;
+    const signup_platform = rawPlatform && VALID_PLATFORMS.includes(rawPlatform) ? rawPlatform : null;
+
     console.log('📝 Registering user:', email);
 
     // Create user in Cognito (but skip their email verification)
@@ -103,6 +109,7 @@ const email = rawEmail?.trim().toLowerCase();
           verification_code: verificationCode,
           verification_code_expires: codeExpires,
           updated_at: new Date(),
+          ...(signup_platform && !existingUser.signup_platform ? { signup_platform } : {}),
         },
       });
     } else {
@@ -119,6 +126,7 @@ const email = rawEmail?.trim().toLowerCase();
           updated_at: new Date(),
           marketing_emails: marketing_emails || false,
             sms_marketing_consent: req.body.sms_marketing_consent || false,
+            signup_platform,
         },
       });
     }
@@ -590,6 +598,18 @@ const email = rawEmail?.trim().toLowerCase();
 
     console.log('✅ Login successful:', email);
 
+    // Backfill signup_platform for existing users
+    const LOGIN_VALID_PLATFORMS = ['ios', 'android', 'web'];
+    const loginPlatform = typeof req.body.signup_platform === 'string'
+      ? req.body.signup_platform.trim().toLowerCase()
+      : null;
+    if (!user.signup_platform && loginPlatform && LOGIN_VALID_PLATFORMS.includes(loginPlatform)) {
+      await prisma.users.update({
+        where: { id: user.id },
+        data: { signup_platform: loginPlatform },
+      });
+    }
+
     const tokens = await buildTokenResponse(
       { id: user.id, email: user.email, display_name: user.display_name },
       req,
@@ -650,6 +670,31 @@ router.get('/profile', authenticateToken, async (req: any, res: Response) => {
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Failed to get profile' });
+  }
+});
+
+/**
+ * Get user signup platform stats (aggregate counts)
+ */
+router.get('/platform-stats', authenticateToken, async (req: any, res: Response) => {
+  try {
+    const groups = await prisma.users.groupBy({
+      by: ['signup_platform'],
+      _count: { _all: true },
+    });
+
+    const stats: Record<string, number> = { ios: 0, android: 0, web: 0, unknown: 0 };
+    for (const g of groups) {
+      const key = g.signup_platform && ['ios', 'android', 'web'].includes(g.signup_platform)
+        ? g.signup_platform
+        : 'unknown';
+      stats[key] += g._count._all;
+    }
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Platform stats error:', error);
+    res.status(500).json({ error: 'Failed to get platform stats' });
   }
 });
 
