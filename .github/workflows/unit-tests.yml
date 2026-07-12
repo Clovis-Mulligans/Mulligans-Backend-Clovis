@@ -2,9 +2,9 @@ name: Unit Tests
 
 on:
   push:
-    branches: [main, feature/pro-store-foundation]
+    branches: [main, pro-seller-foundation]
   pull_request:
-    branches: [main, feature/pro-store-foundation]
+    branches: [main, pro-seller-foundation]
 
 jobs:
   unit:
