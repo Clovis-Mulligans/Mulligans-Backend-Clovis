@@ -1487,12 +1487,10 @@ describe('ListingController.deleteListingImage', () => {
     expect(res.json.mock.calls[0][0]).toEqual({ error: 'Image not found' });
   });
 
-  // ── NEW: cross-listing image deletion (SEC-09, DI5) ──
-  // BUG: the controller checks ownership of the listing in params.id,
-  // but does NOT verify image.listing_id === params.id. This means an
-  // owner of listing A can delete an image belonging to listing B.
-  // This test documents the current (buggy) behavior.
-  it('AUTHORIZATION GAP: allows deleting image from a different listing if caller owns param listing', async () => {
+  // SECURITY: a caller must not be able to delete images from a listing they
+  // do not own, even if they own the listing named in params.id.
+  // (FIND-LST-01, fixed 12 Jul 2026.)
+  it('rejects deleting an image that belongs to a different listing (403)', async () => {
     const otherListingImage = {
       ...testImage,
       id: 'img_other_listing',
@@ -1502,8 +1500,6 @@ describe('ListingController.deleteListingImage', () => {
 
     mockPrisma.listings.findUnique.mockResolvedValueOnce(testListing); // owns this listing
     mockPrisma.images.findUnique.mockResolvedValueOnce(otherListingImage); // image belongs to different listing
-    mockedS3.deleteImage.mockResolvedValue(undefined);
-    mockPrisma.images.delete.mockResolvedValueOnce(otherListingImage);
 
     const res = makeMockResponse();
     await ListingController.deleteListingImage(
@@ -1514,8 +1510,10 @@ describe('ListingController.deleteListingImage', () => {
       res
     );
 
-    // Current behavior: deletion succeeds (this IS a bug — see FINDING 2)
-    expect(res.json.mock.calls[0][0]).toEqual({ message: 'Image deleted successfully' });
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json.mock.calls[0][0]).toEqual({ error: 'Unauthorized' });
+    expect(mockedS3.deleteImage).not.toHaveBeenCalled();
+    expect(mockPrisma.images.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -1903,9 +1901,9 @@ describe('ListingController.bulkUpdateListings', () => {
     expect(call.data.price).toBe('0.00');
   });
 
-  // ── NEW: percent path silently drops status (INT-06, BU7) ──
-
-  it('silently drops status when price_adjustment_percent is also provided', async () => {
+  // This documents a KNOWN GAP, not intended behaviour. If this test fails,
+  // someone fixed the gap — update the test, do not revert.
+  it('KNOWN GAP (FIND-LST-04): percent path drops status — asserts current behaviour', async () => {
     mockPrisma.listings.count.mockResolvedValueOnce(1);
     mockPrisma.listings.findMany.mockResolvedValueOnce([
       { id: 'lst_1', price: '100.00' },
@@ -1957,8 +1955,9 @@ describe('ListingController.bulkDeleteListings', () => {
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it('soft-deletes via updateMany when owner', async () => {
+  it('soft-deletes via updateMany when owner and no active orders', async () => {
     mockPrisma.listings.count.mockResolvedValueOnce(2);
+    mockPrisma.orders.findMany.mockResolvedValueOnce([]); // no active orders
     mockPrisma.listings.updateMany.mockResolvedValueOnce({ count: 2 });
 
     const res = makeMockResponse();
@@ -1970,29 +1969,53 @@ describe('ListingController.bulkDeleteListings', () => {
       res
     );
 
-    expect(mockPrisma.listings.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['lst_1', 'lst_2'] }, seller_id: testUserSeller.id },
-      data: { status: 'deleted' },
-    });
+    const updateCall = mockPrisma.listings.updateMany.mock.calls[0][0] as any;
+    expect(updateCall.where).toEqual({ id: { in: ['lst_1', 'lst_2'] }, seller_id: testUserSeller.id });
+    expect(updateCall.data.status).toBe('deleted');
+    expect(updateCall.data.deleted_at).toBeInstanceOf(Date);
+    expect(updateCall.data.updated_at).toBeInstanceOf(Date);
     expect(res.json.mock.calls[0][0]).toEqual({ deleted: 2 });
   });
 
-  // NOTE: bulkDeleteListings does NOT check for active orders (unlike
-  // single deleteListing). This is a known gap — see FINDING 3.
-  it('does not check for active orders (gap vs single delete)', async () => {
-    mockPrisma.listings.count.mockResolvedValueOnce(1);
-    mockPrisma.listings.updateMany.mockResolvedValueOnce({ count: 1 });
+  it('blocks bulk delete when any listing has an active order', async () => {
+    mockPrisma.listings.count.mockResolvedValueOnce(2);
+    mockPrisma.orders.findMany.mockResolvedValueOnce([
+      { listing_id: 'lst_blocked', status: 'paid' },
+    ]);
 
     const res = makeMockResponse();
     await ListingController.bulkDeleteListings(
       makeMockRequest({
         user: { id: testUserSeller.id },
-        body: { ids: ['lst_with_orders'] },
+        body: { ids: ['lst_ok', 'lst_blocked'] },
       }),
       res
     );
 
-    expect(mockPrisma.orders.findFirst).not.toHaveBeenCalled();
-    expect(res.json.mock.calls[0][0]).toEqual({ deleted: 1 });
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toMatch(/active orders/i);
+    expect(res.json.mock.calls[0][0].blocked).toEqual([
+      { listing_id: 'lst_blocked', order_status: 'paid' },
+    ]);
+    expect(mockPrisma.listings.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('queries orders with all 6 active statuses', async () => {
+    mockPrisma.listings.count.mockResolvedValueOnce(1);
+    mockPrisma.orders.findMany.mockResolvedValueOnce([]);
+    mockPrisma.listings.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await ListingController.bulkDeleteListings(
+      makeMockRequest({
+        user: { id: testUserSeller.id },
+        body: { ids: ['lst_1'] },
+      }),
+      makeMockResponse()
+    );
+
+    const orderArgs = mockPrisma.orders.findMany.mock.calls[0][0] as any;
+    expect(orderArgs.where.status.in).toEqual([
+      'pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered',
+    ]);
   });
 });

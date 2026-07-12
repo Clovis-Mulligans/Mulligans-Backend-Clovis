@@ -41,6 +41,7 @@ export const mockPrisma: any = {
   },
   orders: {
     findFirst: fn(),
+    findMany: fn(),
   },
   offers: {
     findFirst: fn(),

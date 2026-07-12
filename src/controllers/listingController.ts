@@ -18,6 +18,8 @@ function calculateTotalFromSizeQuantities(specifications: any): number | null {
   return total > 0 ? total : null;
 }
 
+const ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered'];
+
 export class ListingController {
   /**
    * Get featured listings with personalization for home screen
@@ -1128,8 +1130,6 @@ if (keyword) {
       }
 
       // Check for active orders before allowing deletion
-      const ACTIVE_ORDER_STATUSES = ['pending', 'paid', 'to_ship', 'shipped', 'in_transit', 'delivered'];
-
       const activeOrders = await prisma.orders.findFirst({
         where: {
           listing_id: id,
@@ -1204,6 +1204,11 @@ if (keyword) {
 
       if (!image) {
         res.status(404).json({ error: 'Image not found' });
+        return;
+      }
+
+      if (image.listing_id !== id) {
+        res.status(403).json({ error: 'Unauthorized' });
         return;
       }
 
@@ -1368,10 +1373,28 @@ if (keyword) {
         return;
       }
 
+      // Check for active orders across all submitted listings
+      const blockedOrders = await prisma.orders.findMany({
+        where: {
+          listing_id: { in: ids },
+          status: { in: ACTIVE_ORDER_STATUSES },
+        },
+        select: { listing_id: true, status: true },
+      });
+
+      if (blockedOrders.length > 0) {
+        res.status(400).json({
+          error: 'One or more listings have active orders and cannot be deleted',
+          blocked: blockedOrders.map((o: any) => ({ listing_id: o.listing_id, order_status: o.status })),
+        });
+        return;
+      }
+
       // Soft delete — set status to deleted
+      const now = new Date();
       await prisma.listings.updateMany({
         where: { id: { in: ids }, seller_id: userId },
-        data: { status: 'deleted' },
+        data: { status: 'deleted', deleted_at: now, updated_at: now },
       });
 
       res.json({ deleted: ids.length });

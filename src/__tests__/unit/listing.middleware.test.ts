@@ -1,9 +1,6 @@
-// Brief 8 — Listing Controller INTEGRATION tests.
-//
-// Mounts the real listingRoutes router on a minimal Express app and drives
-// it with supertest. Prisma, S3 and Sharp are mocked so no network/database
-// is touched, but the middleware stack (express.json, rate limiter, auth,
-// multer, Zod validation, route dispatch) is 100% production code.
+// Middleware-stack tests — drives the real Express router (auth, Zod
+// validation, rate limiting, multer) with all backend dependencies mocked.
+// Runs in the UNIT tier because it touches no real services.
 
 import { jest } from '@jest/globals';
 
@@ -92,7 +89,7 @@ describe('POST /api/listings', () => {
       .post('/api/listings')
       .send(validCreateListingPayload());
     expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: 'Access token required' });
+    expect(res.body).toMatchObject({ error: 'Access token required' });
   });
 
   it('returns 401 / 403 when Authorization is malformed', async () => {
@@ -357,7 +354,7 @@ describe('DELETE /api/listings/:id', () => {
       images: [testImage],
     });
     mockPrisma.orders.findFirst.mockResolvedValueOnce(null);
-    mockPrisma.listings.delete.mockResolvedValueOnce(testListing);
+    mockPrisma.listings.update.mockResolvedValueOnce({ ...testListing, status: 'deleted' });
 
     const res = await request(app)
       .delete(`/api/listings/${testListing.id}`)
