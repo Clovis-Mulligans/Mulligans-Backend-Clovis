@@ -306,17 +306,23 @@ describe('TC-MONEY-02: auto-refund when fulfillment fails (cart checkout)', () =
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TC-MONEY-03: nativePaymentController.confirmPayment catch block
+// TC-MONEY-03 (HYG-04 REWRITE): native payment confirm — MUST refund
 //
-// On main: the catch does NOT issue a refund (relies on 30s webhook safety net).
-// The response message claims "has been refunded" — which is misleading.
-// This test documents the CURRENT behaviour; the feature branch fixes it.
+// Spec §4.1: "no payment without a path to refund". The native path
+// (Apple Pay / Google Pay) must match the cart checkout path (D-C4):
+// when fulfilment fails after payment succeeds, stripe.refunds.create
+// MUST fire synchronously. The 30-second webhook safety net is NOT a
+// substitute — it races with the error response reaching the client.
+//
+// BUG (FIND-PAY-02): The catch block in confirmPayment says "Your
+// payment has been refunded" but NEVER calls stripe.refunds.create.
+// This test asserts the SPEC. It SHOULD BE RED on delivery.
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('TC-MONEY-03: native payment confirm — catch block behaviour', () => {
-  test('confirmPayment returns 500 on fulfilment failure', async () => {
-    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue({
-      id: 'pi_fail_test',
+describe('TC-MONEY-03 (HYG-04): confirmPayment MUST refund on fulfilment failure', () => {
+  function makeSucceededPI(id: string) {
+    return {
+      id,
       status: 'succeeded',
       metadata: {
         type: 'native_single_item',
@@ -326,70 +332,89 @@ describe('TC-MONEY-03: native payment confirm — catch block behaviour', () => 
         quantity: '1',
       },
       shipping: {
-        name: 'Test',
+        name: 'Test Buyer',
         address: {
-          line1: '1 St',
+          line1: '1 High St',
           city: 'London',
           postal_code: 'SW1A 1AA',
           country: 'GB',
         },
       },
-    });
+    };
+  }
 
-    // No existing order
+  test('FIND-PAY-02: stripe.refunds.create fires with correct payment_intent on stock failure', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_native_refund')
+    );
     mockPrisma.orders.findFirst.mockResolvedValue(null);
-    // Transaction throws
+    mockPrisma.$transaction.mockRejectedValue(
+      new Error('Insufficient stock for listing lst_1')
+    );
+    mockRefundsCreate.mockResolvedValue({ id: 're_native_1' });
+
+    const req = {
+      user: { id: 'buyer_1' },
+      body: { paymentIntentId: 'pi_native_refund' },
+    } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    // SPEC: refund MUST be issued — matching the cart checkout D-C4 pattern
+    expect(mockRefundsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: 'pi_native_refund',
+      })
+    );
+  });
+
+  test('FIND-PAY-02: refund metadata includes reason for audit trail', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_native_audit')
+    );
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.$transaction.mockRejectedValue(
+      new Error('Insufficient stock for listing lst_1')
+    );
+    mockRefundsCreate.mockResolvedValue({ id: 're_native_2' });
+
+    const req = {
+      user: { id: 'buyer_1' },
+      body: { paymentIntentId: 'pi_native_audit' },
+    } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    // SPEC: refund metadata must include machine-readable reason
+    expect(mockRefundsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          reason: expect.stringMatching(/fulfillment_failed/),
+        }),
+      })
+    );
+  });
+
+  test('FIND-PAY-02: confirmPayment still returns 500 to client on failure', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_native_500')
+    );
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
     mockPrisma.$transaction.mockRejectedValue(
       new Error('Insufficient stock for listing lst_1')
     );
 
     const req = {
       user: { id: 'buyer_1' },
-      body: { paymentIntentId: 'pi_fail_test' },
+      body: { paymentIntentId: 'pi_native_500' },
     } as any;
     const res = makeMockRes();
 
     await NativePaymentController.confirmPayment(req, res);
 
     expect(res.statusCode).toBe(500);
-  });
-
-  test('insufficient-stock error message mentions refund (user-facing)', async () => {
-    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue({
-      id: 'pi_stock_test',
-      status: 'succeeded',
-      metadata: {
-        type: 'native_single_item',
-        buyer_id: 'buyer_1',
-        listing_id: 'lst_1',
-        seller_id: 'seller_1',
-        quantity: '1',
-      },
-      shipping: {
-        name: 'Test',
-        address: {
-          line1: '1 St',
-          city: 'London',
-          postal_code: 'SW1A 1AA',
-          country: 'GB',
-        },
-      },
-    });
-    mockPrisma.orders.findFirst.mockResolvedValue(null);
-    mockPrisma.$transaction.mockRejectedValue(
-      new Error('Insufficient stock for listing lst_1')
-    );
-
-    const req = {
-      user: { id: 'buyer_1' },
-      body: { paymentIntentId: 'pi_stock_test' },
-    } as any;
-    const res = makeMockRes();
-
-    await NativePaymentController.confirmPayment(req, res);
-
-    // The user message should tell the buyer about the refund
-    expect(res.body.error).toMatch(/refund|no longer available/i);
   });
 });
 
