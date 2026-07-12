@@ -674,31 +674,6 @@ router.get('/profile', authenticateToken, async (req: any, res: Response) => {
 });
 
 /**
- * Get user signup platform stats (aggregate counts)
- */
-router.get('/platform-stats', authenticateToken, async (req: any, res: Response) => {
-  try {
-    const groups = await prisma.users.groupBy({
-      by: ['signup_platform'],
-      _count: { _all: true },
-    });
-
-    const stats: Record<string, number> = { ios: 0, android: 0, web: 0, unknown: 0 };
-    for (const g of groups) {
-      const key = g.signup_platform && ['ios', 'android', 'web'].includes(g.signup_platform)
-        ? g.signup_platform
-        : 'unknown';
-      stats[key] += g._count._all;
-    }
-
-    res.json(stats);
-  } catch (error) {
-    console.error('Platform stats error:', error);
-    res.status(500).json({ error: 'Failed to get platform stats' });
-  }
-});
-
-/**
  * Get current user's sending address
  */
 router.get('/sending-address', authenticateToken, async (req: any, res: Response) => {
