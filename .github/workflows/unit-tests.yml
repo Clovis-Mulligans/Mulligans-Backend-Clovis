@@ -1,0 +1,22 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [main, feature/pro-store-foundation]
+  pull_request:
+    branches: [main, feature/pro-store-foundation]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --include=dev
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - run: npx jest --selectProjects unit --runInBand --forceExit --ci

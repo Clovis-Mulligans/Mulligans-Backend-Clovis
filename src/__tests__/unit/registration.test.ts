@@ -76,6 +76,13 @@ const app = express();
 app.use(express.json());
 app.use('/api/auth', authRouter);
 
+// Snapshot rate-limiter config calls captured at module-load time.
+// beforeEach → jest.clearAllMocks() wipes mock.calls before the G tests
+// can inspect them, so we preserve them here.
+const rateLimitCallsAtBoot = mockRateLimitFactory.mock.calls.map(
+  (args: any[]) => [...args],
+);
+
 let server: http.Server;
 let BASE: string;
 
@@ -1227,8 +1234,7 @@ describe('F: Failure modes', () => {
 /* ================================================================== */
 describe('G: Rate limiting', () => {
   test('G-01 / G-04: Signup rate limiter configured with correct params', () => {
-    const calls = mockRateLimitFactory.mock.calls as any[][];
-    const signupCall = calls.find((args) => args[0]?.max === 3);
+    const signupCall = rateLimitCallsAtBoot.find((args: any[]) => args[0]?.max === 3);
     expect(signupCall).toBeDefined();
     expect(signupCall![0]).toMatchObject({
       windowMs: 60 * 60 * 1000,
@@ -1239,8 +1245,7 @@ describe('G: Rate limiting', () => {
   });
 
   test('G-01 (cont): Login rate limiter configured separately', () => {
-    const calls = mockRateLimitFactory.mock.calls as any[][];
-    const loginCall = calls.find((args) => args[0]?.max === 5);
+    const loginCall = rateLimitCallsAtBoot.find((args: any[]) => args[0]?.max === 5);
     expect(loginCall).toBeDefined();
     expect(loginCall![0]).toMatchObject({
       windowMs: 15 * 60 * 1000,

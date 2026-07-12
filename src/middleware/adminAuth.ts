@@ -23,7 +23,7 @@ const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const sessions = new Map<string, AdminSession>();
 
 // Clean up expired sessions every 5 minutes
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [token, session] of sessions) {
     if (now - session.lastActivity.getTime() > SESSION_TIMEOUT_MS) {
@@ -31,6 +31,7 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+cleanupTimer.unref();
 
 // ==================== MIDDLEWARE ====================
 
