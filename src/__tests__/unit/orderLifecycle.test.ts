@@ -18,6 +18,8 @@ import {
   ACCEPTANCE_WINDOW_HOURS,
   ADMIN_SESSION_TIMEOUT_MINUTES,
 } from '../../lib/feeCalculations';
+import { INSPECTION_WINDOW_DAYS } from '../../constants/inspection';
+import { DISPUTE_WINDOW_DAYS } from '../../config/constants';
 
 type OrderStatus =
   | 'pending'
@@ -185,8 +187,10 @@ describe('timing constants — tripwires', () => {
     expect(SHIPPING_DEADLINE_DAYS).toBe(5);
     expect(AUTO_CANCEL_DAYS).toBe(5);
   });
-  test('Escrow release after delivery = 3 days', () => {
+  test('Escrow release after delivery = 3 days (policy-owner confirmed)', () => {
     expect(ESCROW_RELEASE_DAYS).toBe(3);
+    expect(ESCROW_RELEASE_DAYS).toBe(INSPECTION_WINDOW_DAYS);
+    expect(DISPUTE_WINDOW_DAYS).toBe(INSPECTION_WINDOW_DAYS);
   });
   test('Return shipping deadline = 5 days', () => {
     expect(RETURN_SHIPPING_DEADLINE_DAYS).toBe(5);

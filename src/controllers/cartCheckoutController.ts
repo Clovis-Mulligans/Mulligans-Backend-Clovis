@@ -51,7 +51,7 @@ import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { validateShippingAddress } from '../utils/addressValidation';
-import { logStockDecrement } from '../lib/stockUtils';
+import { logStockDecrement, getStockForSize } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
@@ -71,18 +71,6 @@ interface AuthenticatedRequest extends Request {
 const PLATFORM_FEE_PERCENT = 0.075; // 7.5%
 const PLATFORM_FEE_FIXED = 0.99; // £0.99
 // Escrow constants
-
-// SIZE VARIANT: Helper to get stock for a specific size
-function getStockForSize(listing: any, selectedSize: string | null): number {
-  if (!selectedSize) {
-    return listing.quantity || 1;
-  }
-  const specs = listing.specifications as any;
-  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
-    return specs.sizeQuantities[selectedSize] || 0;
-  }
-  return listing.quantity || 1;
-}
 
 // SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {

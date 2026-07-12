@@ -49,25 +49,13 @@ import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
-import { logStockDecrement } from '../lib/stockUtils';
+import { logStockDecrement, getStockForSize } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
 });
-
-// SIZE VARIANT: Helper to get stock for a specific size
-function getStockForSize(listing: any, selectedSize: string | null): number {
-  if (!selectedSize) {
-    return listing.quantity || 1;
-  }
-  const specs = listing.specifications as any;
-  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
-    return specs.sizeQuantities[selectedSize] || 0;
-  }
-  return listing.quantity || 1;
-}
 
 // SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {

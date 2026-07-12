@@ -12,6 +12,7 @@ import { prisma } from '../lib/prisma';
 import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import { INSURANCE_RATE } from '../lib/feeCalculations';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { getStockForSize } from '../lib/stockUtils';
 
 // Cart expiry time: 72 hours in milliseconds
 const CART_EXPIRY_HOURS = 72;
@@ -20,25 +21,6 @@ const CART_EXPIRY_MS = CART_EXPIRY_HOURS * 60 * 60 * 1000;
 // Buyer protection fee
 const BUYER_PROTECTION_PERCENTAGE = 0.075; // 7.5%
 const BUYER_PROTECTION_FIXED = 0.99; // £0.99
-// ============================================
-// HELPER: Get available stock for a specific size
-// ============================================
-function getStockForSize(listing: any, selectedSize: string | null): number {
-  // If no size selected, return total quantity
-  if (!selectedSize) {
-    return listing.quantity || 1;
-  }
-
-  // Check if listing has size quantities in specifications
-  const specs = listing.specifications as any;
-  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
-    return specs.sizeQuantities[selectedSize] || 0;
-  }
-
-  // Fallback: if no sizeQuantities, assume total quantity applies
-  return listing.quantity || 1;
-}
-
 // ============================================
 // HELPER: Check if listing has size variants
 // ============================================
