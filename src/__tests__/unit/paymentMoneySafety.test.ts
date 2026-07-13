@@ -425,10 +425,12 @@ describe('TC-MONEY-03 (HYG-04): confirmPayment MUST refund on fulfilment failure
     await NativePaymentController.confirmPayment(req, res);
 
     // SPEC: refund MUST be issued — matching the cart checkout D-C4 pattern
+    // Second arg: idempotency key options (added in Branch 1, FIND-PAY-04)
     expect(mockRefundsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         payment_intent: 'pi_native_refund',
-      })
+      }),
+      expect.anything()
     );
   });
 
@@ -451,12 +453,14 @@ describe('TC-MONEY-03 (HYG-04): confirmPayment MUST refund on fulfilment failure
     await NativePaymentController.confirmPayment(req, res);
 
     // SPEC: refund metadata must include machine-readable reason
+    // Second arg: idempotency key options (added in Branch 1, FIND-PAY-04)
     expect(mockRefundsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
           reason: expect.stringMatching(/fulfillment_failed/),
         }),
-      })
+      }),
+      expect.anything()
     );
   });
 
@@ -478,6 +482,110 @@ describe('TC-MONEY-03 (HYG-04): confirmPayment MUST refund on fulfilment failure
     await NativePaymentController.confirmPayment(req, res);
 
     expect(res.statusCode).toBe(500);
+  });
+
+  test('FIND-PAY-02: refund carries deterministic idempotency key fulfillment_refund_<piId>', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_idem_native')
+    );
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.$transaction.mockRejectedValue(
+      new Error('Insufficient stock for listing lst_1')
+    );
+    mockRefundsCreate.mockResolvedValue({ id: 're_idem_native' });
+
+    const req = {
+      user: { id: 'buyer_1' },
+      body: { paymentIntentId: 'pi_idem_native' },
+    } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(mockRefundsCreate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        idempotencyKey: 'fulfillment_refund_pi_idem_native',
+      })
+    );
+  });
+
+  test('FIND-PAY-02: if stripe.refunds.create throws, endpoint still returns 500 and logs failure', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_refund_fail')
+    );
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.$transaction.mockRejectedValue(
+      new Error('Insufficient stock for listing lst_1')
+    );
+    mockRefundsCreate.mockRejectedValue(new Error('Stripe is down'));
+
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+    const req = {
+      user: { id: 'buyer_1' },
+      body: { paymentIntentId: 'pi_refund_fail' },
+    } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(res.statusCode).toBe(500);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[CRITICAL]'),
+      expect.anything()
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  test('FIND-PAY-02: user-facing message is accurate after successful refund', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_msg_test')
+    );
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.$transaction.mockRejectedValue(
+      new Error('Insufficient stock for listing lst_1')
+    );
+    mockRefundsCreate.mockResolvedValue({ id: 're_msg_test' });
+
+    const req = {
+      user: { id: 'buyer_1' },
+      body: { paymentIntentId: 'pi_msg_test' },
+    } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body.error).toMatch(/has been refunded/);
+  });
+
+  test('FIND-PAY-02: user-facing message differs when refund itself fails', async () => {
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue(
+      makeSucceededPI('pi_msg_fail')
+    );
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.$transaction.mockRejectedValue(
+      new Error('Insufficient stock for listing lst_1')
+    );
+    mockRefundsCreate.mockRejectedValue(new Error('Stripe down'));
+
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+    const req = {
+      user: { id: 'buyer_1' },
+      body: { paymentIntentId: 'pi_msg_fail' },
+    } as any;
+    const res = makeMockRes();
+
+    await NativePaymentController.confirmPayment(req, res);
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body.error).toMatch(/being processed/);
+    expect(res.body.error).not.toMatch(/has been refunded/);
+
+    consoleSpy.mockRestore();
   });
 });
 

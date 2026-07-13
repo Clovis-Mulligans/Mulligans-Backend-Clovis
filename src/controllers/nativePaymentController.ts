@@ -582,8 +582,34 @@ export class NativePaymentController {
       });
     } catch (error: any) {
       console.error('[PAY] Error confirming payment:', error);
+
+      const { paymentIntentId } = req.body;
+      let refundIssued = false;
+
+      if (paymentIntentId) {
+        try {
+          const refund = await stripe.refunds.create({
+            payment_intent: paymentIntentId,
+            reason: 'requested_by_customer',
+            metadata: {
+              reason: 'native_fulfillment_failed',
+              buyer_id: req.user?.id || req.user?.sub || 'unknown',
+              error: error.message?.substring(0, 200) || 'Unknown error',
+            },
+          }, {
+            idempotencyKey: `fulfillment_refund_${paymentIntentId}`,
+          });
+          console.log(`[PAY] Auto-refund issued: ${refund.id} for PI ${paymentIntentId}`);
+          refundIssued = true;
+        } catch (refundError: any) {
+          console.error(`[CRITICAL] Native auto-refund ALSO FAILED for PI ${paymentIntentId}:`, refundError);
+        }
+      }
+
       const userMessage = error.message?.includes('Insufficient stock')
-        ? 'This item is no longer available. Your payment has been refunded.'
+        ? (refundIssued
+            ? 'This item is no longer available. Your payment has been refunded.'
+            : 'This item is no longer available. Your refund is being processed.')
         : (error.message || 'Failed to confirm payment');
       res.status(500).json({ error: userMessage });
     }
