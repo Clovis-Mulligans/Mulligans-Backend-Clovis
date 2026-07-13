@@ -1092,6 +1092,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               session_id: session.id,
               error: error.message?.substring(0, 200) || 'Unknown error',
             },
+          }, {
+            idempotencyKey: `fulfillment_refund_${session.payment_intent}`,
           });
           console.log(`[CART] Auto-refund issued: ${refund.id} for session ${session.id}`);
         } catch (refundError: any) {

@@ -1204,6 +1204,8 @@ if (isBuyerCancelling) {
               reason: fullCancelReason,
               cancelled_by: isBuyer ? 'buyer' : 'seller',
             },
+          }, {
+            idempotencyKey: `cancel_refund_${order.id}`,
           });
           console.log(`[ORDER] Refund created: ${refund.id} for order: ${order.id}`);
           refundSucceeded = true;

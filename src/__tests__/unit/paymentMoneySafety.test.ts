@@ -34,18 +34,21 @@ const mockTx: any = {
     update: jest.fn(),
     updateMany: jest.fn(),
   },
-  orders: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
+  orders: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
   cart_items: { deleteMany: jest.fn() },
   offers: { update: jest.fn() },
+  notifications: { create: jest.fn() },
   $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+  $queryRaw: jest.fn(),
 };
 const mockPrisma: any = {
-  listings: { findMany: jest.fn(), findUnique: jest.fn() },
-  orders: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn() },
+  listings: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+  orders: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   users: { findUnique: jest.fn(), update: jest.fn() },
   notifications: { create: jest.fn() },
   cart_items: { findMany: jest.fn(), deleteMany: jest.fn() },
   $transaction: jest.fn(),
+  $queryRaw: jest.fn(),
 };
 jest.mock('../../lib/prisma', () => ({ prisma: mockPrisma }));
 
@@ -58,6 +61,15 @@ jest.mock('../../utils/addressValidation', () => ({
 jest.mock('../../services/emailService', () => ({
   sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
   sendSaleNotification: jest.fn().mockResolvedValue(undefined),
+  sendOrderCancellation: jest.fn().mockResolvedValue(undefined),
+  sendDeliveryConfirmation: jest.fn().mockResolvedValue(undefined),
+  sendEscrowReleased: jest.fn().mockResolvedValue(undefined),
+  sendInsuranceReportReceivedToBuyer: jest.fn().mockResolvedValue(undefined),
+  sendInsuranceReportReceivedToSeller: jest.fn().mockResolvedValue(undefined),
+  sendInsuranceClaimApprovedToBuyer: jest.fn().mockResolvedValue(undefined),
+  sendInsuranceClaimApprovedToSeller: jest.fn().mockResolvedValue(undefined),
+  sendInsuranceClaimDeniedToBuyer: jest.fn().mockResolvedValue(undefined),
+  sendInsuranceClaimDeniedToSeller: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../controllers/pushNotificationController', () => ({
   sendPushNotification: jest.fn().mockResolvedValue(undefined),
@@ -71,6 +83,7 @@ jest.mock('../../services/autoShippingService', () => ({
 jest.mock('../../lib/stockUtils', () => ({
   ...jest.requireActual('../../lib/stockUtils'),
   logStockDecrement: jest.fn(),
+  restoreListingStock: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../services/metaCapi', () => ({
   sendMetaPurchaseEvent: jest.fn(),
@@ -84,10 +97,54 @@ jest.mock('../../lib/imageOrder', () => ({
 jest.mock('../../utils/shippingDeadline', () => ({
   calculateShippingDeadline: jest.fn().mockReturnValue(new Date('2026-07-18')),
   formatShippingDeadline: jest.fn().mockReturnValue('18 July 2026'),
+  weekdaysUntil: jest.fn().mockReturnValue(5),
 }));
+jest.mock('shippo', () => ({
+  Shippo: jest.fn(() => ({
+    trackingStatus: { get: jest.fn() },
+  })),
+}));
+jest.mock('../../config/constants', () => ({
+  ESCROW_RELEASE_DAYS: 3,
+  SHIPPING_DEADLINE_DAYS: 5,
+}));
+jest.mock('../../routes/emailActionRoutes', () => ({
+  generateEmailActionToken: jest.fn().mockReturnValue('mock-token'),
+}));
+jest.mock('../../services/escrowService', () => ({
+  hasBlockingDispute: jest.fn().mockResolvedValue(false),
+  hasBlockingReturn: jest.fn().mockResolvedValue(false),
+}));
+jest.mock('../../middleware/adminAuth', () => ({
+  adminAuth: (_req: any, _res: any, next: any) => next(),
+  verifyAdminPassword: jest.fn((_req: any, _res: any, next: any) => next()),
+  adminLogout: jest.fn((_req: any, res: any) => res.json({ success: true })),
+}));
+const noop = (_req: any, res: any) => res.json({});
+jest.mock('../../controllers/disputeController', () => ({
+  DisputeController: { getAdminDisputes: noop, adminResolveDispute: noop },
+}));
+jest.mock('../../controllers/adminReportsController', () => ({
+  AdminReportsController: { getReports: noop, getReport: noop, updateReport: noop, banUser: noop },
+}));
+jest.mock('../../controllers/adminStatsController', () => ({
+  AdminStatsController: { getStats: noop, getChartData: noop, getDetailedStats: noop },
+}));
+jest.mock('../../lib/auditLogger', () => ({
+  logAdminAction: jest.fn().mockResolvedValue(undefined),
+  AUDIT_ACTIONS: { APPROVE_CLAIM: 'approve_claim', DENY_CLAIM: 'deny_claim', PROCESS_REFUND: 'process_refund' },
+}));
+jest.mock('../../constants/inspection', () => ({
+  INSPECTION_WINDOW_MS: 259200000,
+}));
+jest.mock('express-rate-limit', () => jest.fn(() => (_req: any, _res: any, next: any) => next()));
 
 import { NativePaymentController } from '../../controllers/nativePaymentController';
 import { CartCheckoutController } from '../../controllers/cartCheckoutController';
+import { OrderController } from '../../controllers/orderController';
+import express from 'express';
+import request from 'supertest';
+import adminRouter from '../../routes/adminRoutes';
 import {
   calculateBuyerFees,
   calculateSellerPayout,
@@ -239,10 +296,13 @@ describe('TC-MONEY-02: auto-refund when fulfillment fails (cart checkout)', () =
       CartCheckoutController.fulfillCartOrder(session as any)
     ).rejects.toThrow();
 
-    // Auto-refund MUST have been issued
+    // Auto-refund MUST have been issued (second arg = idempotency key options)
     expect(mockRefundsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         payment_intent: 'pi_test_refund',
+      }),
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
       })
     );
   });
@@ -300,6 +360,9 @@ describe('TC-MONEY-02: auto-refund when fulfillment fails (cart checkout)', () =
         metadata: expect.objectContaining({
           reason: expect.stringMatching(/fulfillment_failed|cart_fulfillment_failed/),
         }),
+      }),
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
       })
     );
   });
@@ -739,5 +802,414 @@ describe('TC-NEG-01: validation rejects bad input before Stripe call', () => {
     await NativePaymentController.createSingleItemPaymentIntent(req, res);
 
     expect(res.statusCode).toBe(401);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIND-PAY-04: Idempotency keys on ALL refund paths
+//
+// Every stripe.refunds.create call MUST pass a deterministic idempotencyKey
+// derived from stable DB identifiers. Never from Date.now() or Math.random().
+// Two identical operations for the same entity MUST produce the SAME key.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('FIND-PAY-04: cancel order refund has idempotency key', () => {
+  function makeOrder(id: string) {
+    const now = new Date();
+    return {
+      id,
+      buyer_id: 'buyer_1',
+      seller_id: 'seller_1',
+      status: 'pending',
+      stripe_payment_intent_id: 'pi_cancel_test',
+      shippo_transaction_id: null,
+      tracking_number: null,
+      carrier: null,
+      created_at: now,
+      updated_at: now,
+      amount: { toString: () => '50.00' },
+      listing_title: 'Test Club',
+      listing_image: null,
+      listings: { id: 'lst_1', title: 'Test Club', images: [] },
+      users_orders_buyer_idTousers: { id: 'buyer_1', display_name: 'Buyer', buyer_cancellation_count: 0 },
+      users_orders_seller_idTousers: { id: 'seller_1', display_name: 'Seller', seller_cancellation_count: 0 },
+    };
+  }
+
+  test('stripe.refunds.create receives idempotencyKey = cancel_refund_<orderId>', async () => {
+    const order = makeOrder('ord_idem_001');
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+    mockRefundsCreate.mockResolvedValue({ id: 're_idem_1' });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
+    mockTx.orders.update.mockResolvedValue({});
+    mockTx.listings.update.mockResolvedValue({});
+    mockPrisma.users.update.mockResolvedValue({});
+    mockPrisma.notifications.create.mockResolvedValue({});
+
+    const req = {
+      user: { id: 'buyer_1' },
+      params: { id: 'ord_idem_001' },
+      body: { reason: 'changed_mind' },
+    } as any;
+    const res = makeMockRes();
+
+    await OrderController.cancelOrder(req, res);
+
+    expect(mockRefundsCreate).toHaveBeenCalledTimes(1);
+    const [refundArgs, refundOpts] = mockRefundsCreate.mock.calls[0];
+    expect(refundArgs.payment_intent).toBe('pi_cancel_test');
+    expect(refundOpts).toEqual({ idempotencyKey: 'cancel_refund_ord_idem_001' });
+  });
+
+  test('same order ID always produces the same key (deterministic)', async () => {
+    const orderId = 'ord_deterministic_test';
+    const order = makeOrder(orderId);
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+    mockRefundsCreate.mockResolvedValue({ id: 're_det_1' });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
+    mockTx.orders.update.mockResolvedValue({});
+    mockTx.listings.update.mockResolvedValue({});
+    mockPrisma.users.update.mockResolvedValue({});
+    mockPrisma.notifications.create.mockResolvedValue({});
+
+    const req = {
+      user: { id: 'buyer_1' },
+      params: { id: orderId },
+      body: { reason: 'changed_mind' },
+    } as any;
+    const res = makeMockRes();
+
+    await OrderController.cancelOrder(req, res);
+
+    const key1 = mockRefundsCreate.mock.calls[0][1].idempotencyKey;
+
+    jest.clearAllMocks();
+    mockPrisma.orders.findFirst.mockResolvedValue(makeOrder(orderId));
+    mockRefundsCreate.mockResolvedValue({ id: 're_det_2' });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
+    mockTx.orders.update.mockResolvedValue({});
+    mockTx.listings.update.mockResolvedValue({});
+    mockPrisma.users.update.mockResolvedValue({});
+    mockPrisma.notifications.create.mockResolvedValue({});
+
+    await OrderController.cancelOrder(req, res);
+
+    const key2 = mockRefundsCreate.mock.calls[0][1].idempotencyKey;
+    expect(key1).toBe(key2);
+    expect(key1).toBe(`cancel_refund_${orderId}`);
+  });
+
+  test('key is derived from order.id, not from timestamp or random value', async () => {
+    const order = makeOrder('ord_stable_id');
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+    mockRefundsCreate.mockResolvedValue({ id: 're_stable_1' });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
+    mockTx.orders.update.mockResolvedValue({});
+    mockTx.listings.update.mockResolvedValue({});
+    mockPrisma.users.update.mockResolvedValue({});
+    mockPrisma.notifications.create.mockResolvedValue({});
+
+    const req = {
+      user: { id: 'buyer_1' },
+      params: { id: 'ord_stable_id' },
+      body: { reason: 'changed_mind' },
+    } as any;
+    const res = makeMockRes();
+
+    await OrderController.cancelOrder(req, res);
+
+    const key = mockRefundsCreate.mock.calls[0][1].idempotencyKey;
+    expect(key).not.toMatch(/\d{13}/);
+    expect(key).toBe('cancel_refund_ord_stable_id');
+  });
+});
+
+describe('FIND-PAY-04: cart fulfilment-failure refund has idempotency key', () => {
+  test('fulfillCartOrder passes idempotencyKey = fulfillment_refund_<paymentIntentId>', async () => {
+    mockPrisma.listings.findMany.mockResolvedValue([
+      makeListing({ id: 'lst_1', seller_id: 'seller_A', price: 60 }),
+    ]);
+    mockPrisma.orders.findMany.mockResolvedValue([]);
+    mockPrisma.users.findUnique.mockResolvedValue({
+      id: 'buyer_1', email: 'b@test.com', display_name: 'B',
+    });
+    mockPrisma.$transaction.mockRejectedValue(new Error('Stock guard failure'));
+    mockRefundsCreate.mockResolvedValue({ id: 're_cart_idem' });
+
+    const session = {
+      id: 'cs_idem',
+      payment_intent: 'pi_cart_idem_test',
+      metadata: {
+        type: 'cart_checkout',
+        buyer_id: 'buyer_1',
+        listing_ids: 'lst_1',
+        listing_quantities: '{"lst_1":1}',
+        seller_ids: 'seller_A',
+        insurance_premium: '0',
+        insured_value: '50',
+        platform_fee: '4.74',
+        grand_total: '60',
+        shipping_total: '5.99',
+        total_quantity: '1',
+      },
+      collected_information: {
+        shipping_details: {
+          name: 'B',
+          address: { line1: '1 St', city: 'London', postal_code: 'SW1A 1AA', country: 'GB' },
+        },
+      },
+    };
+
+    try {
+      await CartCheckoutController.fulfillCartOrder(session as any);
+    } catch {
+      // expected — re-throws after refund
+    }
+
+    expect(mockRefundsCreate).toHaveBeenCalledTimes(1);
+    const [, refundOpts] = mockRefundsCreate.mock.calls[0];
+    expect(refundOpts).toEqual({ idempotencyKey: 'fulfillment_refund_pi_cart_idem_test' });
+  });
+});
+
+describe('FIND-PAY-04: insurance claim approval — idempotency key + claim-the-row', () => {
+  let app: any;
+
+  beforeAll(() => {
+    app = express();
+    app.use(express.json());
+    app.use('/admin', adminRouter);
+  });
+
+  function makeClaimOrder(orderId: string) {
+    return {
+      id: orderId,
+      buyer_id: 'buyer_claim',
+      seller_id: 'seller_claim',
+      status: 'delivered',
+      insurance_claim_status: 'claim_filed',
+      stripe_payment_intent_id: 'pi_claim_test',
+      stripe_refund_id: null,
+      amount: { toString: () => '100.00' },
+      listing_title: 'Lost Driver',
+      listing_image: null,
+      users_orders_buyer_idTousers: { id: 'buyer_claim', display_name: 'Buyer' },
+      users_orders_seller_idTousers: { id: 'seller_claim', display_name: 'Seller' },
+    };
+  }
+
+  test('stripe.refunds.create receives idempotencyKey = insurance_claim_refund_<orderId>', async () => {
+    const orderId = 'ord_claim_idem_001';
+    const order = makeClaimOrder(orderId);
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]),
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue(order),
+        },
+      };
+      return cb(tx);
+    });
+    mockRefundsCreate.mockResolvedValue({ id: 're_claim_idem' });
+    mockPrisma.orders.update.mockResolvedValue({});
+    mockPrisma.orders.findUnique.mockResolvedValue(null);
+    mockPrisma.notifications.create.mockResolvedValue({});
+    mockPrisma.users.findUnique.mockResolvedValue({ email: 'buyer@test.com' });
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ notes: 'Approved' });
+
+    expect(res.status).toBe(200);
+    expect(mockRefundsCreate).toHaveBeenCalledTimes(1);
+    const [, refundOpts] = mockRefundsCreate.mock.calls[0];
+    expect(refundOpts).toEqual({ idempotencyKey: `insurance_claim_refund_${orderId}` });
+  });
+
+  test('claim-the-row: handler uses SELECT FOR UPDATE before Stripe call', async () => {
+    const orderId = 'ord_claim_lock_test';
+    const order = makeClaimOrder(orderId);
+    let queryRawMock: jest.Mock;
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      queryRawMock = jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]);
+      const tx = {
+        $queryRaw: queryRawMock,
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue(order),
+        },
+      };
+      return cb(tx);
+    });
+    mockRefundsCreate.mockResolvedValue({ id: 're_lock_test' });
+    mockPrisma.orders.update.mockResolvedValue({});
+    mockPrisma.orders.findUnique.mockResolvedValue(null);
+    mockPrisma.notifications.create.mockResolvedValue({});
+    mockPrisma.users.findUnique.mockResolvedValue({ email: 'b@test.com' });
+
+    await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ notes: 'test' });
+
+    expect(queryRawMock!).toHaveBeenCalled();
+    expect(mockRefundsCreate).toHaveBeenCalled();
+  });
+
+  test('concurrent approval returns 409 when claim is already processing', async () => {
+    const orderId = 'ord_concurrent_test';
+
+    mockPrisma.$transaction.mockResolvedValue(null);
+    mockPrisma.orders.findUnique.mockResolvedValue({
+      insurance_claim_status: 'claim_processing',
+      stripe_refund_id: null,
+    });
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ notes: 'test' });
+
+    expect(res.status).toBe(409);
+    expect(mockRefundsCreate).not.toHaveBeenCalled();
+  });
+
+  test('Stripe failure reverts claim status to previous value', async () => {
+    const orderId = 'ord_revert_test';
+    const order = makeClaimOrder(orderId);
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]),
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue({ ...order, _previousClaimStatus: 'claim_filed' }),
+        },
+      };
+      return cb(tx);
+    });
+    mockRefundsCreate.mockRejectedValue(new Error('Stripe error'));
+    mockPrisma.orders.update.mockResolvedValue({});
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ notes: 'test' });
+
+    expect(res.status).toBe(500);
+    expect(mockPrisma.orders.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: orderId },
+        data: expect.objectContaining({ insurance_claim_status: 'claim_filed' }),
+      })
+    );
+  });
+
+  test('refund_amount > order amount → 400, Stripe NOT called', async () => {
+    const orderId = 'ord_overcharge_test';
+    const order = makeClaimOrder(orderId);
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]),
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue(order),
+        },
+      };
+      return cb(tx);
+    });
+    mockPrisma.orders.update.mockResolvedValue({});
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ refund_amount: 999.99, notes: 'test' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/exceeds order total/);
+    expect(mockRefundsCreate).not.toHaveBeenCalled();
+  });
+
+  test('refund_amount <= 0 → 400, Stripe NOT called', async () => {
+    const orderId = 'ord_negative_test';
+    const order = makeClaimOrder(orderId);
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]),
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue(order),
+        },
+      };
+      return cb(tx);
+    });
+    mockPrisma.orders.update.mockResolvedValue({});
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ refund_amount: -5, notes: 'test' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/positive number/);
+    expect(mockRefundsCreate).not.toHaveBeenCalled();
+  });
+
+  test('refund_amount absent → defaults to full order amount', async () => {
+    const orderId = 'ord_default_amount';
+    const order = makeClaimOrder(orderId);
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]),
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue(order),
+        },
+      };
+      return cb(tx);
+    });
+    mockRefundsCreate.mockResolvedValue({ id: 're_default' });
+    mockPrisma.orders.update.mockResolvedValue({});
+    mockPrisma.orders.findUnique.mockResolvedValue(null);
+    mockPrisma.notifications.create.mockResolvedValue({});
+    mockPrisma.users.findUnique.mockResolvedValue({ email: 'b@test.com' });
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ notes: 'test' });
+
+    expect(res.status).toBe(200);
+    const [refundArgs] = mockRefundsCreate.mock.calls[0];
+    expect(refundArgs.amount).toBe(10000);
+  });
+
+  test('refund_amount valid & <= order total → succeeds', async () => {
+    const orderId = 'ord_partial_refund';
+    const order = makeClaimOrder(orderId);
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: orderId, insurance_claim_status: 'claim_filed' }]),
+        orders: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue(order),
+        },
+      };
+      return cb(tx);
+    });
+    mockRefundsCreate.mockResolvedValue({ id: 're_partial' });
+    mockPrisma.orders.update.mockResolvedValue({});
+    mockPrisma.orders.findUnique.mockResolvedValue(null);
+    mockPrisma.notifications.create.mockResolvedValue({});
+    mockPrisma.users.findUnique.mockResolvedValue({ email: 'b@test.com' });
+
+    const res = await request(app)
+      .post(`/admin/claims/${orderId}/approve`)
+      .send({ refund_amount: 75.50, notes: 'partial' });
+
+    expect(res.status).toBe(200);
+    const [refundArgs] = mockRefundsCreate.mock.calls[0];
+    expect(refundArgs.amount).toBe(7550);
   });
 });

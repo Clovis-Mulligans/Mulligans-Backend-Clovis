@@ -754,6 +754,8 @@ export const purchaseReturnLabelSeller = async (req: AuthenticatedRequest, res: 
       await stripe.refunds.create({
         payment_intent: paymentIntent.id,
         reason: 'requested_by_customer',
+      }, {
+        idempotencyKey: `return_label_refund_${paymentIntent.id}`,
       });
 
       console.error('❌ Shippo transaction failed, seller refunded:', transaction.messages);

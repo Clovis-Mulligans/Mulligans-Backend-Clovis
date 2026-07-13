@@ -497,6 +497,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                       type: piType || 'unknown',
                       buyer_id: pi.metadata?.buyer_id || 'unknown',
                     },
+                  }, {
+                    idempotencyKey: `fulfillment_refund_${pi.id}`,
                   });
                   console.log(`[WEBHOOK] Auto-refund issued for orphaned PI ${pi.id}`);
                 } catch (refundErr: any) {
@@ -852,6 +854,8 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
                 buyer_id,
                 session_id: session.id,
               },
+            }, {
+              idempotencyKey: `fulfillment_refund_${session.payment_intent}`,
             });
             console.log(`[STRIPE] Refund issued for unfulfillable order -- listing ${listing_id}, buyer ${buyer_id}`);
           } catch (refundErr: any) {
