@@ -177,7 +177,8 @@ describe('FIND-PAY-03: fulfillOrder MUST refund when listing not found post-char
     expect(mockRefundsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         payment_intent: 'pi_listing_gone',
-      })
+      }),
+      expect.anything()
     );
   });
 
@@ -216,8 +217,128 @@ describe('FIND-PAY-03: fulfillOrder MUST refund when listing not found post-char
         metadata: expect.objectContaining({
           listing_id: 'lst_gone',
         }),
+      }),
+      expect.anything()
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIND-PAY-03 supplementary tests: idempotency, refund failure, address
+// validation, happy-path regression guard
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('FIND-PAY-03: fulfillOrder refund — supplementary assertions', () => {
+  const fulfillOrder = (StripeController as any).fulfillOrder;
+  const { validateShippingAddress, AddressValidationError } = require('../../utils/addressValidation');
+
+  const makeSession = (overrides: any = {}) => ({
+    id: 'cs_supp',
+    payment_intent: 'pi_supp_test',
+    metadata: {
+      listing_id: 'lst_supp',
+      buyer_id: 'buyer_supp',
+      seller_id: 'seller_supp',
+      quantity: '1',
+      item_price: '50',
+    },
+    collected_information: {
+      shipping_details: {
+        name: 'Test',
+        address: { line1: '1 St', city: 'London', postal_code: 'SW1A 1AA', country: 'GB' },
+      },
+    },
+    ...overrides,
+  });
+
+  test('listing-not-found refund carries idempotency key fulfillment_refund_<piId>', async () => {
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.listings.findUnique.mockResolvedValue(null);
+    mockRefundsCreate.mockResolvedValue({ id: 're_idem' });
+
+    await fulfillOrder.call(StripeController, makeSession());
+
+    expect(mockRefundsCreate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        idempotencyKey: 'fulfillment_refund_pi_supp_test',
       })
     );
+  });
+
+  test('refund failure does not throw — webhook still returns 200', async () => {
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.listings.findUnique.mockResolvedValue(null);
+    mockRefundsCreate.mockRejectedValue(new Error('Stripe outage'));
+
+    await expect(
+      fulfillOrder.call(StripeController, makeSession())
+    ).resolves.toBeUndefined();
+  });
+
+  test('address validation failure triggers refund before propagating', async () => {
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.listings.findUnique.mockResolvedValue({
+      id: 'lst_supp',
+      title: 'Test Club',
+      images: [{ image_url: 'img.jpg' }],
+    });
+    const addrErr = new AddressValidationError();
+    addrErr.message = 'Missing: line1';
+    validateShippingAddress.mockImplementation(() => { throw addrErr; });
+    mockRefundsCreate.mockResolvedValue({ id: 're_addr' });
+
+    await expect(
+      fulfillOrder.call(StripeController, makeSession())
+    ).rejects.toThrow();
+
+    expect(mockRefundsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: 'pi_supp_test',
+        metadata: expect.objectContaining({
+          reason: 'address_validation_failed',
+        }),
+      }),
+      expect.objectContaining({
+        idempotencyKey: 'fulfillment_refund_pi_supp_test',
+      })
+    );
+  });
+
+  test('happy path — listing exists, address valid → no refund issued', async () => {
+    mockPrisma.orders.findFirst.mockResolvedValue(null);
+    mockPrisma.listings.findUnique.mockResolvedValue({
+      id: 'lst_supp',
+      title: 'Test Club',
+      images: [{ image_url: 'img.jpg' }],
+    });
+    validateShippingAddress.mockReturnValue({
+      name: 'Test', line1: '1 St', line2: '', city: 'London',
+      state: '', postal_code: 'SW1A 1AA', country: 'GB',
+    });
+    mockStripeInstance.paymentIntents.retrieve.mockResolvedValue({
+      payment_method: 'pm_test',
+    });
+    mockPrisma.$transaction.mockResolvedValue({
+      createdOrder: { id: 'ord_hp', amount: 50, listing_id: 'lst_supp', buyer_id: 'buyer_supp' },
+      shouldMarkSold: false,
+    });
+
+    await fulfillOrder.call(StripeController, makeSession({
+      metadata: {
+        listing_id: 'lst_supp',
+        buyer_id: 'buyer_supp',
+        seller_id: 'seller_supp',
+        quantity: '1',
+        item_price: '5000',
+        seller_payout: '4500',
+        unit_price: '5000',
+        selected_size: null,
+        insurance_premium: '0',
+      },
+    }));
+
+    expect(mockRefundsCreate).not.toHaveBeenCalled();
   });
 });
 
