@@ -121,6 +121,7 @@ import {
 import {
   ESCROW_RELEASE_DAYS,
   RETURN_SHIPPING_DEADLINE_DAYS,
+  RETURN_ESCROW_DAYS,
 } from '../../config/constants';
 import { INSPECTION_WINDOW_DAYS } from '../../constants/inspection';
 
@@ -489,12 +490,10 @@ describe('forced return timing constants', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BLOCKING status divergence tripwire
+// BLOCKING status lists — single-source-of-truth tripwires
 //
-// FINDING: escrowService.ts includes 'refund_processing' in its
-// BLOCKING_RETURN_STATUSES but escrowDecisions.ts does NOT.
-// This tripwire locks in the escrowDecisions.ts values so any drift
-// between the two is detected.
+// escrowDecisions.ts is the ONE canonical list. escrowService.ts imports it.
+// If this test fails, someone re-forked the list instead of importing.
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('BLOCKING status lists — escrowDecisions.ts tripwires', () => {
@@ -506,7 +505,7 @@ describe('BLOCKING status lists — escrowDecisions.ts tripwires', () => {
     ]);
   });
 
-  test('BLOCKING_RETURN_STATUSES includes all pre-completion return statuses', () => {
+  test('BLOCKING_RETURN_STATUSES includes all pre-completion return statuses including refund_processing', () => {
     expect([...BLOCKING_RETURN_STATUSES]).toEqual([
       'pending',
       'approved',
@@ -514,11 +513,12 @@ describe('BLOCKING status lists — escrowDecisions.ts tripwires', () => {
       'label_created',
       'shipped',
       'delivered',
+      'refund_processing',
     ]);
   });
 
-  test('DIVERGENCE: escrowDecisions does NOT include refund_processing', () => {
-    expect([...BLOCKING_RETURN_STATUSES]).not.toContain('refund_processing');
+  test('refund_processing IS included — blocks escrow during in-flight refund', () => {
+    expect([...BLOCKING_RETURN_STATUSES]).toContain('refund_processing');
   });
 });
 
@@ -535,6 +535,11 @@ describe('escrow timing tripwires — delivery vs return escrow', () => {
   test('ESCROW_RELEASE_DAYS (delivery) = INSPECTION_WINDOW_DAYS = 3', () => {
     expect(ESCROW_RELEASE_DAYS).toBe(3);
     expect(ESCROW_RELEASE_DAYS).toBe(INSPECTION_WINDOW_DAYS);
+  });
+
+  test('RETURN_ESCROW_DAYS = INSPECTION_WINDOW_DAYS = 3', () => {
+    expect(RETURN_ESCROW_DAYS).toBe(INSPECTION_WINDOW_DAYS);
+    expect(RETURN_ESCROW_DAYS).toBe(3);
   });
 
   test('RETURN_SHIPPING_DEADLINE_DAYS = 5', () => {

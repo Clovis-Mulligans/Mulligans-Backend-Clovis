@@ -11,7 +11,7 @@ import { PRIMARY_IMAGE_ORDER } from '../lib/imageOrder';
 import Stripe from 'stripe';
 import { Shippo } from 'shippo';
 import { getSellerSendingAddress } from '../lib/sellerAddress';
-import { RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { RETURN_SHIPPING_DEADLINE_DAYS, RETURN_ESCROW_DAYS } from '../config/constants';
 import { sendPushNotification } from './pushNotificationController';
 import { 
   sendReturnAddressNeeded,
@@ -28,8 +28,7 @@ const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
 });
 
-// Escrow period for returns (days after delivery)
-const RETURN_ESCROW_DAYS = 5;
+// RETURN_ESCROW_DAYS imported from config/constants.ts (aliased to INSPECTION_WINDOW_DAYS)
 
 // Type for authenticated requests
 interface AuthenticatedRequest extends Request {

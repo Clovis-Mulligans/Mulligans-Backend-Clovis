@@ -39,6 +39,7 @@ import { validateShippingAddress, AddressValidationError } from '../utils/addres
 import { logStockDecrement, getStockForSize } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
+import { issueFailureRefund } from '../lib/issueFailureRefund';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -587,23 +588,11 @@ export class NativePaymentController {
       let refundIssued = false;
 
       if (paymentIntentId) {
-        try {
-          const refund = await stripe.refunds.create({
-            payment_intent: paymentIntentId,
-            reason: 'requested_by_customer',
-            metadata: {
-              reason: 'native_fulfillment_failed',
-              buyer_id: req.user?.id || req.user?.sub || 'unknown',
-              error: error.message?.substring(0, 200) || 'Unknown error',
-            },
-          }, {
-            idempotencyKey: `fulfillment_refund_${paymentIntentId}`,
-          });
-          console.log(`[PAY] Auto-refund issued: ${refund.id} for PI ${paymentIntentId}`);
-          refundIssued = true;
-        } catch (refundError: any) {
-          console.error(`[CRITICAL] Native auto-refund ALSO FAILED for PI ${paymentIntentId}:`, refundError);
-        }
+        refundIssued = await issueFailureRefund(stripe, paymentIntentId, 'native_fulfillment_failed', {
+          reason: 'native_fulfillment_failed',
+          buyer_id: req.user?.id || req.user?.sub || 'unknown',
+          error: error.message?.substring(0, 200) || 'Unknown error',
+        });
       }
 
       const userMessage = error.message?.includes('Insufficient stock')

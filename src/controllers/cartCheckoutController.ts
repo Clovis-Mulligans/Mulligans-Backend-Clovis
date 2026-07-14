@@ -54,6 +54,7 @@ import { validateShippingAddress } from '../utils/addressValidation';
 import { logStockDecrement, getStockForSize } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
+import { issueFailureRefund } from '../lib/issueFailureRefund';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -1081,24 +1082,12 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
     } catch (error: any) {
       console.error('[CART] Error fulfilling cart order:', error);
 
-      // Auto-refund on cart fulfillment failure (matching D-C4 pattern from fulfillOrder)
       if (session.payment_intent) {
-        try {
-          const refund = await stripe.refunds.create({
-            payment_intent: session.payment_intent as string,
-            reason: 'requested_by_customer',
-            metadata: {
-              reason: 'cart_fulfillment_failed',
-              session_id: session.id,
-              error: error.message?.substring(0, 200) || 'Unknown error',
-            },
-          }, {
-            idempotencyKey: `fulfillment_refund_${session.payment_intent}`,
-          });
-          console.log(`[CART] Auto-refund issued: ${refund.id} for session ${session.id}`);
-        } catch (refundError: any) {
-          console.error(`[CRITICAL] Cart auto-refund ALSO FAILED for session ${session.id}:`, refundError);
-        }
+        await issueFailureRefund(stripe, session.payment_intent as string, 'cart_fulfillment_failed', {
+          reason: 'cart_fulfillment_failed',
+          session_id: session.id,
+          error: error.message?.substring(0, 200) || 'Unknown error',
+        });
       }
 
       throw error;
