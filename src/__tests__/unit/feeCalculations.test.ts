@@ -19,6 +19,8 @@ import {
   MAX_OFFERS_PER_LISTING,
   CartItem,
 } from '../../lib/feeCalculations';
+import { INSPECTION_WINDOW_DAYS } from '../../constants/inspection';
+import { DISPUTE_WINDOW_DAYS } from '../../config/constants';
 
 const item = (p: Partial<CartItem> & { listingPrice: number }): CartItem => ({
   sellerId: p.sellerId ?? 'seller-1',
@@ -255,8 +257,10 @@ describe('fee constants — tripwires', () => {
   test('MAX_OFFER_PERCENT is 100%', () => {
     expect(MAX_OFFER_PERCENT).toBe(1.0);
   });
-  test('ESCROW_RELEASE_DAYS is 5', () => {
+  test('ESCROW_RELEASE_DAYS === 3 (policy-owner confirmed)', () => {
     expect(ESCROW_RELEASE_DAYS).toBe(3);
+    expect(ESCROW_RELEASE_DAYS).toBe(INSPECTION_WINDOW_DAYS);
+    expect(DISPUTE_WINDOW_DAYS).toBe(INSPECTION_WINDOW_DAYS);
   });
   test('AUTO_CANCEL_DAYS is 5', () => {
     expect(AUTO_CANCEL_DAYS).toBe(5);

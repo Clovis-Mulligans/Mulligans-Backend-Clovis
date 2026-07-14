@@ -301,6 +301,7 @@ model users {
   pro_store_approved_at                        DateTime?
   subscription_status                          String?           @db.VarChar(30)
   subscription_started_at                      DateTime?
+  signup_platform                              String?           @db.VarChar(10)
   blocked_by                                   blocked_users[]   @relation("BlockedByBlocks")
   users_blocked                                blocked_users[]   @relation("BlockerBlocks")
   cart_items                                   cart_items[]

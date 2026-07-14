@@ -51,9 +51,10 @@ import { expireOffersForSoldItem } from '../jobs/offerJobs';
 import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { validateShippingAddress } from '../utils/addressValidation';
-import { logStockDecrement } from '../lib/stockUtils';
+import { logStockDecrement, getStockForSize } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
+import { issueFailureRefund } from '../lib/issueFailureRefund';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -68,18 +69,6 @@ interface AuthenticatedRequest extends Request {
 }
 
 // Escrow constants
-
-// SIZE VARIANT: Helper to get stock for a specific size
-function getStockForSize(listing: any, selectedSize: string | null): number {
-  if (!selectedSize) {
-    return listing.quantity || 1;
-  }
-  const specs = listing.specifications as any;
-  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
-    return specs.sizeQuantities[selectedSize] || 0;
-  }
-  return listing.quantity || 1;
-}
 
 // SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
@@ -1394,22 +1383,12 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
     } catch (error: any) {
       console.error('[CART] Error fulfilling cart order:', error);
 
-      // Auto-refund on cart fulfillment failure (matching D-C4 pattern from fulfillOrder)
       if (session.payment_intent) {
-        try {
-          const refund = await stripe.refunds.create({
-            payment_intent: session.payment_intent as string,
-            reason: 'requested_by_customer',
-            metadata: {
-              reason: 'cart_fulfillment_failed',
-              session_id: session.id,
-              error: error.message?.substring(0, 200) || 'Unknown error',
-            },
-          });
-          console.log(`[CART] Auto-refund issued: ${refund.id} for session ${session.id}`);
-        } catch (refundError: any) {
-          console.error(`[CRITICAL] Cart auto-refund ALSO FAILED for session ${session.id}:`, refundError);
-        }
+        await issueFailureRefund(stripe, session.payment_intent as string, 'cart_fulfillment_failed', {
+          reason: 'cart_fulfillment_failed',
+          session_id: session.id,
+          error: error.message?.substring(0, 200) || 'Unknown error',
+        });
       }
 
       throw error;

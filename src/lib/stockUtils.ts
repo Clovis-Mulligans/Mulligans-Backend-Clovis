@@ -5,6 +5,22 @@
 
 import { Prisma, PrismaClient } from '@prisma/client';
 
+/**
+ * Return available stock for a listing, respecting size variants.
+ * listings.quantity is non-nullable (Int @default(1) in schema), so
+ * a value of 0 means genuinely out of stock — never coerce it.
+ */
+export function getStockForSize(listing: { quantity: number; specifications?: any }, selectedSize: string | null): number {
+  if (!selectedSize) {
+    return listing.quantity;
+  }
+  const specs = listing.specifications as any;
+  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
+    return specs.sizeQuantities[selectedSize] || 0;
+  }
+  return listing.quantity;
+}
+
 export type StockChangeCause =
   | 'cart_checkout'
   | 'single_checkout'

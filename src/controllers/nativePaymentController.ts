@@ -36,9 +36,10 @@ import crypto from 'crypto';
 import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
-import { logStockDecrement } from '../lib/stockUtils';
+import { logStockDecrement, getStockForSize } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
+import { issueFailureRefund } from '../lib/issueFailureRefund';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-11-17.clover',
@@ -48,18 +49,6 @@ export function resolveNativeRoute(type: string | undefined): 'single' | 'cart' 
   if (type === 'native_single_item') return 'single';
   if (type === 'native_cart' || type === 'seller_native') return 'cart';
   return 'unknown';
-}
-
-// SIZE VARIANT: Helper to get stock for a specific size
-function getStockForSize(listing: any, selectedSize: string | null): number {
-  if (!selectedSize) {
-    return listing.quantity || 1;
-  }
-  const specs = listing.specifications as any;
-  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
-    return specs.sizeQuantities[selectedSize] || 0;
-  }
-  return listing.quantity || 1;
 }
 
 // SIZE VARIANT: Helper to decrement stock for a specific size
@@ -804,16 +793,15 @@ export class NativePaymentController {
     } catch (error: any) {
       console.error('[PAY] Error confirming payment:', error);
 
+      const { paymentIntentId } = req.body;
       let refundIssued = false;
-      const piId = req.body?.paymentIntentId;
-      if (piId) {
-        try {
-          await stripe.refunds.create({ payment_intent: piId });
-          refundIssued = true;
-          console.log(`[PAY] Refund issued for failed confirmation: ${piId}`);
-        } catch (refundErr: any) {
-          console.error(`[PAY] Refund failed for ${piId} (safety net will retry):`, refundErr.message);
-        }
+
+      if (paymentIntentId) {
+        refundIssued = await issueFailureRefund(stripe, paymentIntentId, 'native_fulfillment_failed', {
+          reason: 'native_fulfillment_failed',
+          buyer_id: req.user?.id || req.user?.sub || 'unknown',
+          error: error.message?.substring(0, 200) || 'Unknown error',
+        });
       }
 
       const userMessage = error.message?.includes('Insufficient stock')

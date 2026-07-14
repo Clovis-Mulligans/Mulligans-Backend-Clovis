@@ -13,6 +13,7 @@ import {
   isOwnListing,
   CART_ITEM_EXPIRY_HOURS,
 } from '../../lib/cartValidation';
+import { getStockForSize } from '../../lib/stockUtils';
 import {
   makeListing,
   makeCartItem,
@@ -224,5 +225,39 @@ describe('validateCheckout — race-condition awareness', () => {
     expect(report.unavailable).toEqual([soldListing.id]);
     expect(report.removedExpired).toEqual([expiredItemListing.id]);
     expect(report.proceedable).toBe(false);
+  });
+});
+
+// ─── STOCK GUARD (getStockForSize — shared helper) ────────────────────
+
+describe('getStockForSize — zero-quantity guard', () => {
+  test('quantity-0 listing returns 0 (not purchasable)', () => {
+    const listing = makeListing({ quantity: 0 });
+    expect(getStockForSize(listing, null)).toBe(0);
+  });
+
+  test('quantity-5 listing returns 5', () => {
+    const listing = makeListing({ quantity: 5 });
+    expect(getStockForSize(listing, null)).toBe(5);
+  });
+
+  test('sized listing with zero stock in selected size returns 0', () => {
+    const listing = { quantity: 10, specifications: { sizeQuantities: { M: 0, L: 5 } } };
+    expect(getStockForSize(listing, 'M')).toBe(0);
+  });
+
+  test('sized listing with stock in selected size returns that size stock', () => {
+    const listing = { quantity: 10, specifications: { sizeQuantities: { M: 3, L: 5 } } };
+    expect(getStockForSize(listing, 'M')).toBe(3);
+  });
+
+  test('sized listing with unknown size returns 0', () => {
+    const listing = { quantity: 10, specifications: { sizeQuantities: { M: 3 } } };
+    expect(getStockForSize(listing, 'XL')).toBe(0);
+  });
+
+  test('no size selected, no sizeQuantities → returns listing.quantity', () => {
+    const listing = makeListing({ quantity: 7 });
+    expect(getStockForSize(listing, null)).toBe(7);
   });
 });

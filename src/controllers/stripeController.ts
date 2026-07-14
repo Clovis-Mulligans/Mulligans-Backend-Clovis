@@ -49,7 +49,8 @@ import { autoPurchaseLabel } from '../services/autoShippingService';
 import { sendOrderConfirmation, sendSaleNotification } from '../services/emailService';
 import { sendEmail } from '../utils/email';
 import { validateShippingAddress, AddressValidationError } from '../utils/addressValidation';
-import { logStockDecrement, restoreListingStock } from '../lib/stockUtils';
+import { issueFailureRefund } from '../lib/issueFailureRefund';
+import { logStockDecrement, getStockForSize, restoreListingStock } from '../lib/stockUtils';
 import { calculateShippingDeadline, formatShippingDeadline } from '../utils/shippingDeadline';
 import { sendMetaPurchaseEvent } from '../services/metaCapi';
 
@@ -61,17 +62,6 @@ export function resolveCheckoutRoute(type: string | undefined): 'cart' | 'single
   return (type === 'cart_checkout' || type === 'seller_checkout') ? 'cart' : 'single';
 }
 
-// SIZE VARIANT: Helper to get stock for a specific size
-function getStockForSize(listing: any, selectedSize: string | null): number {
-  if (!selectedSize) {
-    return listing.quantity || 1;
-  }
-  const specs = listing.specifications as any;
-  if (specs?.sizeQuantities && typeof specs.sizeQuantities === 'object') {
-    return specs.sizeQuantities[selectedSize] || 0;
-  }
-  return listing.quantity || 1;
-}
 
 // SIZE VARIANT: Helper to decrement stock for a specific size
 function decrementSizeStock(specifications: any, selectedSize: string, quantity: number): any {
@@ -502,20 +492,11 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
               if (!existingOrder) {
                 console.error(`[WEBHOOK] ORPHANED PAYMENT: No order for PI ${pi.id} after 30s — issuing refund`);
 
-                try {
-                  await stripe.refunds.create({
-                    payment_intent: pi.id,
-                    reason: 'requested_by_customer',
-                    metadata: {
-                      reason: 'orphaned_native_payment',
-                      type: piType || 'unknown',
-                      buyer_id: pi.metadata?.buyer_id || 'unknown',
-                    },
-                  });
-                  console.log(`[WEBHOOK] Auto-refund issued for orphaned PI ${pi.id}`);
-                } catch (refundErr: any) {
-                  console.error(`[WEBHOOK] CRITICAL: Failed to refund orphaned PI ${pi.id}:`, refundErr.message);
-                }
+                await issueFailureRefund(stripe, pi.id, 'orphaned_native_payment', {
+                  reason: 'orphaned_native_payment',
+                  type: piType || 'unknown',
+                  buyer_id: pi.metadata?.buyer_id || 'unknown',
+                });
               } else {
                 console.log(`[WEBHOOK] Native payment ${pi.id} confirmed — order ${existingOrder.id} exists`);
 
@@ -736,6 +717,14 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
       if (!listing) {
         console.error('Listing not found:', listing_id);
+        if (session.payment_intent) {
+          await issueFailureRefund(stripe, session.payment_intent as string, 'listing_not_found', {
+            reason: 'listing_not_found',
+            listing_id,
+            buyer_id,
+            session_id: session.id,
+          });
+        }
         return;
       }
 
@@ -762,9 +751,20 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
 
       console.log('Shipping address JSON:', shippingAddressJson);
 
-      // Validation per Q1/Q2 decision — throw propagates up to webhook handler at line 449
-      // which logs, emails info@mulligans.uk.com, and returns 200 to Stripe
-      validateShippingAddress(shippingAddressJson);
+      try {
+        validateShippingAddress(shippingAddressJson);
+      } catch (addrError: any) {
+        if (addrError instanceof AddressValidationError && session.payment_intent) {
+          await issueFailureRefund(stripe, session.payment_intent as string, 'address_validation_failed', {
+            reason: 'address_validation_failed',
+            listing_id,
+            buyer_id,
+            session_id: session.id,
+            error: addrError.message?.substring(0, 200) || 'Address validation failed',
+          });
+        }
+        throw addrError;
+      }
 
       // Get payment method
       let paymentMethodId: string | null = null;
@@ -960,30 +960,14 @@ cancel_url: `${process.env.BASE_URL || 'https://api.mulligans.uk.com'}/payment-c
         // [D-C4] Transaction failed -- issue refund to buyer
         console.error(`[STRIPE] Order creation failed for listing ${listing_id}:`, txError.message);
 
-        // CRITICAL: Refund the buyer since we cannot fulfill the order
         if (session.payment_intent) {
-          try {
-            await stripe.refunds.create({
-              payment_intent: session.payment_intent as string,
-              reason: 'requested_by_customer',
-              metadata: {
-                reason: 'fulfillment_failed',
-                listing_id,
-                error: txError.message?.substring(0, 200) || 'unknown',
-                buyer_id,
-                session_id: session.id,
-              },
-            });
-            console.log(`[STRIPE] Refund issued for unfulfillable order -- listing ${listing_id}, buyer ${buyer_id}`);
-          } catch (refundErr: any) {
-            // This is the worst case: buyer is charged AND refund failed.
-            // Log as CRITICAL so it can be caught by monitoring.
-            console.error(
-              `[STRIPE] CRITICAL: Failed to refund buyer ${buyer_id} for listing ${listing_id}:`,
-              refundErr.message
-            );
-            // TODO: Add alerting/monitoring hook here (e.g., email to admin)
-          }
+          await issueFailureRefund(stripe, session.payment_intent as string, 'fulfillment_failed', {
+            reason: 'fulfillment_failed',
+            listing_id,
+            error: txError.message?.substring(0, 200) || 'unknown',
+            buyer_id,
+            session_id: session.id,
+          });
         }
 
         return; // Exit fulfillOrder -- webhook still returns 200 to Stripe

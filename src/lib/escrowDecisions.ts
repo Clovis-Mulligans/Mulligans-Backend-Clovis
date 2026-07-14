@@ -29,16 +29,17 @@ export {
   SELLER_DISPUTE_RESPONSE_HOURS,
 };
 
-// Statuses that block escrow release (must match escrowService.ts:40-43)
-export const BLOCKING_DISPUTE_STATUSES = ['open', 'counter_offered', 'escalated'] as const;
-export const BLOCKING_RETURN_STATUSES = [
+// Statuses that block escrow release — SINGLE SOURCE OF TRUTH (escrowService.ts imports these)
+export const BLOCKING_DISPUTE_STATUSES: string[] = ['open', 'counter_offered', 'escalated'];
+export const BLOCKING_RETURN_STATUSES: string[] = [
   'pending',
   'approved',
   'awaiting_address',
   'label_created',
   'shipped',
   'delivered',
-] as const;
+  'refund_processing',
+];
 
 export type OrderStatus =
   | 'pending' | 'to_ship' | 'in_transit' | 'delivered'

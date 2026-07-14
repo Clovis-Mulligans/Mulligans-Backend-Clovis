@@ -60,6 +60,29 @@ router.post('/logout', adminLogout);
 // PROTECTED ROUTES (admin auth required)
 // ============================================
 
+// Get user signup platform stats (aggregate counts)
+router.get('/platform-stats', adminAuth, async (req, res) => {
+  try {
+    const groups = await prisma.users.groupBy({
+      by: ['signup_platform'],
+      _count: { _all: true },
+    });
+
+    const stats: Record<string, number> = { ios: 0, android: 0, web: 0, unknown: 0 };
+    for (const g of groups) {
+      const key = g.signup_platform && ['ios', 'android', 'web'].includes(g.signup_platform)
+        ? g.signup_platform
+        : 'unknown';
+      stats[key] += g._count._all;
+    }
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Platform stats error:', error);
+    res.status(500).json({ error: 'Failed to get platform stats' });
+  }
+});
+
 // Get all disputes
 router.get('/disputes', adminAuth, DisputeController.getAdminDisputes);
 
@@ -868,50 +891,99 @@ router.post('/claims/:id/file', adminAuth, async (req, res) => {
 router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, res) => {
   try {
     const { refund_amount, notes } = req.body;
+    const orderId = req.params.id;
     const now = new Date();
 
-    const order = await prisma.orders.findUnique({
-      where: { id: req.params.id },
-      include: {
-        users_orders_buyer_idTousers: {
-          select: { id: true, display_name: true },
+    // Claim-the-row: lock + transition to 'claim_processing' atomically.
+    // Prevents double-refund from concurrent admin approvals.
+    const claimedOrder = await prisma.$transaction(async (tx: any) => {
+      const rows: any[] = await tx.$queryRaw`
+        SELECT id, insurance_claim_status FROM orders
+        WHERE id = ${orderId}
+          AND insurance_claim_status IN ('reported_lost', 'claim_filed')
+          AND stripe_refund_id IS NULL
+        FOR UPDATE`;
+      if (rows.length === 0) return null;
+      const previousStatus = (rows[0] as any).insurance_claim_status;
+      await tx.orders.update({
+        where: { id: orderId },
+        data: { insurance_claim_status: 'claim_processing', updated_at: now },
+      });
+      const full = await tx.orders.findUnique({
+        where: { id: orderId },
+        include: {
+          users_orders_buyer_idTousers: {
+            select: { id: true, display_name: true },
+          },
+          users_orders_seller_idTousers: {
+            select: { id: true, display_name: true },
+          },
         },
-        users_orders_seller_idTousers: {
-          select: { id: true, display_name: true },
-        },
-      },
+      });
+      return full ? { ...full, _previousClaimStatus: previousStatus } : null;
     });
 
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
+    if (!claimedOrder) {
+      const existing = await prisma.orders.findUnique({
+        where: { id: orderId },
+        select: { insurance_claim_status: true, stripe_refund_id: true },
+      });
+      if (existing?.insurance_claim_status === 'claim_processing') {
+        return res.status(409).json({ error: 'A refund for this claim is already in progress' });
+      }
+      return res.status(400).json({ error: 'Order not found, already refunded, or invalid claim status' });
     }
 
-    if (!['reported_lost', 'claim_filed'].includes(order.insurance_claim_status || '')) {
-      return res.status(400).json({ error: 'Invalid claim status for approval' });
-    }
-
-    if (!order.stripe_payment_intent_id) {
+    if (!claimedOrder.stripe_payment_intent_id) {
+      await prisma.orders.update({ where: { id: orderId }, data: { insurance_claim_status: claimedOrder._previousClaimStatus, updated_at: now } });
       return res.status(400).json({ error: 'No payment intent found for this order' });
     }
 
-    // Calculate refund amount (default to full order amount)
-    const amount = refund_amount || parseFloat(order.amount.toString());
+    const order = claimedOrder;
+
+    // Derive the upper bound from the DB row read under the lock, never from the request
+    const orderAmount = parseFloat((order as any).buyer_total ?? order.amount.toString());
+
+    // Validate refund_amount if provided; default to full order amount
+    let amount: number;
+    if (refund_amount !== undefined && refund_amount !== null) {
+      amount = Number(refund_amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        await prisma.orders.update({ where: { id: orderId }, data: { insurance_claim_status: claimedOrder._previousClaimStatus, updated_at: now } });
+        return res.status(400).json({ error: 'refund_amount must be a positive number' });
+      }
+      if (amount > orderAmount) {
+        await prisma.orders.update({ where: { id: orderId }, data: { insurance_claim_status: claimedOrder._previousClaimStatus, updated_at: now } });
+        return res.status(400).json({ error: `refund_amount (£${amount.toFixed(2)}) exceeds order total (£${orderAmount.toFixed(2)})` });
+      }
+    } else {
+      amount = orderAmount;
+    }
 
     // Process Stripe refund
-    const refund = await stripe.refunds.create({
-      payment_intent: order.stripe_payment_intent_id,
-      amount: Math.round(amount * 100),
-      reason: 'requested_by_customer',
-      metadata: {
-        order_id: order.id,
-        reason: 'insurance_claim_approved',
-        admin_processed: 'true',
-      },
-    });
+    let refund;
+    try {
+      refund = await stripe.refunds.create({
+        payment_intent: order.stripe_payment_intent_id,
+        amount: Math.round(amount * 100),
+        reason: 'requested_by_customer',
+        metadata: {
+          order_id: order.id,
+          reason: 'insurance_claim_approved',
+          admin_processed: 'true',
+        },
+      }, {
+        idempotencyKey: `insurance_claim_refund_${orderId}`,
+      });
+    } catch (stripeErr: any) {
+      console.error(`❌ Stripe refund failed for claim ${orderId}, reverting claim:`, stripeErr.message);
+      await prisma.orders.update({ where: { id: orderId }, data: { insurance_claim_status: claimedOrder._previousClaimStatus, updated_at: now } });
+      return res.status(500).json({ error: stripeErr.message || 'Stripe refund failed' });
+    }
 
     // Update order
     await prisma.orders.update({
-      where: { id: req.params.id },
+      where: { id: orderId },
       data: {
         status: 'refunded',
         insurance_claim_status: 'claim_approved',
@@ -1006,12 +1078,12 @@ router.post('/claims/:id/approve', adminAuth, adminActionLimiter, async (req, re
       }).catch(err => console.error('Email error:', err));
     }
 
-    console.log(`✅ Admin approved insurance claim for order ${req.params.id}, refunded £${amount.toFixed(2)}`);
+    console.log(`✅ Admin approved insurance claim for order ${orderId}, refunded £${amount.toFixed(2)}`);
 
     await logAdminAction(
       AUDIT_ACTIONS.APPROVE_CLAIM,
       'order',
-      req.params.id,
+      orderId,
       { amount, stripe_refund_id: refund.id, notes: notes?.substring(0, 200) },
       req
     );

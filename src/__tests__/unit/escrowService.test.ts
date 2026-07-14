@@ -18,6 +18,8 @@ import {
   SELLER_DISPUTE_RESPONSE_HOURS,
   RETURN_SHIPPING_DEADLINE_DAYS,
 } from '../../lib/escrowDecisions';
+import { INSPECTION_WINDOW_DAYS } from '../../constants/inspection';
+import { DISPUTE_WINDOW_DAYS } from '../../config/constants';
 import {
   makeOrder,
   makeDispute,
@@ -336,8 +338,10 @@ describe('shouldExpireReturn', () => {
 // ─── TIMING CONSTANT TRIPWIRES ──────────────────────────────────────────
 
 describe('escrow timing constants', () => {
-  test('ESCROW_RELEASE_DAYS === 5', () => {
+  test('ESCROW_RELEASE_DAYS === 3 (policy-owner confirmed)', () => {
     expect(ESCROW_RELEASE_DAYS).toBe(3);
+    expect(ESCROW_RELEASE_DAYS).toBe(INSPECTION_WINDOW_DAYS);
+    expect(DISPUTE_WINDOW_DAYS).toBe(INSPECTION_WINDOW_DAYS);
   });
   test('AUTO_CANCEL_DAYS === 5', () => {
     expect(AUTO_CANCEL_DAYS).toBe(5);

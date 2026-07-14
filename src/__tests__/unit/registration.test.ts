@@ -43,6 +43,7 @@ const mockUsers = {
   findUnique: jest.fn(),
   create: jest.fn(),
   update: jest.fn(),
+  groupBy: jest.fn(),
 };
 jest.mock('../../lib/prisma', () => ({ prisma: { users: mockUsers } }));
 
@@ -74,6 +75,13 @@ const authRouter = require('../../routes/authRoutes').default;
 const app = express();
 app.use(express.json());
 app.use('/api/auth', authRouter);
+
+// Snapshot rate-limiter config calls captured at module-load time.
+// beforeEach → jest.clearAllMocks() wipes mock.calls before the G tests
+// can inspect them, so we preserve them here.
+const rateLimitCallsAtBoot = mockRateLimitFactory.mock.calls.map(
+  (args: any[]) => [...args],
+);
 
 let server: http.Server;
 let BASE: string;
@@ -107,8 +115,17 @@ async function post(path: string, body: any, headers: Record<string, string> = {
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => null);
+  const json: any = await res.json().catch(() => null);
   return { status: res.status, body: json, headers: res.headers };
+}
+
+async function get(path: string, headers: Record<string, string> = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'GET',
+    headers: { ...headers },
+  });
+  const json: any = await res.json().catch(() => null);
+  return { status: res.status, body: json };
 }
 
 async function postRaw(path: string, rawBody: string, contentType = 'text/plain') {
@@ -117,7 +134,7 @@ async function postRaw(path: string, rawBody: string, contentType = 'text/plain'
     headers: { 'Content-Type': contentType },
     body: rawBody,
   });
-  const json = await res.json().catch(() => null);
+  const json: any = await res.json().catch(() => null);
   return { status: res.status, body: json };
 }
 
@@ -1217,10 +1234,7 @@ describe('F: Failure modes', () => {
 /* ================================================================== */
 describe('G: Rate limiting', () => {
   test('G-01 / G-04: Signup rate limiter configured with correct params', () => {
-    // express-rate-limit was called during module load to create signupLimiter
-    const signupCall = mockRateLimitFactory.mock.calls.find(
-      (args: any[]) => args[0]?.max === 3,
-    );
+    const signupCall = rateLimitCallsAtBoot.find((args: any[]) => args[0]?.max === 3);
     expect(signupCall).toBeDefined();
     expect(signupCall![0]).toMatchObject({
       windowMs: 60 * 60 * 1000,
@@ -1231,9 +1245,7 @@ describe('G: Rate limiting', () => {
   });
 
   test('G-01 (cont): Login rate limiter configured separately', () => {
-    const loginCall = mockRateLimitFactory.mock.calls.find(
-      (args: any[]) => args[0]?.max === 5,
-    );
+    const loginCall = rateLimitCallsAtBoot.find((args: any[]) => args[0]?.max === 5);
     expect(loginCall).toBeDefined();
     expect(loginCall![0]).toMatchObject({
       windowMs: 15 * 60 * 1000,
@@ -1244,4 +1256,159 @@ describe('G: Rate limiting', () => {
   // These require a real rate limiter against a running server:
   test.todo('G-02: Fourth signup from same IP within 1 hour → 429');
   test.todo('G-03: Signup succeeds after rate limit window resets');
+});
+
+/* ================================================================== */
+/*  H — signup_platform capture                                        */
+/* ================================================================== */
+describe('H: signup_platform capture', () => {
+  test('H-01: Registration with signup_platform=ios persists the value', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_ios@example.com', signup_platform: 'ios' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_ios@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_ios',
+      signup_platform: 'ios',
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBe('ios');
+  });
+
+  test('H-02: Registration with signup_platform=android persists the value', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_android@example.com', signup_platform: 'android' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_android@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_android',
+      signup_platform: 'android',
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBe('android');
+  });
+
+  test('H-03: Registration with signup_platform=web persists the value', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_web@example.com', signup_platform: 'web' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_web@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_web',
+      signup_platform: 'web',
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBe('web');
+  });
+
+  test('H-04: Registration without signup_platform stores null', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_none@example.com' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_none@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_none',
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBeNull();
+  });
+
+  test('H-05: Registration with invalid signup_platform stores null', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_bad@example.com' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_bad@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_bad',
+      signup_platform: 'windows',
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBeNull();
+  });
+
+  test('H-06: signup_platform is case-insensitive (IOS → ios)', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_case@example.com', signup_platform: 'ios' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_case@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_case',
+      signup_platform: 'IOS',
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBe('ios');
+  });
+
+  test('H-07: signup_platform injection attempt stores null', async () => {
+    cognitoOk();
+    noUser();
+    dbCreate({ email: 'test0y91_plat_inject@example.com' });
+
+    const res = await post('/api/auth/register', {
+      email: 'test0Y91_plat_inject@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_inject',
+      signup_platform: "'; DROP TABLE users; --",
+    });
+
+    expect(res.status).toBe(201);
+    const createCall = mockUsers.create.mock.calls[0][0];
+    expect(createCall.data.signup_platform).toBeNull();
+  });
+
+  test('H-08: Re-registration does not overwrite existing signup_platform', async () => {
+    cognitoOk();
+    withUser({ email: 'test0y91_plat_reregister@example.com', signup_platform: 'ios' });
+    dbUpdate({ email: 'test0y91_plat_reregister@example.com', signup_platform: 'ios' });
+
+    await post('/api/auth/register', {
+      email: 'test0Y91_plat_reregister@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_reregister',
+      signup_platform: 'android',
+    });
+
+    const updateCall = mockUsers.update.mock.calls[0][0];
+    expect(updateCall.data).not.toHaveProperty('signup_platform');
+  });
+
+  test('H-09: Re-registration backfills signup_platform if previously null', async () => {
+    cognitoOk();
+    withUser({ email: 'test0y91_plat_backfill@example.com', signup_platform: null });
+    dbUpdate({ email: 'test0y91_plat_backfill@example.com', signup_platform: 'android' });
+
+    await post('/api/auth/register', {
+      email: 'test0Y91_plat_backfill@example.com',
+      password: 'Test1234!',
+      display_name: 'test0Y91_plat_backfill',
+      signup_platform: 'android',
+    });
+
+    const updateCall = mockUsers.update.mock.calls[0][0];
+    expect(updateCall.data.signup_platform).toBe('android');
+  });
 });

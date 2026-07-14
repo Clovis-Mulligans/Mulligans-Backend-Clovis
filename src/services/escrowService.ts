@@ -24,6 +24,7 @@ import { Shippo } from 'shippo';
 import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
+import { BLOCKING_DISPUTE_STATUSES, BLOCKING_RETURN_STATUSES } from '../lib/escrowDecisions';
 import { sendInspectionReminders } from './inspectionReminder';
 import { restoreListingStock } from '../lib/stockUtils';
 import { computeSellerTransferAmount } from '../lib/feeCalculations';
@@ -48,11 +49,7 @@ const PAYOUT_ADMIN_ESCALATION_DAYS = 14; // Escalate to admin after 14 days bloc
 // Forced return auto-confirm deadlines (imported from forcedReturnService for reference)
 import { FORCED_RETURN_SELLER_CONFIRM_DAYS, FORCED_RETURN_SELLER_CONFIRM_FALLBACK_DAYS } from './forcedReturnService';
 
-// Dispute statuses that BLOCK escrow release
-const BLOCKING_DISPUTE_STATUSES = ['open', 'counter_offered', 'escalated'];
-
-// Return statuses that BLOCK escrow release
-const BLOCKING_RETURN_STATUSES = ['pending', 'approved', 'awaiting_address', 'label_created', 'shipped', 'delivered', 'refund_processing'];
+// BLOCKING_DISPUTE_STATUSES and BLOCKING_RETURN_STATUSES imported from escrowDecisions.ts
 
 // ============================================
 // HELPER: Check if order has blocking dispute

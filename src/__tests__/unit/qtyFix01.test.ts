@@ -408,13 +408,13 @@ describe('structural: M-4 refund in native payment error catch block', () => {
     confirmEnd,
   );
 
-  test('calls stripe.refunds.create in the catch block', () => {
-    expect(catchBlock).toContain('stripe.refunds.create');
-    expect(catchBlock).toContain('payment_intent:');
+  test('calls issueFailureRefund in the catch block', () => {
+    expect(catchBlock).toContain('issueFailureRefund');
+    expect(catchBlock).toContain('paymentIntentId');
   });
 
-  test('refund failure has its own try/catch (no crash)', () => {
-    expect(catchBlock).toContain('catch (refundErr');
+  test('refund failure is handled by the shared helper (no crash)', () => {
+    expect(catchBlock).toContain('issueFailureRefund');
   });
 
   test('message varies based on refundIssued flag', () => {
