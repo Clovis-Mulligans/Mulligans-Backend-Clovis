@@ -24,7 +24,7 @@ import { Shippo } from 'shippo';
 import { sendEscrowReleased, sendReturnRefundProcessed, sendOrderCancellation } from './emailService';
 import { sendPushNotification } from '../controllers/pushNotificationController';
 import { ESCROW_RELEASE_DAYS, SHIPPING_DEADLINE_DAYS, RETURN_SHIPPING_DEADLINE_DAYS } from '../config/constants';
-import { BLOCKING_DISPUTE_STATUSES, BLOCKING_RETURN_STATUSES } from '../lib/escrowDecisions';
+import { BLOCKING_DISPUTE_STATUSES, BLOCKING_RETURN_STATUSES, sellerCanReceivePayout } from '../lib/escrowDecisions';
 import { sendInspectionReminders } from './inspectionReminder';
 import crypto from 'crypto';
 
@@ -140,12 +140,7 @@ async function updateUserRating(userId: string): Promise<void> {
   }
 }
 
-// ============================================
-// HELPER: Check if seller can receive a payout
-// ============================================
-function sellerCanReceivePayout(seller: { stripe_connect_id: string | null; stripe_connect_status?: string | null }): boolean {
-  return !!seller.stripe_connect_id && seller.stripe_connect_status === 'active';
-}
+// sellerCanReceivePayout imported from '../lib/escrowDecisions'
 
 // ============================================
 // AUTO-CANCEL UNSHIPPED ORDERS

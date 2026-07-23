@@ -192,6 +192,7 @@ model orders {
   stripe_refund_id              String?
   stripe_transfer_id            String?
   payout_blocked_at             DateTime?
+  buyer_confirmed_at            DateTime?
   payout_reminder_sent_at       DateTime?
   insurance_claim_id            String?
   insurance_claim_status        String?
