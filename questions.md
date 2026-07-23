@@ -220,3 +220,123 @@ Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbo
 - **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
 - **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
 - **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.
+
+---
+
+# Questions — Payout Guards Audit (23 Jul 2026)
+
+## Abort Conditions
+
+No abort conditions were hit. Branch, SHA, and tree are verified (see AUDIT.md §2).
+
+**Remote discrepancy (non-blocking):** The brief references `upstream/main` but no `upstream` remote exists. `origin` points at `HS-Mulligans/Mulligans-Backend` and was used as the upstream. The audit is against the correct tree.
+
+---
+
+## Items Warranting Immediate Action
+
+### IMMEDIATE-1: Order `order_980551c6` (the incident order) — manual intervention required
+
+The incident order (£189.98 paid, £160.00 seller payout) is currently stuck in `delivered` with `completed_at = NULL`. The escrow cron will pick it up nightly but will continue to fail because:
+
+1. The seller's Connect account `acct_1TWyccHAxYrQJMTK` has `stripe_connect_status = 'restricted'`
+2. Even if the seller completes Stripe onboarding, the DB will not know — there is no `account.updated` webhook (see P1-1)
+3. The seller must actively poll `/account-status` or `/onboarding-status` in the app to update their DB status
+
+**Decision required:** Should the seller be contacted directly and walked through Stripe onboarding? Or should an admin manually poll the Stripe API for the account status and update the DB?
+
+### IMMEDIATE-2: Audit the DB for other orphaned orders
+
+The following query would identify orders in the same state as the incident:
+```sql
+SELECT id, status, stripe_transfer_id, completed_at, seller_payout,
+       escrow_release_at, payout_blocked_at
+FROM orders
+WHERE status = 'completed'
+  AND stripe_transfer_id IS NULL
+  AND seller_payout > 0;
+```
+
+And orders stuck in `delivered` past their escrow release:
+```sql
+SELECT id, status, stripe_transfer_id, escrow_release_at, payout_blocked_at,
+       seller_id
+FROM orders
+WHERE status = 'delivered'
+  AND escrow_release_at < NOW()
+  AND stripe_transfer_id IS NULL;
+```
+
+**Decision required:** Harry to run these queries against production and assess the scale of the problem.
+
+### IMMEDIATE-3: Three orphaned Stripe accounts in Stripe dashboard
+
+The three duplicate `POST /v1/accounts` events (22 Jul, 21 Jul ×2) likely created orphaned `acct_` objects in Stripe. These should be identified and either linked to the correct user or deleted via the Stripe dashboard.
+
+**Decision required:** Harry to check the Stripe dashboard for duplicate/orphaned Connect accounts.
+
+---
+
+## Ambiguities & Undeterminable Questions
+
+### Q15 — Anomaly attribution is probabilistic, not certain
+
+For `order_c52adae2` (21 May, transfer created but `stripe_transfer_id` NULL): I attributed this to the `completeOrder` path based on the code analysis (it's the only path that creates a transfer without persisting the ID at current HEAD). However, before commit `13d4a5b` (1 Jun), `confirmReceipt` also had this bug. The order date (21 May) is before the fix, so **either path could have been responsible**. `completeOrder` is the only path where this bug is still live.
+
+For `order_655d42f6` (1 Jun, `completed` with both fields NULL): I attributed this to a dispute resolution path (the only paths that omit `completed_at`). Without access to the production logs or dispute records for this order, I cannot confirm which of the three dispute paths was used.
+
+### Q19 — Alerting completeness
+
+I found no Sentry, PagerDuty, Slack, or other external alerting integration. If one exists outside the `src/` tree (e.g., in infrastructure config, PM2 config, or a separate monitoring service), it would not be visible in this audit.
+
+### Missing `account.updated` webhook — known gap vs. oversight?
+
+The spec (§4.8, Open item 4-OPEN-5) mentions "Surface failed Stripe transfers (Connect account `restricted`) to admin/seller" as an open item. But the spec does not explicitly call for an `account.updated` webhook. Is the absence of this webhook:
+- A known gap that was deliberately deferred?
+- An oversight that should be addressed with the payout guard fix?
+
+This affects the scope of the proposed consolidation.
+
+### `completeOrder` endpoint — who calls it?
+
+The admin route `PUT /api/orders/:id/complete` is behind `adminAuth`. I could not determine from the code alone whether this endpoint is called:
+- Only from the admin web panel (manual action by Harry)
+- Programmatically by any other service or cron job
+- At all in production (it may be a dormant admin tool)
+
+If it is rarely used, the P0-2 risk is mitigated by low exposure. If it is used regularly, the risk is acute.
+
+### Dispute resolution — is the order-status-before-transfer sequence intentional?
+
+The dispute paths set `completed` before attempting the transfer. This could be:
+- A bug (the status should be set after the transfer)
+- An intentional design choice (the refund has already been issued to the buyer, so the order is "resolved" from the buyer's perspective regardless of seller payout success)
+
+The answer affects the proposed fix. If intentional, the fix should add a retry mechanism for completed orders with NULL `stripe_transfer_id`. If a bug, the fix should reorder the operations.
+
+---
+
+## Strategic Recommendation
+
+**The audit strongly favours consolidation (Harry's option 2) over a single-site patch.**
+
+Patching `confirmReceipt` alone fixes the specific incident but leaves:
+- `completeOrder` with no idempotency, no transfer ID persistence, no status check (P0-2)
+- Dispute resolution permanently orphaning orders on transfer failure (P0-3)
+- Dispute resolution warn-and-continue on non-active accounts (P0-5)
+- 6 of 7 completion paths inconsistent in what they write (Table E)
+- No test coverage for the failure mode
+
+A `transferToSeller()` helper (modelled on `issueFailureRefund.ts`) fixes all four transfer sites and can be adopted incrementally, starting with `completeOrder` (the most dangerous site).
+
+**However:** The consolidation does not fix the upstream gating problem (P1-2) or the missing webhook (P1-1). Those are separate, complementary fixes.
+
+**Recommended sequencing:**
+1. **Today:** Manual intervention for the incident order (IMMEDIATE-1)
+2. **Today:** DB audit for other orphaned orders (IMMEDIATE-2)
+3. **This week:** Create `transferToSeller.ts` and adopt in `completeOrder` (fixes P0-2)
+4. **This week:** Adopt in `confirmReceipt` with `connect_status` check (fixes P0-1)
+5. **This week:** Fix dispute resolution ordering or add retry mechanism (fixes P0-3)
+6. **Next week:** `account.updated` webhook (fixes P1-1)
+7. **Next week:** Upstream payability gate at checkout (fixes P1-2)
+8. **CI check:** Add after all sites are consolidated (Q27)
