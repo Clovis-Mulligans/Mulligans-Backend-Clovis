@@ -213,4 +213,16 @@ describe('transferToSeller', () => {
     );
     consoleSpy.mockRestore();
   });
+
+  // 10. Successful transfer → log line contains transfer ID and amount
+  test('success → log line contains transfer ID and amount', async () => {
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    await transferToSeller(makeParams({ amountPence: 4625 }));
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/tr_test_123.*£46\.25/),
+    );
+    consoleSpy.mockRestore();
+  });
 });

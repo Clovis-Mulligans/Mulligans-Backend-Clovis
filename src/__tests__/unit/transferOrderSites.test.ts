@@ -321,7 +321,7 @@ describe('confirmReceipt', () => {
     expect(mockPrisma.users.update).not.toHaveBeenCalled();
   });
 
-  test('pending seller → 200, payout_status pending, no Stripe call', async () => {
+  test('pending seller → 200, payout_status pending', async () => {
     const order = makeDeliveredOrder(PENDING_SELLER);
     mockPrisma.orders.findFirst.mockResolvedValue(order);
     mockTransferToSeller.mockResolvedValue({ status: 'blocked', reason: 'stripe_status_pending' });
@@ -462,6 +462,135 @@ describe('confirmReceipt', () => {
     const { statusCode } = getResState(res);
     expect(statusCode).toBe(400);
     (hasBlockingReturn as jest.Mock).mockResolvedValue(false);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// Brief 1b: zero-payout, failed-vs-blocked notification
+// ═════════════════════════════════════════════════════════════════════════
+
+describe('confirmReceipt — zero payout', () => {
+  test('seller_payout zero → 200, payout_status released, order completed, transferToSeller never called, no notification', async () => {
+    const order = makeDeliveredOrder(ACTIVE_SELLER, { seller_payout: 0 });
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+
+    const req = mockReq();
+    const { res } = mockRes();
+    await OrderController.confirmReceipt(req, res);
+
+    const { statusCode, body } = getResState(res);
+    expect(statusCode).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.payout_status).toBe('released');
+
+    expect(mockTransferToSeller).not.toHaveBeenCalled();
+    expect(mockPrisma.notifications.create).not.toHaveBeenCalled();
+    expect(sendPushNotification).not.toHaveBeenCalled();
+
+    expect(mockPrisma.orders.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'completed' }),
+      }),
+    );
+  });
+
+  test('seller_payout null → 200, payout_status released, order completed, transferToSeller never called, no notification', async () => {
+    const order = makeDeliveredOrder(ACTIVE_SELLER, { seller_payout: null });
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+
+    const req = mockReq();
+    const { res } = mockRes();
+    await OrderController.confirmReceipt(req, res);
+
+    const { statusCode, body } = getResState(res);
+    expect(statusCode).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.payout_status).toBe('released');
+
+    expect(mockTransferToSeller).not.toHaveBeenCalled();
+    expect(mockPrisma.notifications.create).not.toHaveBeenCalled();
+    expect(sendPushNotification).not.toHaveBeenCalled();
+  });
+
+  test('zero payout → counters do increment', async () => {
+    const order = makeDeliveredOrder(ACTIVE_SELLER, { seller_payout: 0 });
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+
+    const req = mockReq();
+    const { res } = mockRes();
+    await OrderController.confirmReceipt(req, res);
+
+    expect(mockPrisma.users.update).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: ACTIVE_SELLER.id },
+        data: expect.objectContaining({ total_sales: { increment: 1 } }),
+      }),
+    );
+    expect(mockPrisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test0Y91_buyer_1' },
+        data: expect.objectContaining({ total_purchases: { increment: 1 } }),
+      }),
+    );
+  });
+});
+
+describe('completeOrder — zero payout', () => {
+  test('zero payout → order completed, helper never called, not 409', async () => {
+    const order = makeDeliveredOrder(ACTIVE_SELLER, { seller_payout: 0 });
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+
+    const req = mockReq();
+    const { res } = mockRes();
+    await OrderController.completeOrder(req, res);
+
+    const { statusCode, body } = getResState(res);
+    expect(statusCode).toBe(200);
+    expect(body.success).toBe(true);
+
+    expect(mockTransferToSeller).not.toHaveBeenCalled();
+
+    expect(mockPrisma.orders.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'completed' }),
+      }),
+    );
+  });
+});
+
+describe('confirmReceipt — failed vs blocked notifications', () => {
+  test('helper returns failed → no seller notification created, no push sent, still 200 / payout_status pending', async () => {
+    const order = makeDeliveredOrder(ACTIVE_SELLER);
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+    mockTransferToSeller.mockResolvedValue({ status: 'failed', reason: 'stripe_error', code: 'balance_insufficient' });
+
+    const req = mockReq();
+    const { res } = mockRes();
+    await OrderController.confirmReceipt(req, res);
+
+    const { statusCode, body } = getResState(res);
+    expect(statusCode).toBe(200);
+    expect(body.payout_status).toBe('pending');
+
+    expect(mockPrisma.notifications.create).not.toHaveBeenCalled();
+    expect(sendPushNotification).not.toHaveBeenCalled();
+  });
+
+  test('helper returns blocked → payout_blocked notification IS sent', async () => {
+    const order = makeDeliveredOrder(RESTRICTED_SELLER);
+    mockPrisma.orders.findFirst.mockResolvedValue(order);
+    mockTransferToSeller.mockResolvedValue({ status: 'blocked', reason: 'stripe_status_restricted' });
+
+    const req = mockReq();
+    const { res } = mockRes();
+    await OrderController.confirmReceipt(req, res);
+
+    expect(mockPrisma.notifications.create).toHaveBeenCalledTimes(1);
+    const notifCall = mockPrisma.notifications.create.mock.calls[0][0].data;
+    expect(notifCall.type).toBe('payout_blocked');
+
+    expect(sendPushNotification).toHaveBeenCalledTimes(1);
   });
 });
 

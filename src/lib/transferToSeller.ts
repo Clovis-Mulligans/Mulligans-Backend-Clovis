@@ -84,5 +84,9 @@ export async function transferToSeller(params: TransferToSellerParams): Promise<
   }
 
   // 6. Return success
+  console.log(
+    `[TRANSFER] Created ${transfer.id} amount=£${(amountPence / 100).toFixed(2)} ` +
+    `orders=${orderIds.join(',')} seller=${seller.id}`,
+  );
   return { status: 'transferred', transferId: transfer.id };
 }

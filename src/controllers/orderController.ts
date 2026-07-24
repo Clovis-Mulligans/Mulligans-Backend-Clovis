@@ -775,6 +775,39 @@ if (order.disputes) {
 
       // Transfer funds to seller via guarded helper
       const transferAmount = order.seller_payout ? Math.round(parseFloat(order.seller_payout.toString()) * 100) : 0;
+
+      const now = new Date();
+
+      if (transferAmount === 0) {
+        await prisma.orders.update({
+          where: { id: orderId },
+          data: {
+            status: 'completed',
+            completed_at: now,
+            buyer_confirmed_at: now,
+            escrow_release_at: now,
+            updated_at: now,
+          },
+        });
+
+        await prisma.users.update({
+          where: { id: seller.id },
+          data: { total_sales: { increment: 1 }, updated_at: now },
+        });
+        await prisma.users.update({
+          where: { id: order.buyer_id },
+          data: { total_purchases: { increment: 1 }, updated_at: now },
+        });
+
+        console.log('[ORDER] Receipt confirmed, zero payout — order completed without transfer:', orderId);
+
+        return res.json({
+          success: true,
+          payout_status: 'released',
+          message: 'Thank you for confirming receipt. The seller has been paid.',
+        });
+      }
+
       const transferResult = await transferToSeller({
         amountPence: transferAmount,
         seller,
@@ -786,8 +819,6 @@ if (order.disputes) {
       if (transferResult.status === 'already_transferred') {
         return res.status(400).json({ error: 'Payment has already been released for this order' });
       }
-
-      const now = new Date();
 
       if (transferResult.status === 'transferred') {
         // Happy path: payment succeeded
@@ -854,31 +885,35 @@ if (order.disputes) {
         },
       });
 
-      const blockedNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: blockedNotifId,
-          user_id: seller.id,
-          type: 'payout_blocked',
-          title: 'Action needed to get paid',
-          message: `The buyer confirmed receipt of "${listingTitle}". Complete your Stripe setup to receive £${payoutAmount}.`,
-          image_url: listingImage,
-          related_id: orderId,
-        },
-      });
+      if (transferResult.status === 'blocked') {
+        const blockedNotifId = crypto.randomUUID();
+        await prisma.notifications.create({
+          data: {
+            id: blockedNotifId,
+            user_id: seller.id,
+            type: 'payout_blocked',
+            title: 'Action needed to get paid',
+            message: `The buyer confirmed receipt of "${listingTitle}". Complete your Stripe setup to receive £${payoutAmount}.`,
+            image_url: listingImage,
+            related_id: orderId,
+          },
+        });
 
-      try {
-        await sendPushNotification(
-          seller.id,
-          'Action needed to get paid',
-          `The buyer confirmed receipt of "${listingTitle}". Complete your Stripe setup to receive £${payoutAmount}.`,
-          { notification_id: blockedNotifId, type: 'payout_blocked', order_id: orderId }
-        );
-      } catch (pushErr) {
-        console.error('[ORDER] Push notification failed:', pushErr);
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Action needed to get paid',
+            `The buyer confirmed receipt of "${listingTitle}". Complete your Stripe setup to receive £${payoutAmount}.`,
+            { notification_id: blockedNotifId, type: 'payout_blocked', order_id: orderId }
+          );
+        } catch (pushErr) {
+          console.error('[ORDER] Push notification failed:', pushErr);
+        }
+
+        console.log(`[ORDER] Receipt confirmed but payout blocked for order: ${orderId} reason=${transferResult.reason} seller=${seller.id}`);
+      } else {
+        console.error(`[ORDER] Receipt confirmed but payout failed for order: ${orderId} reason=${transferResult.reason} code=${'code' in transferResult ? transferResult.code : 'none'} seller=${seller.id}`);
       }
-
-      console.log('[ORDER] Receipt confirmed but payout blocked for order:', orderId);
 
       res.json({
         success: true,
@@ -1628,6 +1663,32 @@ if (isBuyerCancelling) {
 
       // Transfer funds to seller via guarded helper
       const transferAmount = sellerPayout ? Math.round(parseFloat(sellerPayout.toString()) * 100) : 0;
+
+      if (transferAmount === 0) {
+        const now = new Date();
+
+        const updatedOrder = await prisma.orders.update({
+          where: { id: orderId },
+          data: {
+            status: 'completed',
+            completed_at: now,
+            updated_at: now,
+          },
+        });
+
+        await prisma.users.update({
+          where: { id: seller.id },
+          data: { total_sales: { increment: 1 }, updated_at: now },
+        });
+        await prisma.users.update({
+          where: { id: order.buyer_id },
+          data: { total_purchases: { increment: 1 }, updated_at: now },
+        });
+
+        console.log('[ORDER] Order completed, zero payout — no transfer:', orderId);
+        return res.json({ success: true, order: updatedOrder });
+      }
+
       const transferResult = await transferToSeller({
         amountPence: transferAmount,
         seller,
