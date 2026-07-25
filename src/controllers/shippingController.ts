@@ -664,51 +664,52 @@ export const handleShippoWebhook = async (req: Request, res: Response) => {
         let deliveredAt = order.delivered_at;
         let escrowReleaseAt: Date | null = null;
         let shippedAt = order.shipped_at;
-        // Map Shippo status to our order status
+        let clearAutoCancel = false;
+
         switch (status) {
           case 'PRE_TRANSIT':
-            // Label created / tracking registered, but the carrier has NOT yet
-            // physically scanned the parcel. The seller may not have dropped it
-            // off yet, so the order must stay 'to_ship' (not 'in_transit').
-            // Do NOT set shipped_at here — it drives the lost-in-transit timer
-            // and the buyer-facing "shipped" state. Only a real TRANSIT scan
-            // means the parcel is genuinely on its way.
-            // (auto_cancel_at is still cleared below on any tracking event,
-            //  which is correct: a label exists, so don't auto-cancel.)
             newStatus = 'to_ship';
+            // auto_cancel_at deliberately preserved — a label is not proof of postage
             break;
           case 'TRANSIT':
             newStatus = 'in_transit';
             if (!shippedAt) shippedAt = new Date();
+            clearAutoCancel = true;
             break;
           case 'DELIVERED':
             newStatus = 'delivered';
             deliveredAt = new Date();
-            // ✅ Calculate escrow release date (3 days from delivery)
             escrowReleaseAt = new Date();
             escrowReleaseAt.setDate(escrowReleaseAt.getDate() + ESCROW_RELEASE_DAYS);
+            clearAutoCancel = true;
             break;
           case 'RETURNED':
             newStatus = 'returned';
+            clearAutoCancel = true;
             break;
           case 'FAILURE':
             newStatus = 'delivery_failed';
+            // auto_cancel_at deliberately preserved — recovery is a manual admin action (spec §2.5)
             break;
         }
 
-        // Update ALL orders with this tracking number (multi-item shipments)
-        // Per Brief 2 fix: clear auto_cancel_at on ANY tracking event (parcel is with carrier)
-        // and persist shipped_at so dashboards reflect carrier-acceptance time
+        // Clear auto_cancel_at only when the parcel is genuinely with the carrier
+        // (TRANSIT) or the order has reached a terminal shipping state. PRE_TRANSIT
+        // (label created, not yet scanned) and FAILURE preserve the deadline.
+        const updateData: Record<string, any> = {
+          status: newStatus,
+          delivered_at: deliveredAt,
+          escrow_release_at: escrowReleaseAt,
+          shipped_at: shippedAt,
+          updated_at: new Date(),
+        };
+        if (clearAutoCancel) {
+          updateData.auto_cancel_at = null;
+        }
+
         await prisma.orders.updateMany({
           where: { tracking_number: trackingNumber },
-          data: {
-            status: newStatus,
-            delivered_at: deliveredAt,
-            escrow_release_at: escrowReleaseAt,
-            shipped_at: shippedAt,
-            auto_cancel_at: null,
-            updated_at: new Date(),
-          },
+          data: updateData,
         });
 
         // Notify buyer of delivery

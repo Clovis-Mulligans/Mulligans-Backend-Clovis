@@ -1,3 +1,110 @@
+# Fix: `auto_cancel_at` cleared on PRE_TRANSIT
+
+**Branch:** `task/fix-autocancel-pretransit`
+**Base:** `origin/main` @ `5afc28e`
+**Date:** 2026-07-25
+
+---
+
+## Fix: conditional `auto_cancel_at` clearing in Shippo webhook
+
+**File:** `src/controllers/shippingController.ts` (~line 662-712)
+
+**Bug:** The Shippo tracking webhook's `updateMany` unconditionally set `auto_cancel_at: null` for every tracking status, including `PRE_TRANSIT`. Since auto-ship buys a label at checkout and Shippo fires `PRE_TRANSIT` within seconds, the 5-weekday shipping deadline was wiped before the seller had done anything. `auto_cancel_at` is the sole trigger for `autoCancelUnshippedOrders()` — once cleared, the order can never auto-cancel and the buyer can never be auto-refunded if the seller never ships.
+
+**Fix:** `auto_cancel_at` is now cleared only when the parcel is genuinely with the carrier or at a terminal state:
+
+| Tracking status | `auto_cancel_at` | Rationale |
+|---|---|---|
+| `PRE_TRANSIT` | **preserved** | Label exists, parcel NOT with carrier. Deadline must stand. |
+| `TRANSIT` | **cleared (null)** | Real carrier scan. Seller has shipped. |
+| `DELIVERED` | **cleared (null)** | Terminal. Escrow timer takes over. |
+| `RETURNED` | **cleared (null)** | Terminal. Order no longer `to_ship`. |
+| `FAILURE` | **preserved** | Recovery is a manual admin action (spec §2.5). |
+| default/unknown | **preserved** | Never wipe a protection field on an unmodelled event. |
+
+### FAILURE case — overrides the audit recommendation
+
+The preceding audit (`task/audit-autocancel-pretransit`) proposed *resetting* `auto_cancel_at` to a fresh 5-weekday window on `FAILURE`. **This was wrong against the spec.** `business-logic-v2.md` §2.5 states delivery-failure recovery is a manual admin action, not an automatic one. Resetting the deadline would re-arm auto-cancel on delivery failures and eventually refund a buyer on a recoverable case — a new money bug. The fix preserves the existing `auto_cancel_at` value on `FAILURE`, leaving the order for admin review.
+
+### Implementation: explicit conditional object
+
+The `updateMany` data object is built explicitly. `auto_cancel_at` is only added to the object when `clearAutoCancel` is `true`. This avoids relying on Prisma's implicit `undefined`-omission behaviour for a buyer-protection field.
+
+### Comments updated
+
+Removed the two misleading comments:
+- `"(auto_cancel_at is still cleared below on any tracking event, which is correct: a label exists, so don't auto-cancel.)"` — **deleted** (this was the reasoning that introduced the bug).
+- `"Per Brief 2 fix: clear auto_cancel_at on ANY tracking event (parcel is with carrier)"` — **replaced** with an accurate comment explaining the conditional clearing logic.
+
+### Existing per-case field handling preserved
+
+The fix does not alter how `delivered_at`, `escrow_release_at`, or `shipped_at` are handled per tracking status. These fields continue to be set exactly as before:
+- `shipped_at`: set on `TRANSIT` (if not already set), null on `PRE_TRANSIT`
+- `delivered_at`: set on `DELIVERED`
+- `escrow_release_at`: set on `DELIVERED` (+ ESCROW_RELEASE_DAYS)
+
+### Auth untouched
+
+The webhook's query-string token authentication (`shippingController.ts:641-644`) is not modified by this change. Its replacement with HMAC signature verification is a separate brief.
+
+---
+
+## Tests: `src/__tests__/unit/webhookAutoCancel.test.ts`
+
+Unit tests with mocked Prisma, asserting on the `updateMany` data object:
+
+1. **PRE_TRANSIT preserves auto_cancel_at** — asserts `data` does NOT have `auto_cancel_at` property; status stays `to_ship`; `shipped_at` stays null
+2. **TRANSIT clears auto_cancel_at** — asserts `data.auto_cancel_at === null`; status `in_transit`; `shipped_at` set
+3. **TRANSIT preserves existing shipped_at** — asserts pre-existing `shipped_at` is not overwritten
+4. **DELIVERED clears auto_cancel_at** — asserts null; status `delivered`; `escrow_release_at` set to +ESCROW_RELEASE_DAYS
+5. **RETURNED clears auto_cancel_at** — asserts null; status `returned`
+6. **FAILURE preserves auto_cancel_at** — asserts `data` does NOT have `auto_cancel_at` property; status `delivery_failed`
+7. **Multi-item shipment** — asserts `updateMany` WHERE uses `tracking_number`, not order id
+8. **Webhook auth** — rejects invalid token with 401, no `updateMany` call
+9. **Response contract** — always returns 200
+
+Tests assert on whether `auto_cancel_at` *appears in the updateMany data object*, not just its value — the distinction between "set to null" and "not touched" is the entire fix.
+
+---
+
+## Back-fill script: `scripts/backfill-autocancel.ts`
+
+Standalone script to restore `auto_cancel_at` on the 5 stranded `to_ship` orders.
+
+**Usage:**
+```bash
+npx ts-node scripts/backfill-autocancel.ts              # dry run (default)
+npx ts-node scripts/backfill-autocancel.ts --apply       # write future-deadline rows only
+npx ts-node scripts/backfill-autocancel.ts --apply-overdue  # write ALL rows including overdue
+```
+
+### ⚠️ Live-money caution
+
+`order_d72c800f-...` is a real £36 buyer order. Orders created recently compute to a **future** deadline (safe). Older orders compute to deadlines **already in the past** — writing those would make the next 02:00 cron run cancel and refund them.
+
+The script has two safety gates:
+- `--apply` writes only rows where the computed deadline is in the future
+- `--apply-overdue` is required to write overdue rows, preventing accidental refunds
+- Default (no flag) prints the table and exits without writing
+
+The back-fill is a manual operational step to run AFTER the code fix is deployed, not part of the automatic deploy.
+
+---
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `src/controllers/shippingController.ts` | Conditional `auto_cancel_at` clearing; comment updates |
+| `src/__tests__/unit/webhookAutoCancel.test.ts` | New — 9 test cases |
+| `scripts/backfill-autocancel.ts` | New — dry-run-first back-fill |
+| `CHANGES.md` | This file |
+| `questions.md` | Confirmation notes |
+
+---
+---
+
 # AUTH-01: Refresh-Token Authentication (Backend)
 
 **Branch:** `auth-01-refresh-tokens`

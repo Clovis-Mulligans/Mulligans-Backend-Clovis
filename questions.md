@@ -220,3 +220,27 @@ Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbo
 - **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
 - **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
 - **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.
+
+---
+
+# Confirmations — Fix `auto_cancel_at` PRE_TRANSIT (2026-07-25)
+
+## Auth untouched — confirmed
+
+The webhook token authentication block (`shippingController.ts:641-644`) is not modified by this change. The `req.query.token !== process.env.SHIPPO_WEBHOOK_SECRET` check remains identical.
+
+## Per-case field handling preserved — confirmed
+
+The existing handling of `delivered_at`, `escrow_release_at`, and `shipped_at` per tracking status is preserved exactly:
+
+- **PRE_TRANSIT**: `newStatus = 'to_ship'`, no `shipped_at` change, no `delivered_at`, no `escrow_release_at` ✓
+- **TRANSIT**: `newStatus = 'in_transit'`, `shippedAt = new Date()` only if not already set ✓
+- **DELIVERED**: `newStatus = 'delivered'`, `deliveredAt = new Date()`, `escrowReleaseAt = now + ESCROW_RELEASE_DAYS` ✓
+- **RETURNED**: `newStatus = 'returned'` ✓
+- **FAILURE**: `newStatus = 'delivery_failed'` ✓
+
+The only change is the addition of `clearAutoCancel` and the conditional inclusion of `auto_cancel_at` in the `updateMany` data object.
+
+## FAILURE case — confirmed per spec §2.5
+
+`auto_cancel_at` is preserved (not cleared, not reset) on `FAILURE`. The audit's recommendation to reset was overridden per the brief. `calculateShippingDeadline` is not imported into `shippingController.ts`.
