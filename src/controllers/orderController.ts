@@ -20,6 +20,7 @@ import { generateEmailActionToken } from '../routes/emailActionRoutes';
 import { restoreListingStock } from '../lib/stockUtils';
 import { weekdaysUntil, calculateShippingDeadline } from '../utils/shippingDeadline';
 import { hasBlockingDispute, hasBlockingReturn } from '../services/escrowService';
+import { transferToSeller } from '../lib/transferToSeller';
 
 const shippo = new Shippo({
   apiKeyHeader: `ShippoToken ${process.env.SHIPPO_API_KEY}`,
@@ -743,6 +744,7 @@ if (order.disputes) {
             select: {
               id: true,
               stripe_connect_id: true,
+              stripe_connect_status: true,
               display_name: true,
             },
           },
@@ -769,94 +771,154 @@ if (order.disputes) {
       const seller = order.users_orders_seller_idTousers;
       const listingTitle = order.listings?.title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || null;
+      const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
 
-      // Transfer funds to seller with idempotency + persist transfer ID
-      let transferId: string | null = null;
-      if (seller.stripe_connect_id && order.seller_payout) {
-        const transferAmount = Math.round(parseFloat(order.seller_payout.toString()) * 100);
-
-        try {
-          const transfer = await stripe.transfers.create({
-            amount: transferAmount,
-            currency: 'gbp',
-            destination: seller.stripe_connect_id,
-            metadata: {
-              order_id: order.id,
-              type: 'buyer_confirmed_receipt',
-            },
-          }, { idempotencyKey: `confirm_receipt_transfer_${orderId}` });
-
-          transferId = transfer.id;
-          console.log(`💸 Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)}`);
-        } catch (transferError: any) {
-          console.error('⚠️ Transfer failed:', transferError.message);
-          return res.status(500).json({ error: 'Failed to process payment to seller' });
-        }
-      }
+      // Transfer funds to seller via guarded helper
+      const transferAmount = order.seller_payout ? Math.round(parseFloat(order.seller_payout.toString()) * 100) : 0;
 
       const now = new Date();
+
+      if (transferAmount === 0) {
+        await prisma.orders.update({
+          where: { id: orderId },
+          data: {
+            status: 'completed',
+            completed_at: now,
+            buyer_confirmed_at: now,
+            escrow_release_at: now,
+            updated_at: now,
+          },
+        });
+
+        await prisma.users.update({
+          where: { id: seller.id },
+          data: { total_sales: { increment: 1 }, updated_at: now },
+        });
+        await prisma.users.update({
+          where: { id: order.buyer_id },
+          data: { total_purchases: { increment: 1 }, updated_at: now },
+        });
+
+        console.log('[ORDER] Receipt confirmed, zero payout — order completed without transfer:', orderId);
+
+        return res.json({
+          success: true,
+          payout_status: 'released',
+          message: 'Thank you for confirming receipt. The seller has been paid.',
+        });
+      }
+
+      const transferResult = await transferToSeller({
+        amountPence: transferAmount,
+        seller,
+        idempotencyKey: `confirm_receipt_transfer_${orderId}`,
+        metadata: { order_id: order.id, type: 'buyer_confirmed_receipt' },
+        orderIds: [order.id],
+      });
+
+      if (transferResult.status === 'already_transferred') {
+        return res.status(400).json({ error: 'Payment has already been released for this order' });
+      }
+
+      if (transferResult.status === 'transferred') {
+        // Happy path: payment succeeded
+        await prisma.orders.update({
+          where: { id: orderId },
+          data: {
+            status: 'completed',
+            completed_at: now,
+            buyer_confirmed_at: now,
+            escrow_release_at: now,
+            updated_at: now,
+          },
+        });
+
+        await prisma.users.update({
+          where: { id: seller.id },
+          data: { total_sales: { increment: 1 }, updated_at: now },
+        });
+        await prisma.users.update({
+          where: { id: order.buyer_id },
+          data: { total_purchases: { increment: 1 }, updated_at: now },
+        });
+
+        const payoutNotifId = crypto.randomUUID();
+        await prisma.notifications.create({
+          data: {
+            id: payoutNotifId,
+            user_id: seller.id,
+            type: 'payout',
+            title: 'Payment Released!',
+            message: `The buyer confirmed receipt of "${listingTitle}". £${payoutAmount} has been transferred to your account.`,
+            image_url: listingImage,
+            related_id: orderId,
+          },
+        });
+
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Payment Released!',
+            `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
+            { notification_id: payoutNotifId, type: 'payout_released', order_id: orderId }
+          );
+        } catch (pushErr) {
+          console.error('[ORDER] Push notification failed:', pushErr);
+        }
+
+        console.log('[ORDER] Receipt confirmed, escrow released for order:', orderId);
+
+        return res.json({
+          success: true,
+          payout_status: 'released',
+          message: 'Thank you for confirming receipt. The seller has been paid.',
+        });
+      }
+
+      // Blocked / failed path: record confirmation, keep order in delivered for escrow cron
       await prisma.orders.update({
         where: { id: orderId },
         data: {
-          status: 'completed',
-          completed_at: now,
+          buyer_confirmed_at: now,
           escrow_release_at: now,
-          stripe_transfer_id: transferId,
           updated_at: now,
         },
       });
 
-      // Update seller's total_sales
-      await prisma.users.update({
-        where: { id: seller.id },
-        data: {
-          total_sales: { increment: 1 },
-          updated_at: now,
-        },
-      });
+      if (transferResult.status === 'blocked') {
+        const blockedNotifId = crypto.randomUUID();
+        await prisma.notifications.create({
+          data: {
+            id: blockedNotifId,
+            user_id: seller.id,
+            type: 'payout_blocked',
+            title: 'Action needed to get paid',
+            message: `The buyer confirmed receipt of "${listingTitle}". Complete your Stripe setup to receive £${payoutAmount}.`,
+            image_url: listingImage,
+            related_id: orderId,
+          },
+        });
 
-      // Update buyer's total_purchases
-      await prisma.users.update({
-        where: { id: order.buyer_id },
-        data: {
-          total_purchases: { increment: 1 },
-          updated_at: now,
-        },
-      });
+        try {
+          await sendPushNotification(
+            seller.id,
+            'Action needed to get paid',
+            `The buyer confirmed receipt of "${listingTitle}". Complete your Stripe setup to receive £${payoutAmount}.`,
+            { notification_id: blockedNotifId, type: 'payout_blocked', order_id: orderId }
+          );
+        } catch (pushErr) {
+          console.error('[ORDER] Push notification failed:', pushErr);
+        }
 
-      // Notify seller
-      const payoutAmount = order.seller_payout ? parseFloat(order.seller_payout.toString()).toFixed(2) : '0.00';
-
-      const payoutNotifId = crypto.randomUUID();
-      await prisma.notifications.create({
-        data: {
-          id: payoutNotifId,
-          user_id: seller.id,
-          type: 'payout',
-          title: 'Payment Released! 💰',
-          message: `The buyer confirmed receipt of "${listingTitle}". £${payoutAmount} has been transferred to your account.`,
-          image_url: listingImage,
-          related_id: orderId,
-        },
-      });
-
-      // PUSH: Notify seller of payment
-      try {
-        await sendPushNotification(
-          seller.id,
-          'Payment Released!',
-          `£${payoutAmount} for "${listingTitle}" has been transferred to your account.`,
-          { notification_id: payoutNotifId, type: 'payout_released', order_id: orderId }
-        );
-      } catch (pushErr) {
-        console.error('[ORDER] Push notification failed:', pushErr);
+        console.log(`[ORDER] Receipt confirmed but payout blocked for order: ${orderId} reason=${transferResult.reason} seller=${seller.id}`);
+      } else {
+        console.error(`[ORDER] Receipt confirmed but payout failed for order: ${orderId} reason=${transferResult.reason} code=${'code' in transferResult ? transferResult.code : 'none'} seller=${seller.id}`);
       }
 
-      console.log('✅ Receipt confirmed, escrow released for order:', orderId);
-
-      res.json({ 
-        success: true, 
-        message: 'Thank you for confirming receipt. The seller has been paid.' 
+      res.json({
+        success: true,
+        payout_status: 'pending',
+        message: 'Thank you for confirming receipt.',
       });
     } catch (error: any) {
       console.error('❌ Confirm receipt error:', error);
@@ -1583,6 +1645,7 @@ if (isBuyerCancelling) {
             select: {
               id: true,
               stripe_connect_id: true,
+              stripe_connect_status: true,
               display_name: true,
             },
           },
@@ -1598,26 +1661,56 @@ if (isBuyerCancelling) {
       const listingTitle = order.listings?.title || (order as any).listing_title || 'Your item';
       const listingImage = order.listings?.images?.[0]?.image_url || (order as any).listing_image || null;
 
-      // ✅ Transfer funds to seller
-      if (seller.stripe_connect_id && sellerPayout) {
-        const transferAmount = Math.round(parseFloat(sellerPayout.toString()) * 100);
+      // Transfer funds to seller via guarded helper
+      const transferAmount = sellerPayout ? Math.round(parseFloat(sellerPayout.toString()) * 100) : 0;
 
-        try {
-          const transfer = await stripe.transfers.create({
-            amount: transferAmount,
-            currency: 'gbp',
-            destination: seller.stripe_connect_id,
-            metadata: {
-              order_id: order.id,
-              type: 'order_completed',
-            },
-          });
+      if (transferAmount === 0) {
+        const now = new Date();
 
-          console.log(`💸 Transfer ${transfer.id} created for £${(transferAmount / 100).toFixed(2)}`);
-        } catch (transferError: any) {
-          console.error('⚠️ Transfer failed:', transferError.message);
-          return res.status(500).json({ error: 'Failed to transfer funds to seller' });
-        }
+        const updatedOrder = await prisma.orders.update({
+          where: { id: orderId },
+          data: {
+            status: 'completed',
+            completed_at: now,
+            updated_at: now,
+          },
+        });
+
+        await prisma.users.update({
+          where: { id: seller.id },
+          data: { total_sales: { increment: 1 }, updated_at: now },
+        });
+        await prisma.users.update({
+          where: { id: order.buyer_id },
+          data: { total_purchases: { increment: 1 }, updated_at: now },
+        });
+
+        console.log('[ORDER] Order completed, zero payout — no transfer:', orderId);
+        return res.json({ success: true, order: updatedOrder });
+      }
+
+      const transferResult = await transferToSeller({
+        amountPence: transferAmount,
+        seller,
+        idempotencyKey: `complete_order_transfer_${orderId}`,
+        metadata: { order_id: orderId, type: 'order_completed' },
+        orderIds: [orderId],
+      });
+
+      if (transferResult.status === 'already_transferred') {
+        return res.status(400).json({ error: 'Transfer already completed for this order' });
+      }
+
+      if (transferResult.status === 'blocked' || transferResult.status === 'failed') {
+        const now = new Date();
+        await prisma.orders.update({
+          where: { id: orderId },
+          data: { escrow_release_at: now, updated_at: now },
+        });
+        return res.status(409).json({
+          error: `Cannot complete order: transfer ${transferResult.status}`,
+          reason: transferResult.reason,
+        });
       }
 
       const now = new Date();

@@ -75,6 +75,12 @@ export interface ReturnSnapshot {
   tracking_number: string | null;
 }
 
+// ─── SELLER PAYABILITY ──────────────────────────────────────────────────
+
+export function sellerCanReceivePayout(seller: { stripe_connect_id: string | null; stripe_connect_status?: string | null }): boolean {
+  return !!seller.stripe_connect_id && seller.stripe_connect_status === 'active';
+}
+
 // ─── AUTO-CANCEL ────────────────────────────────────────────────────────
 
 export function shouldAutoCancelUnshipped(order: OrderSnapshot, now: Date): boolean {
