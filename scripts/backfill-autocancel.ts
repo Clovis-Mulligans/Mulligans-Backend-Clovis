@@ -123,11 +123,15 @@ async function main() {
     for (const row of futureRows) {
       const order = stranded.find(o => o.id === row.id)!;
       const deadline = calculateShippingDeadline(order.created_at);
-      await prisma.orders.update({
+      const result = await prisma.orders.updateMany({
         where: { id: order.id, auto_cancel_at: null },
         data: { auto_cancel_at: deadline, updated_at: now },
       });
-      console.log(`  ✓ ${order.id} → auto_cancel_at = ${deadline.toISOString()}`);
+      if (result.count === 0) {
+        console.log(`  ⚠ ${order.id} — skipped (auto_cancel_at already set since read)`);
+      } else {
+        console.log(`  ✓ ${order.id} → auto_cancel_at = ${deadline.toISOString()}`);
+      }
     }
   }
 
@@ -138,11 +142,15 @@ async function main() {
       for (const row of overdueRows) {
         const order = stranded.find(o => o.id === row.id)!;
         const deadline = calculateShippingDeadline(order.created_at);
-        await prisma.orders.update({
+        const result = await prisma.orders.updateMany({
           where: { id: order.id, auto_cancel_at: null },
           data: { auto_cancel_at: deadline, updated_at: now },
         });
-        console.log(`  ⚠️ ${order.id} → auto_cancel_at = ${deadline.toISOString()} (OVERDUE — will auto-cancel)`);
+        if (result.count === 0) {
+          console.log(`  ⚠ ${order.id} — skipped (auto_cancel_at already set since read)`);
+        } else {
+          console.log(`  ⚠️ ${order.id} → auto_cancel_at = ${deadline.toISOString()} (OVERDUE — will auto-cancel)`);
+        }
       }
     } else {
       console.log(`\n⚠️  ${overdueRows.length} OVERDUE row(s) skipped. Use --apply-overdue to write them.`);

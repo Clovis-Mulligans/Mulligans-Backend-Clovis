@@ -6,6 +6,12 @@
 
 ---
 
+## Fix: backfill script `update` → `updateMany` (2026-07-25)
+
+`scripts/backfill-autocancel.ts` used `prisma.orders.update()` with a compound `where: { id, auto_cancel_at: null }`. Prisma's `update` only accepts a unique selector (`id` alone) — the compound filter throws at runtime. Changed both write loops (future-deadline and overdue) to `prisma.orders.updateMany()`, which accepts arbitrary filters and returns `{ count }`. The count is used to report whether the row was written or skipped (idempotency guard). `tsc --noEmit` confirms no compile errors for the script.
+
+---
+
 ## Fix: conditional `auto_cancel_at` clearing in Shippo webhook
 
 **File:** `src/controllers/shippingController.ts` (~line 662-712)
