@@ -220,3 +220,75 @@ Each gets `qrCodeRequested: true` added and QR extraction logic (mirroring outbo
 - **A2:** No auth change. `total_sales` exposed to same recipients who already see `rating`, `display_name`, etc.
 - **B1:** No auth change. Webhook is unauthenticated (Shippo fires it) — same as existing handler. No amount/escrow change.
 - **D1:** No auth change. QR URL is a Shippo-hosted image. Exposed via same auth-gated `getReturnRequest` endpoint.
+
+---
+
+# Questions — `auto_cancel_at` PRE_TRANSIT audit (2026-07-25)
+
+## 1. FAILURE case: reset vs clear vs keep?
+
+The audit recommends resetting `auto_cancel_at` to a fresh 5-weekday window on `FAILURE`. But there are trade-offs:
+
+- **Reset (recommended):** Gives the seller time to resolve (re-ship, fix address) while keeping buyer protection. Aligns with spec line 258 (recoverable → new `auto_cancel_at`). Downside: seller may not act without a nudge (and there's no sale-ship reminder — see Q4).
+- **Clear:** Removes protection entirely, requiring admin intervention. Bad for the buyer.
+- **Keep original:** If the original deadline has already passed (parcel was in transit for days before FAILURE), the order would immediately auto-cancel on next cron run. This might be desirable ("the seller already had their chance") or premature ("the carrier failed, not the seller").
+
+**Decision needed:** Does reset-to-5-weekdays feel right, or should FAILURE trigger an admin alert instead?
+
+## 2. `calculateShippingDeadline` import
+
+`shippingController.ts` does not currently import `calculateShippingDeadline`. If the FAILURE-case reset is accepted, this import needs to be added. Confirm this is acceptable, or decide to handle FAILURE differently (e.g., `undefined` to preserve the existing deadline, which may already be past).
+
+## 3. Webhook security: query-string token vs HMAC
+
+The Shippo webhook authentication (`shippingController.ts:641-644`) uses a shared secret passed as a URL query parameter:
+
+```
+POST /api/shipping/webhook?token=<SHIPPO_WEBHOOK_SECRET>
+```
+
+Concerns:
+- **URL logging:** Query parameters are commonly logged in access logs, load balancer logs, and CDN logs. The secret may be exposed in Nginx access logs on the EC2 instance.
+- **No body verification:** An attacker who learns the token can forge arbitrary tracking events — including a `DELIVERED` event that triggers escrow release and pays out the seller. There is no HMAC signature over the request body to prevent tampering.
+- **Shippo's recommended approach:** Shippo supports webhook signature validation via a shared secret and HMAC. This should be investigated.
+
+**Not blocking for this fix**, but worth addressing separately. This is a money-flow endpoint — forging a `DELIVERED` event would release escrow funds.
+
+## 4. No sale-ship reminder — is this a known gap?
+
+The audit confirmed there is no pre-deadline ship reminder for sale orders. Sellers get the 5-weekday deadline but no warning before auto-cancel fires. Only return labels have a ship reminder (`sendReturnShipReminders`, `escrowService.ts:1156`).
+
+This means when the fix ships, sellers who are slow to ship will be auto-cancelled without a heads-up. Is this the intended behaviour, or should a `sendShipReminders()` job be added (separate task)?
+
+## 5. Back-fill: how should overdue orders be handled?
+
+The back-fill proposal flags orders where `calculateShippingDeadline(created_at)` is already in the past. For those, Harry must decide per-order. But:
+
+- How old is the oldest stranded order? If it's been weeks/months, the seller has clearly abandoned it.
+- Is `order_d72c800f-...` (£36) still expected to ship? If not, a manual cancel-and-refund may be appropriate regardless.
+- Should Harry contact the seller(s) before back-filling, or just apply deadlines and let the cron handle it?
+
+**These are business decisions, not code decisions.** The fix and back-fill should be separate steps.
+
+## 6. `PRE_TRANSIT` for multi-item shipments
+
+The `updateMany` uses `WHERE tracking_number = ?`, so all orders sharing that tracking number get the same treatment. In a multi-item cart shipment, all orders would have their `auto_cancel_at` preserved (or cleared) together. This is correct — they're on the same physical parcel. Just confirming this is the expected behaviour.
+
+## 7. Prisma `undefined` semantics confirmation
+
+The fix relies on Prisma 6.x treating `undefined` in `updateMany.data` as "do not include in SET clause." This is documented and stable, but Harry should confirm this matches what he's seen in practice. The alternative (building a conditional data object) is more verbose but avoids relying on implicit behaviour:
+
+```typescript
+const data: any = {
+  status: newStatus,
+  delivered_at: deliveredAt,
+  escrow_release_at: escrowReleaseAt,
+  shipped_at: shippedAt,
+  updated_at: new Date(),
+};
+if (autoCancelUpdate !== undefined) {
+  data.auto_cancel_at = autoCancelUpdate;
+}
+```
+
+Both approaches are correct. Harry's call on which is cleaner.
