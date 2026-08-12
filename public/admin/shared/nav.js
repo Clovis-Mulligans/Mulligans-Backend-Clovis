@@ -46,10 +46,6 @@ function generateSidebar() {
             <span class="nav-item-icon">📈</span>
             Analytics
           </a>
-          <a href="sales.html" class="nav-item ${currentPage === 'sales' ? 'active' : ''}">
-            <span class="nav-item-icon">💷</span>
-            Sales
-          </a>
         </div>
         
         <div class="nav-section">

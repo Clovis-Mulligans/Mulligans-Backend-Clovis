@@ -1,140 +1,103 @@
-# CHANGES — task/admin-sales-page
+# CHANGES — task/admin-stats-status-filter-fix-main
 
-**Branched from:** `task/admin-stats-status-filter-fix-main` (which is `main` @ `0a84e23` + Tier 1 fix `6176df8`)
+**Branched from:** `main` @ `0a84e23245911f8cd43a89eee6a50f553c8633e9`
 
 ## Summary
 
-New **Sales** page in the admin dashboard — a per-sale P&L view showing what Mulligans actually makes on each order. Read-only, additive only. No existing pages modified, no safety pages touched, no state-changing code.
+Fixed admin dashboard money-metric queries that filtered on phantom statuses (`shipped`, `paid` — 0 rows in prod) while omitting real in-flight statuses (`to_ship`, `in_transit`, `disputed`). This made 9 real paid orders invisible to GMV, revenue, fees, and pending escrow.
 
-## What was built
+This is the same logical fix as `task/admin-stats-status-filter-fix` (pro-seller-foundation branch), re-derived directly against `main` with zero pro-seller dependencies. The pro-seller branch was not merged or referenced.
 
-### 1. New endpoint: `GET /admin/sales`
+## Per-metric status mapping (before → after)
 
-**File:** `src/controllers/adminStatsController.ts:695` — `AdminStatsController.getSales`
-**Route:** `src/routes/adminRoutes.ts:1807` — `router.get('/sales', adminAuth, AdminStatsController.getSales)`
+### GMV (Gross Merchandise Value) — all genuine sales
+- **Before:** `status IN ('completed','delivered','shipped','paid')` — `adminStatsController.ts:75,83,92`
+- **After:** `status IN ('completed','delivered','in_transit','to_ship','disputed')` — `adminStatsController.ts:13` (exported `GMV_STATUSES`)
+- **Rationale:** `shipped` and `paid` match 0 rows. `to_ship` (6 orders), `in_transit` (3), and `disputed` (1) are genuine sales that should count toward total goods sold. Disputed orders remain in GMV because the goods were sold; if the operator later wants disputed excluded, it's a one-line change to `GMV_STATUSES`.
 
-Returns paginated orders (50/page, `created_at` desc) with per-order P&L:
+### Pending escrow — money held, not yet released to sellers
+- **Before:** `status IN ('paid','shipped')` — `adminStatsController.ts:124`
+- **After:** `status IN ('to_ship','in_transit','delivered')` — `adminStatsController.ts:15` (exported `PENDING_ESCROW_STATUSES`)
+- **Rationale:** Both phantom statuses matched 0 rows, so pending escrow always showed £0. The real pending states are orders that are paid but not yet `completed` (i.e. escrow not released). `delivered` is included because escrow is held for 3 days after delivery before auto-release.
+- **Escrow field choice:** The schema has `escrow_release_at` (DateTime?) on orders. For `to_ship` and `in_transit`, this field is NULL (not yet scheduled). For `delivered`, it's set to a future date. Status-based filtering is clearer for the dashboard's purposes and doesn't require a comparison against `now()`. See questions file for operator verification.
 
-| Field | Formula |
-|-------|---------|
-| `mulligans_gross` | `buyer_total − seller_payout − shipping_cost − label_cost` |
-| `formula_fee` | `listing_price × BUYER_PROTECTION_RATE + SERVICE_FEE_PER_ITEM` |
-| `est_stripe_fee` | `buyer_total × 0.015 + 0.20` (UK domestic card estimate) |
-| `est_net` | `mulligans_gross − est_stripe_fee` |
+### Realised revenue — money actually settled to the platform
+- **Before:** Not separately tracked (lumped into GMV)
+- **After:** `status = 'completed'` only — `adminStatsController.ts:14` (exported `REALISED_STATUSES`)
+- **New fields:** `realisedRevenue` in `getStats` response; `realisedGMV` in `getDetailedStats` response
 
-Constants used:
-- `BUYER_PROTECTION_RATE` (0.075) and `SERVICE_FEE_PER_ITEM` (0.99) imported from `src/lib/feeCalculations.ts`
-- `EST_STRIPE_RATE` (0.015) and `EST_STRIPE_FIXED` (0.20) defined at `adminStatsController.ts:18-19` — labelled as estimates
+### Mulligans fee revenue — gross vs realised
+- **Before:** Single `estimatedFees` field using literal `0.075` and `0.99` with the buggy GMV filter — `adminStatsController.ts:400`
+- **After:** Three fields in `getDetailedStats` response:
+  - `estimatedFees` — **kept for backward compat** (now equals `grossFees`; `analytics.html` reads this)
+  - `grossFees` — fees across the GMV set: `totalGMV * 7.5% + orderCount * £0.99`
+  - `realisedFees` — fees on completed orders only: `realisedGMV * 7.5% + completedCount * £0.99`
+- Now uses `BUYER_PROTECTION_RATE` and `SERVICE_FEE_PER_ITEM` from `src/lib/feeCalculations.ts` (these already exist on `main`) instead of literal `0.075`/`0.99`.
 
-**Query params:**
-- `page` (default 1) — pagination
-- `status` (default `gmv`) — filter: `gmv` uses `GMV_STATUSES` from Tier 1; `cancelled`, `refunded`, `returned`, `all`
+### Today's revenue — `adminStatsController.ts:110`
+- **Before:** `status IN ('completed','delivered','shipped','paid')`
+- **After:** Uses GMV definition (`GMV_STATUSES`)
 
-**Response includes:**
-- `sales[]` — per-order rows with all money fields, buyer/seller info, computed margins, time_to_sell, source, status
-- `pagination` — page, pageSize, totalCount, totalPages
-- `totals` — count, mulligans_gross, est_stripe_fee, est_net (computed over FULL filtered set, not just current page)
-- `statusFilter` — echoes the active filter
+### Chart data (revenue and GMV time-series) — raw SQL
+- **Before:** `status IN ('completed','delivered','shipped','paid')` — `adminStatsController.ts:199,218`
+- **After:** `status IN ('completed','delivered','in_transit','to_ship','disputed')`
 
-**Per-order details:**
-- Buyer/seller display names (from `display_name` or `email` fallback) + seller `is_pro` flag
-- `label_pending: true` when `label_cost` is null (row flagged, not mistaken for final)
-- `time_to_sell` — human-readable `paid_at − created_at` (null-safe)
-- `source` — platform (may be null → "unknown")
-- Offer details: `original_list_price`, `discount_amount`, `offer_id`
-- `shipping_address` (JSON)
+### Average order value — `adminStatsController.ts:133`
+- **Before:** `status IN ('completed','delivered','shipped','paid')`
+- **After:** Uses `GMV_STATUSES`
 
-### 2. New page: `public/admin/sales.html`
+### Category breakdown (in getChartData and getDetailedStats)
+- **Before:** `status IN ('completed','delivered','shipped','paid')` — `adminStatsController.ts:287,548`
+- **After:** Uses `GMV_STATUSES`
 
-Matches existing admin page structure (login screen → app container → sidebar + main-wrapper). Uses `shared/styles.css`, `shared/auth.js`, `shared/helpers.js`, `shared/nav.js`.
+### `validOrderStatuses` in getDetailedStats — `adminStatsController.ts:369`
+- **Before:** `['completed', 'delivered', 'shipped', 'paid']`
+- **After:** `[...GMV_STATUSES]`
 
-**Features:**
-- **Totals bar** — 4 cards: Order Count, Mulligans Gross, Est. Stripe Fees, Est. Net Profit
-- **Status filter** — toggle buttons: Sales (default/GMV), Cancelled, Refunded, Returned, All
-- **Per-sale table** — columns: Order, Listing, Buyer, Seller, Status, Buyer Total, Seller Payout, Shipping, Label, Gross, Formula Fee, Est. Stripe, Est. Net, Source, Sold
-- Both `mulligans_gross` and `formula_fee` visible per row so discrepancies are immediately visible
-- Stripe fees always labelled "est." (italic label)
-- Label-pending rows show "pending" in italic
-- Negative margins highlighted in red, positive in green
-- Pro sellers show a green "PRO" badge
-- Offer-sales show discount info below the listing title
-- **CSV export** — matching analytics.html pattern: totals + per-order breakdown
-- **Pagination** — prev/next with page info
-- Money columns right-aligned with tabular-nums
+### Time-series raw SQL in getDetailedStats — `adminStatsController.ts:458`
+- **Before:** `status IN ('completed','delivered','shipped','paid')`
+- **After:** `status IN ('completed','delivered','in_transit','to_ship','disputed')`
 
-**Page-specific styles only.** No modifications to `shared/styles.css`.
+## Frontend HTML updates
 
-### 3. Nav integration
+### `public/admin/analytics.html` — display-only changes
+1. **Fee card relabelled:** "Mulligans Fee Revenue" → "Gross Fee Revenue" with sub "7.5% + £0.99 across all sales"
+2. **New card added:** "Realised Fee Revenue" showing `revenue.realisedFees` with sub "Fees on completed orders only"
+3. **JS `renderMetrics`:** reads `revenue.grossFees || revenue.estimatedFees` (fallback ensures compat if old API served), plus `revenue.realisedFees`
+4. **CSV export:** adds "Realised Fee Revenue" row; renames "Estimated Fee Revenue" → "Gross Fee Revenue"
 
-**File:** `public/admin/shared/nav.js` — added "Sales" (💷) in Overview section, between Analytics and Operations.
-
-Uses the same `getCurrentPage()` active-state pattern. No nav badges (read-only page, no actionable count).
-
-### 4. Stripe fee constants
-
-**File:** `src/controllers/adminStatsController.ts:18-19`
-- `EST_STRIPE_RATE = 0.015` — UK domestic card rate
-- `EST_STRIPE_FIXED = 0.20` — per-transaction fixed fee
-
-Both exported for test access. Comment documents they are estimates pending real Stripe data capture.
-
-### 5. Helper function
-
-**File:** `src/controllers/adminStatsController.ts:21` — `round2(n)` for consistent 2-decimal rounding across all money fields.
-
-## Margin math implemented (exactly as specified)
-
-1. `mulligans_gross = buyer_total − seller_payout − shipping_cost − label_cost` (primary, ground truth)
-2. `formula_fee = (listing_price × 0.075) + 0.99` (cross-check, shown alongside)
-3. `est_stripe_fee = (buyer_total × 0.015) + 0.20` (estimate, labelled)
-4. `est_net = mulligans_gross − est_stripe_fee` (estimate, labelled)
-
-No other fees invented. `est_net` never presented as exact.
-
-## Tests
-
-**File:** `src/__tests__/unit/adminSales.test.ts` — 18 tests, all passing.
-
-| Test group | Count | What it covers |
-|-----------|-------|---------------|
-| Per-order margin math | 5 | mulligans_gross, null label_cost treated as 0, formula_fee uses imported constants, est_stripe_fee calc, est_net calc |
-| Offer-sale handling | 3 | discount_amount/offer_id surfaced, seller_payout = listing_price, formula_fee on listing_price not original |
-| Label pending flag | 2 | null label_cost → flagged, non-null → not flagged |
-| Totals aggregation | 5 | gmv filter includes/excludes correct statuses, cancelled filter, all filter, gross sums correctly, est_net = gross - stripe |
-| Stripe fee constants | 2 | EST_STRIPE_RATE = 0.015, EST_STRIPE_FIXED = 0.20 |
-| Endpoint auth | 1 | Route exists in adminRoutes.ts with adminAuth middleware |
-
-Tests import real controller constants (`GMV_STATUSES`, `EST_STRIPE_RATE`, `EST_STRIPE_FIXED`) and real fee constants (`BUYER_PROTECTION_RATE`, `SERVICE_FEE_PER_ITEM`). Math is not mocked.
-
-Run: `npx jest --selectProjects unit -- adminSales`
-
-## NOT touched (confirmed)
-
-- `public/admin/index.html` — not modified
-- `public/admin/analytics.html` — not modified
+### NOT touched (confirmed)
+- `public/admin/index.html` — reads `totalGMV`, `todayRevenue`, `pendingEscrow`, `avgOrderValue` etc. from `getStats`. These field names are unchanged; only the underlying queries changed. No HTML edit needed.
 - `public/admin/disputes.html` — safety page, not touched
 - `public/admin/returns.html` — safety page, not touched
 - `public/admin/claims.html` — safety page, not touched
 - `public/admin/reports.html` — safety page, not touched
-- `public/admin/users.html` — not touched
-- `public/admin/pro-store-applications.html` — not touched
-- `public/admin/shared/styles.css` — not touched (page-specific styles only)
-- `src/lib/feeCalculations.ts` — only imported, not modified
-- No migrations, no DB writes, no state changes
+- `public/admin/users.html` — reads `verifiedSellers` from a different endpoint; untouched
+- `public/admin/pro-store-applications.html` — unrelated; untouched
 
-## Follow-ups (not done here — separate tasks)
+## Deliberately NOT changed
 
-1. **`source` / platform capture** — currently NULL on all orders. Column displayed but shows "unknown". Needs separate fix in order creation flow.
-2. **Real Stripe fee capture** — currently estimated at 1.5% + 20p. Need to capture actual Stripe processing fees from webhooks/payment intents and store in a column. This would replace the estimate.
+- **Orders count** (`totalOrders`, `ordersThisWeek`, `ordersLastWeek`, `todayOrders`): No status filter — counts all orders. This is correct.
+- **Verified sellers** (`verifiedSellers`): Queries `users.is_verified_seller`. Likely a real data fact — not a query bug. **Operator should check:** is the count plausible?
+- **Recent Activity feed**: Out of scope — design gap (only shows disputes/reports/claims, not orders), not a filter bug. Separate follow-up.
+- **`soldOrders` raw SQL** (avg days to sell): Uses `status IN ('completed','delivered')` — correct for measuring sale-to-delivery time.
+- **Order status breakdown** (`groupBy` at the end of `getDetailedStats`): Already correct — no status filter on the groupBy, just a date filter.
+
+## Correctness verification
+
+With the corrected GMV filter, the 9+ previously-omitted orders are now included:
+- `to_ship`: 6 orders (was excluded — phantom `paid` matched 0)
+- `in_transit`: 3 orders (was excluded — phantom `shipped` matched 0)
+- `disputed`: 1 order (was excluded)
+
+Pending escrow now correctly captures held funds: `to_ship` (6) + `in_transit` (3) + `delivered` (2) = 11 orders (was 0).
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/controllers/adminStatsController.ts` | Added `getSales` method, `EST_STRIPE_RATE`/`EST_STRIPE_FIXED` constants, `round2` helper |
-| `src/routes/adminRoutes.ts` | Added `router.get('/sales', adminAuth, AdminStatsController.getSales)` |
-| `public/admin/sales.html` | New page — per-sale P&L table with totals, filters, CSV export |
-| `public/admin/shared/nav.js` | Added "Sales" nav item in Overview section |
-| `src/__tests__/unit/adminSales.test.ts` | New test file — 18 tests |
+| `src/controllers/adminStatsController.ts` | Fixed all status filters, added exported status constants, added import for fee constants, added realised revenue + gross/realised fees, kept `estimatedFees` for backward compat |
+| `src/__tests__/unit/adminStatsStatusFilter.test.ts` | New test file — 22 tests |
+| `public/admin/analytics.html` | Added realised fees card, relabelled gross fees, updated JS rendering + CSV export |
 | `CHANGES.md` | This file |
-| `output/questions-admin-sales-page.md` | Security scan + follow-ups |
+| `output/questions-admin-stats-status-filter-fix-main.md` | Security scan + operator questions |
