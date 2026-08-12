@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mulligans Admin - Sales</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shared/styles.css">
+  <style>
+    .totals-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 1200px) {
+      .totals-bar {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 600px) {
+      .totals-bar {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .total-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 20px;
+      transition: all 0.2s;
+    }
+
+    .total-card:hover {
+      border-color: var(--brand-green);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    }
+
+    .total-card-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .total-card-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1;
+    }
+
+    .total-card-value.green {
+      color: var(--brand-green);
+    }
+
+    .total-card-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .sales-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .status-filter {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 4px;
+    }
+
+    .filter-btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .filter-btn:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .filter-btn.active {
+      background: var(--brand-green);
+      color: white;
+    }
+
+    .sales-table-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .sales-table-scroll {
+      overflow-x: auto;
+    }
+
+    .sales-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 1100px;
+    }
+
+    .sales-table th {
+      background: var(--bg-tertiary);
+      padding: 12px 14px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--text-secondary);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .sales-table th.money {
+      text-align: right;
+    }
+
+    .sales-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-primary);
+      vertical-align: middle;
+    }
+
+    .sales-table td.money {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .sales-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .sales-table tr:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .est-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .listing-cell {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 220px;
+    }
+
+    .listing-thumb {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      object-fit: cover;
+      flex-shrink: 0;
+      background: var(--bg-tertiary);
+    }
+
+    .listing-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .user-cell {
+      white-space: nowrap;
+    }
+
+    .pro-badge {
+      display: inline-block;
+      background: var(--brand-green);
+      color: white;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 5px;
+      border-radius: 4px;
+      margin-left: 4px;
+      vertical-align: middle;
+      text-transform: uppercase;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+
+    .status-badge.completed { background: rgba(29,198,144,0.12); color: #1DC690; }
+    .status-badge.delivered { background: rgba(39,138,176,0.12); color: #278AB0; }
+    .status-badge.in_transit { background: rgba(245,166,35,0.12); color: #d4940a; }
+    .status-badge.to_ship { background: rgba(142,68,245,0.12); color: #8e44f5; }
+    .status-badge.disputed { background: rgba(245,68,68,0.12); color: #e53e3e; }
+    .status-badge.cancelled { background: rgba(160,160,160,0.12); color: #888; }
+    .status-badge.refunded { background: rgba(245,166,35,0.12); color: #d4940a; }
+    .status-badge.returned { background: rgba(245,68,68,0.12); color: #e53e3e; }
+
+    .label-pending {
+      color: var(--text-muted);
+      font-style: italic;
+      font-size: 11px;
+    }
+
+    .negative {
+      color: #e53e3e;
+    }
+
+    .positive {
+      color: #1DC690;
+    }
+
+    .pagination-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-top: 1px solid var(--border-color);
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .pagination-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .page-btn {
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .page-btn:hover:not(:disabled) {
+      border-color: var(--brand-green);
+      color: var(--text-primary);
+    }
+
+    .page-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .discount-info {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .export-btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .export-btn:hover {
+      border-color: var(--brand-green);
+      color: var(--text-primary);
+    }
+  </style>
+</head>
+<body>
+  <!-- ==================== LOGIN SCREEN ==================== -->
+  <div id="loginScreen" class="login-container">
+    <div class="login-card">
+      <div class="login-logo">
+        <h1>🏌️ MULLIGANS</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <div id="loginError" class="error-message"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="password">Admin Password</label>
+          <input type="password" id="password" placeholder="Enter admin password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" id="loginBtn" style="width: 100%;">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MAIN APP ==================== -->
+  <div id="appContainer" class="app-container">
+    <!-- Sidebar -->
+    <div id="sidebarContainer"></div>
+
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <header class="main-header">
+        <h1 class="page-title">💷 Sales</h1>
+        <div class="header-actions">
+          <button class="export-btn" onclick="exportCSV()">📥 Download CSV</button>
+          <button class="btn btn-ghost" onclick="loadSales()">🔄 Refresh</button>
+          <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <!-- Totals Bar -->
+        <div class="totals-bar">
+          <div class="total-card">
+            <div class="total-card-label">Order Count</div>
+            <div class="total-card-value" id="totalCount">-</div>
+            <div class="total-card-sub">Filtered total</div>
+          </div>
+          <div class="total-card">
+            <div class="total-card-label">Mulligans Gross</div>
+            <div class="total-card-value green" id="totalGross">-</div>
+            <div class="total-card-sub">buyer_total - seller_payout - shipping - labels</div>
+          </div>
+          <div class="total-card">
+            <div class="total-card-label">Est. Stripe Fees</div>
+            <div class="total-card-value" id="totalStripe">-</div>
+            <div class="total-card-sub"><span class="est-label">est.</span> 1.5% + 20p per order</div>
+          </div>
+          <div class="total-card">
+            <div class="total-card-label">Est. Net Profit</div>
+            <div class="total-card-value green" id="totalNet">-</div>
+            <div class="total-card-sub"><span class="est-label">est.</span> gross - stripe fees</div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="sales-controls">
+          <div class="status-filter">
+            <button class="filter-btn active" data-filter="gmv" onclick="setFilter('gmv', this)">Sales</button>
+            <button class="filter-btn" data-filter="cancelled" onclick="setFilter('cancelled', this)">Cancelled</button>
+            <button class="filter-btn" data-filter="refunded" onclick="setFilter('refunded', this)">Refunded</button>
+            <button class="filter-btn" data-filter="returned" onclick="setFilter('returned', this)">Returned</button>
+            <button class="filter-btn" data-filter="all" onclick="setFilter('all', this)">All</button>
+          </div>
+        </div>
+
+        <!-- Sales Table -->
+        <div class="sales-table-wrap">
+          <div class="sales-table-scroll">
+            <table class="sales-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Listing</th>
+                  <th>Buyer</th>
+                  <th>Seller</th>
+                  <th>Status</th>
+                  <th class="money">Buyer Total</th>
+                  <th class="money">Seller Payout</th>
+                  <th class="money">Shipping</th>
+                  <th class="money">Label</th>
+                  <th class="money">Gross</th>
+                  <th class="money">Formula Fee</th>
+                  <th class="money">Est. Stripe</th>
+                  <th class="money">Est. Net</th>
+                  <th>Source</th>
+                  <th>Sold</th>
+                </tr>
+              </thead>
+              <tbody id="salesTableBody">
+                <tr><td colspan="15" style="text-align:center; padding:40px; color:var(--text-muted);">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <span id="paginationInfo">-</span>
+            <div class="pagination-controls">
+              <button class="page-btn" id="prevBtn" onclick="prevPage()" disabled>← Prev</button>
+              <button class="page-btn" id="nextBtn" onclick="nextPage()" disabled>Next →</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="shared/auth.js"></script>
+  <script src="shared/helpers.js"></script>
+  <script src="shared/nav.js"></script>
+  <script>
+    let currentFilter = 'gmv';
+    let currentPage = 1;
+    let salesData = null;
+
+    function initPage() {
+      initNav();
+      loadSales();
+    }
+
+    function setFilter(filter, el) {
+      currentFilter = filter;
+      currentPage = 1;
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      el.classList.add('active');
+      loadSales();
+    }
+
+    function prevPage() {
+      if (currentPage > 1) {
+        currentPage--;
+        loadSales();
+      }
+    }
+
+    function nextPage() {
+      if (salesData && currentPage < salesData.pagination.totalPages) {
+        currentPage++;
+        loadSales();
+      }
+    }
+
+    async function loadSales() {
+      try {
+        const res = await apiRequest(`${API_BASE}/sales?page=${currentPage}&status=${currentFilter}`);
+        if (!res.ok) throw new Error('Failed to fetch sales');
+        salesData = await res.json();
+        renderTotals(salesData.totals);
+        renderTable(salesData.sales);
+        renderPagination(salesData.pagination);
+      } catch (err) {
+        console.error('Failed to load sales:', err);
+        document.getElementById('salesTableBody').innerHTML =
+          '<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text-muted);">Failed to load sales data</td></tr>';
+      }
+    }
+
+    function renderTotals(totals) {
+      document.getElementById('totalCount').textContent = formatNumber(totals.count);
+      document.getElementById('totalGross').textContent = formatCurrency(totals.mulligans_gross);
+      document.getElementById('totalStripe').textContent = formatCurrency(totals.est_stripe_fee);
+      document.getElementById('totalNet').textContent = formatCurrency(totals.est_net);
+    }
+
+    function renderTable(sales) {
+      const tbody = document.getElementById('salesTableBody');
+      if (!sales || sales.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text-muted);">No orders found</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = sales.map(s => {
+        const imgSrc = s.listing_image
+          ? `<img class="listing-thumb" src="${escapeHtml(s.listing_image)}" alt="" onerror="this.style.display='none'">`
+          : '';
+
+        const title = escapeHtml(s.listing_title || 'Untitled');
+        const buyer = s.buyer ? escapeHtml(s.buyer.name) : '-';
+        const seller = s.seller ? escapeHtml(s.seller.name) : '-';
+        const proBadge = s.seller && s.seller.is_pro ? '<span class="pro-badge">PRO</span>' : '';
+
+        const labelCell = s.label_pending
+          ? `<span class="label-pending">pending</span>`
+          : formatCurrency(s.label_cost);
+
+        const discountLine = s.offer_id
+          ? `<div class="discount-info">Offer -${formatCurrency(s.discount_amount)}</div>`
+          : '';
+
+        const grossClass = s.mulligans_gross < 0 ? 'negative' : 'positive';
+        const netClass = s.est_net < 0 ? 'negative' : 'positive';
+        const statusClass = (s.status || '').replace(/ /g, '_');
+
+        return `<tr>
+          <td>#${escapeHtml(String(s.id).slice(-6))}</td>
+          <td><div class="listing-cell">${imgSrc}<span class="listing-title" title="${title}">${title}</span></div>${discountLine}</td>
+          <td class="user-cell">${buyer}</td>
+          <td class="user-cell">${seller}${proBadge}</td>
+          <td><span class="status-badge ${statusClass}">${s.status}</span></td>
+          <td class="money">${formatCurrency(s.buyer_total)}</td>
+          <td class="money">${formatCurrency(s.seller_payout)}</td>
+          <td class="money">${formatCurrency(s.shipping_cost)}</td>
+          <td class="money">${labelCell}</td>
+          <td class="money ${grossClass}">${formatCurrency(s.mulligans_gross)}</td>
+          <td class="money">${formatCurrency(s.formula_fee)}</td>
+          <td class="money"><span class="est-label">est.</span> ${formatCurrency(s.est_stripe_fee)}</td>
+          <td class="money ${netClass}"><span class="est-label">est.</span> ${formatCurrency(s.est_net)}</td>
+          <td>${escapeHtml(s.source)}</td>
+          <td>${s.time_to_sell || '-'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderPagination(p) {
+      document.getElementById('paginationInfo').textContent =
+        `Page ${p.page} of ${p.totalPages} (${formatNumber(p.totalCount)} orders)`;
+      document.getElementById('prevBtn').disabled = p.page <= 1;
+      document.getElementById('nextBtn').disabled = p.page >= p.totalPages;
+    }
+
+    function exportCSV() {
+      if (!salesData || !salesData.sales.length) {
+        showToast('No data to export.');
+        return;
+      }
+
+      const totals = salesData.totals;
+      let csv = 'Mulligans Sales Export\n';
+      csv += `Filter: ${currentFilter}\n`;
+      csv += `Generated: ${new Date().toISOString()}\n\n`;
+
+      csv += 'TOTALS\n';
+      csv += 'Metric,Value\n';
+      csv += `Order Count,${totals.count}\n`;
+      csv += `Mulligans Gross,${totals.mulligans_gross}\n`;
+      csv += `Est Stripe Fees,${totals.est_stripe_fee}\n`;
+      csv += `Est Net Profit,${totals.est_net}\n\n`;
+
+      csv += 'PER-ORDER BREAKDOWN\n';
+      csv += 'Order ID,Listing,Buyer,Seller,Pro,Status,Buyer Total,Seller Payout,Shipping,Label Cost,Label Pending,Gross,Formula Fee,Est Stripe,Est Net,Source,Time to Sell,Created\n';
+
+      salesData.sales.forEach(s => {
+        const title = (s.listing_title || '').replace(/"/g, '""');
+        const buyer = s.buyer ? s.buyer.name.replace(/"/g, '""') : '';
+        const seller = s.seller ? s.seller.name.replace(/"/g, '""') : '';
+        csv += `${s.id},"${title}","${buyer}","${seller}",${s.seller?.is_pro || false},${s.status},${s.buyer_total},${s.seller_payout},${s.shipping_cost},${s.label_cost || 0},${s.label_pending},${s.mulligans_gross},${s.formula_fee},${s.est_stripe_fee},${s.est_net},${s.source},${s.time_to_sell || ''},${s.created_at}\n`;
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mulligans-sales-${currentFilter}-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showToast('CSV exported successfully.');
+    }
+  </script>
+</body>
+</html>

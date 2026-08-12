@@ -128,7 +128,7 @@ jest.mock('../../controllers/adminReportsController', () => ({
   AdminReportsController: { getReports: noop, getReport: noop, updateReport: noop, banUser: noop },
 }));
 jest.mock('../../controllers/adminStatsController', () => ({
-  AdminStatsController: { getStats: noop, getChartData: noop, getDetailedStats: noop },
+  AdminStatsController: { getStats: noop, getChartData: noop, getDetailedStats: noop, getSales: noop },
 }));
 jest.mock('../../lib/auditLogger', () => ({
   logAdminAction: jest.fn().mockResolvedValue(undefined),

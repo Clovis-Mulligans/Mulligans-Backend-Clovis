@@ -1,103 +1,100 @@
-# CHANGES — task/admin-stats-status-filter-fix-main
+# CHANGES — task/admin-sales-page-fix
 
-**Branched from:** `main` @ `0a84e23245911f8cd43a89eee6a50f553c8633e9`
+**Branched from:** `main` @ `c2bb3cd` (the revert of `task/admin-sales-page`)
 
-## Summary
+## Failure reproduced
 
-Fixed admin dashboard money-metric queries that filtered on phantom statuses (`shipped`, `paid` — 0 rows in prod) while omitting real in-flight statuses (`to_ship`, `in_transit`, `disputed`). This made 9 real paid orders invisible to GMV, revenue, fees, and pending escrow.
+Before any changes, applied the broken `34b1182` commit via cherry-pick and ran the full suite:
 
-This is the same logical fix as `task/admin-stats-status-filter-fix` (pro-seller-foundation branch), re-derived directly against `main` with zero pro-seller dependencies. The pro-seller branch was not merged or referenced.
+```
+NODE_OPTIONS="--max-old-space-size=1536" npx jest --selectProjects unit --runInBand
+```
 
-## Per-metric status mapping (before → after)
+Result: **2 suites failed**, both with the same crash:
 
-### GMV (Gross Merchandise Value) — all genuine sales
-- **Before:** `status IN ('completed','delivered','shipped','paid')` — `adminStatsController.ts:75,83,92`
-- **After:** `status IN ('completed','delivered','in_transit','to_ship','disputed')` — `adminStatsController.ts:13` (exported `GMV_STATUSES`)
-- **Rationale:** `shipped` and `paid` match 0 rows. `to_ship` (6 orders), `in_transit` (3), and `disputed` (1) are genuine sales that should count toward total goods sold. Disputed orders remain in GMV because the goods were sold; if the operator later wants disputed excluded, it's a one-line change to `GMV_STATUSES`.
+```
+Route.get() requires a callback function but got a [object Undefined]
+  at src/routes/adminRoutes.ts:1807
+  router.get('/sales', adminAuth, AdminStatsController.getSales);
+```
 
-### Pending escrow — money held, not yet released to sellers
-- **Before:** `status IN ('paid','shipped')` — `adminStatsController.ts:124`
-- **After:** `status IN ('to_ship','in_transit','delivered')` — `adminStatsController.ts:15` (exported `PENDING_ESCROW_STATUSES`)
-- **Rationale:** Both phantom statuses matched 0 rows, so pending escrow always showed £0. The real pending states are orders that are paid but not yet `completed` (i.e. escrow not released). `delivered` is included because escrow is held for 3 days after delivery before auto-release.
-- **Escrow field choice:** The schema has `escrow_release_at` (DateTime?) on orders. For `to_ship` and `in_transit`, this field is NULL (not yet scheduled). For `delivered`, it's set to a future date. Status-based filtering is clearer for the dashboard's purposes and doesn't require a comparison against `now()`. See questions file for operator verification.
+The failing suites were `platformStats.test.ts` and `paymentMoneySafety.test.ts`.
 
-### Realised revenue — money actually settled to the platform
-- **Before:** Not separately tracked (lumped into GMV)
-- **After:** `status = 'completed'` only — `adminStatsController.ts:14` (exported `REALISED_STATUSES`)
-- **New fields:** `realisedRevenue` in `getStats` response; `realisedGMV` in `getDetailedStats` response
+## Root cause
 
-### Mulligans fee revenue — gross vs realised
-- **Before:** Single `estimatedFees` field using literal `0.075` and `0.99` with the buggy GMV filter — `adminStatsController.ts:400`
-- **After:** Three fields in `getDetailedStats` response:
-  - `estimatedFees` — **kept for backward compat** (now equals `grossFees`; `analytics.html` reads this)
-  - `grossFees` — fees across the GMV set: `totalGMV * 7.5% + orderCount * £0.99`
-  - `realisedFees` — fees on completed orders only: `realisedGMV * 7.5% + completedCount * £0.99`
-- Now uses `BUYER_PROTECTION_RATE` and `SERVICE_FEE_PER_ITEM` from `src/lib/feeCalculations.ts` (these already exist on `main`) instead of literal `0.075`/`0.99`.
+**NOT a brace error, NOT a circular import, NOT `getSales` outside the class.**
 
-### Today's revenue — `adminStatsController.ts:110`
-- **Before:** `status IN ('completed','delivered','shipped','paid')`
-- **After:** Uses GMV definition (`GMV_STATUSES`)
+The method `getSales` was correctly placed as a `static async` method inside `AdminStatsController` (confirmed: `ts-node` loads the class and `typeof AdminStatsController.getSales === 'function'`). The braces balanced. There was no circular dependency (`feeCalculations.ts` import already exists on `main`).
 
-### Chart data (revenue and GMV time-series) — raw SQL
-- **Before:** `status IN ('completed','delivered','shipped','paid')` — `adminStatsController.ts:199,218`
-- **After:** `status IN ('completed','delivered','in_transit','to_ship','disputed')`
+**Actual cause:** Two existing test files mock `adminStatsController` with a manual factory object that explicitly lists controller methods — and the mock did not include `getSales`:
 
-### Average order value — `adminStatsController.ts:133`
-- **Before:** `status IN ('completed','delivered','shipped','paid')`
-- **After:** Uses `GMV_STATUSES`
+1. **`src/__tests__/unit/platformStats.test.ts:93-100`** — mocked `AdminStatsController` with `{ getStats, getChartData, getDetailedStats }` (no `getSales`)
+2. **`src/__tests__/unit/paymentMoneySafety.test.ts`** — same: `{ getStats: noop, getChartData: noop, getDetailedStats: noop }` (no `getSales`)
 
-### Category breakdown (in getChartData and getDetailedStats)
-- **Before:** `status IN ('completed','delivered','shipped','paid')` — `adminStatsController.ts:287,548`
-- **After:** Uses `GMV_STATUSES`
+Both files then import `adminRoutes.ts`, which evaluates `AdminStatsController.getSales` at module-load time to register the Express route. Since the mock didn't include `getSales`, it resolved to `undefined`, and `router.get('/sales', adminAuth, undefined)` threw `Route.get() requires a callback function`.
 
-### `validOrderStatuses` in getDetailedStats — `adminStatsController.ts:369`
-- **Before:** `['completed', 'delivered', 'shipped', 'paid']`
-- **After:** `[...GMV_STATUSES]`
+**Why the 18 targeted tests passed:** `adminSales.test.ts` imported `adminStatsController.ts` directly (not through the route module) and never loaded `adminRoutes.ts`. It tested the math correctly but never exercised the route wiring — so the load crash was invisible.
 
-### Time-series raw SQL in getDetailedStats — `adminStatsController.ts:458`
-- **Before:** `status IN ('completed','delivered','shipped','paid')`
-- **After:** `status IN ('completed','delivered','in_transit','to_ship','disputed')`
+## Fix
 
-## Frontend HTML updates
+1. **Added `getSales: jest.fn()` to the mock in `platformStats.test.ts:98`** — the mock factory now includes all four controller methods.
 
-### `public/admin/analytics.html` — display-only changes
-1. **Fee card relabelled:** "Mulligans Fee Revenue" → "Gross Fee Revenue" with sub "7.5% + £0.99 across all sales"
-2. **New card added:** "Realised Fee Revenue" showing `revenue.realisedFees` with sub "Fees on completed orders only"
-3. **JS `renderMetrics`:** reads `revenue.grossFees || revenue.estimatedFees` (fallback ensures compat if old API served), plus `revenue.realisedFees`
-4. **CSV export:** adds "Realised Fee Revenue" row; renames "Estimated Fee Revenue" → "Gross Fee Revenue"
+2. **Added `getSales: noop` to the mock in `paymentMoneySafety.test.ts`** — same fix, matching that file's `noop` convention.
 
-### NOT touched (confirmed)
-- `public/admin/index.html` — reads `totalGMV`, `todayRevenue`, `pendingEscrow`, `avgOrderValue` etc. from `getStats`. These field names are unchanged; only the underlying queries changed. No HTML edit needed.
-- `public/admin/disputes.html` — safety page, not touched
-- `public/admin/returns.html` — safety page, not touched
-- `public/admin/claims.html` — safety page, not touched
-- `public/admin/reports.html` — safety page, not touched
-- `public/admin/users.html` — reads `verifiedSellers` from a different endpoint; untouched
-- `public/admin/pro-store-applications.html` — unrelated; untouched
+3. **Re-added `getSales` as a `static async` method inside the class** (before the class closing `}`) at `adminStatsController.ts:691`. Identical margin math to the reverted `34b1182`, with the `display_name`/`email` fix already applied.
 
-## Deliberately NOT changed
+4. **Added module-load test in `adminSales.test.ts`** — uses `jest.isolateModules` to load `adminRoutes.ts` with full mocks, verifying the router constructs without throwing. Also verifies `getSales` is structurally inside the class body (between class open and class close braces).
 
-- **Orders count** (`totalOrders`, `ordersThisWeek`, `ordersLastWeek`, `todayOrders`): No status filter — counts all orders. This is correct.
-- **Verified sellers** (`verifiedSellers`): Queries `users.is_verified_seller`. Likely a real data fact — not a query bug. **Operator should check:** is the count plausible?
-- **Recent Activity feed**: Out of scope — design gap (only shows disputes/reports/claims, not orders), not a filter bug. Separate follow-up.
-- **`soldOrders` raw SQL** (avg days to sell): Uses `status IN ('completed','delivered')` — correct for measuring sale-to-delivery time.
-- **Order status breakdown** (`groupBy` at the end of `getDetailedStats`): Already correct — no status filter on the groupBy, just a date filter.
+## Module-load test: fails-before, passes-after
 
-## Correctness verification
+**Before fix (getSales missing from mocks):** The module-load test calls `require('../../routes/adminRoutes')` — this throws `Route.get() requires a callback function but got a [object Undefined]` because the mock doesn't have `getSales`. Test FAILS.
 
-With the corrected GMV filter, the 9+ previously-omitted orders are now included:
-- `to_ship`: 6 orders (was excluded — phantom `paid` matched 0)
-- `in_transit`: 3 orders (was excluded — phantom `shipped` matched 0)
-- `disputed`: 1 order (was excluded)
+**After fix (getSales added to mocks):** The same require succeeds. Test PASSES. Additionally, `AdminStatsController.getSales` is confirmed as `typeof 'function'`, and source-level analysis confirms it's inside the class body.
 
-Pending escrow now correctly captures held funds: `to_ship` (6) + `in_transit` (3) + `delivered` (2) = 11 orders (was 0).
+## Full suite result (after fix)
+
+```
+Test Suites: 16 passed, 16 total
+Tests:       2 skipped, 2 todo, 639 passed, 643 total
+Snapshots:   0 total
+Time:        5.979 s
+```
+
+All 16 suites green. Zero failures.
+
+## Margin math (unchanged from 34b1182)
+
+| Field | Formula |
+|-------|---------|
+| `mulligans_gross` | `buyer_total - seller_payout - shipping_cost - label_cost` |
+| `formula_fee` | `listing_price * BUYER_PROTECTION_RATE + SERVICE_FEE_PER_ITEM` |
+| `est_stripe_fee` | `buyer_total * 0.015 + 0.20` (UK domestic card estimate) |
+| `est_net` | `mulligans_gross - est_stripe_fee` |
+
+Constants imported from `src/lib/feeCalculations.ts` (not hardcoded). Stripe fee constants at `adminStatsController.ts:18-19`.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/controllers/adminStatsController.ts` | Fixed all status filters, added exported status constants, added import for fee constants, added realised revenue + gross/realised fees, kept `estimatedFees` for backward compat |
-| `src/__tests__/unit/adminStatsStatusFilter.test.ts` | New test file — 22 tests |
-| `public/admin/analytics.html` | Added realised fees card, relabelled gross fees, updated JS rendering + CSV export |
+| `src/controllers/adminStatsController.ts` | Added `getSales` static method (line 691), `EST_STRIPE_RATE`/`EST_STRIPE_FIXED` constants (lines 18-19), `round2` helper (line 21) |
+| `src/routes/adminRoutes.ts` | Added `router.get('/sales', adminAuth, AdminStatsController.getSales)` (line 1807) |
+| `src/__tests__/unit/platformStats.test.ts` | Added `getSales: jest.fn()` to AdminStatsController mock (line 98) |
+| `src/__tests__/unit/paymentMoneySafety.test.ts` | Added `getSales: noop` to AdminStatsController mock |
+| `src/__tests__/unit/adminSales.test.ts` | New — 21 tests (18 margin math + 3 module-load/wiring) |
+| `public/admin/sales.html` | New — per-sale P&L page |
+| `public/admin/shared/nav.js` | Added "Sales" nav item in Overview section |
 | `CHANGES.md` | This file |
-| `output/questions-admin-stats-status-filter-fix-main.md` | Security scan + operator questions |
+| `output/questions-admin-sales-page-fix.md` | Security scan + follow-ups |
+
+## NOT touched (confirmed)
+
+- `public/admin/index.html` — not modified
+- `public/admin/analytics.html` — not modified
+- `public/admin/disputes.html` — safety page, not touched
+- `public/admin/returns.html` — safety page, not touched
+- `public/admin/claims.html` — safety page, not touched
+- `public/admin/reports.html` — safety page, not touched
+- `public/admin/shared/styles.css` — not touched
+- `src/lib/feeCalculations.ts` — only imported, not modified
+- No migrations, no DB writes, no state changes

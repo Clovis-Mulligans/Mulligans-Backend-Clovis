@@ -95,6 +95,7 @@ jest.mock('../../controllers/adminStatsController', () => ({
     getStats: jest.fn(),
     getChartData: jest.fn(),
     getDetailedStats: jest.fn(),
+    getSales: jest.fn(),
   },
 }));
 

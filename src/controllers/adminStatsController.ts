@@ -14,6 +14,14 @@ export const GMV_STATUSES = ['completed', 'delivered', 'in_transit', 'to_ship', 
 export const REALISED_STATUSES = ['completed'] as const;
 export const PENDING_ESCROW_STATUSES = ['to_ship', 'in_transit', 'delivered'] as const;
 
+// UK domestic card estimate (1.5% + 20p) — not actual Stripe data
+export const EST_STRIPE_RATE = 0.015;
+export const EST_STRIPE_FIXED = 0.20;
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export class AdminStatsController {
   /**
    * Get platform overview stats
@@ -677,6 +685,140 @@ export class AdminStatsController {
     } catch (error) {
       console.error('Get detailed stats error:', error);
       res.status(500).json({ error: 'Failed to fetch detailed stats' });
+    }
+  }
+
+  static async getSales(req: Request, res: Response): Promise<void> {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const pageSize = 50;
+      const skip = (page - 1) * pageSize;
+      const statusFilter = (req.query.status as string) || 'gmv';
+
+      let statusWhere: { in: string[] } | undefined;
+      if (statusFilter === 'all') {
+        statusWhere = undefined;
+      } else if (statusFilter === 'cancelled') {
+        statusWhere = { in: ['cancelled'] };
+      } else if (statusFilter === 'refunded') {
+        statusWhere = { in: ['refunded'] };
+      } else if (statusFilter === 'returned') {
+        statusWhere = { in: ['returned'] };
+      } else {
+        statusWhere = { in: [...GMV_STATUSES] };
+      }
+
+      const where = statusWhere ? { status: statusWhere } : {};
+
+      const [orders, totalCount, totalsResult] = await Promise.all([
+        prisma.orders.findMany({
+          where,
+          orderBy: { created_at: 'desc' },
+          skip,
+          take: pageSize,
+          include: {
+            users_orders_buyer_idTousers: {
+              select: { id: true, display_name: true, email: true },
+            },
+            users_orders_seller_idTousers: {
+              select: { id: true, display_name: true, email: true, is_verified_seller: true },
+            },
+          },
+        }),
+        prisma.orders.count({ where }),
+        prisma.orders.aggregate({
+          _sum: { buyer_total: true, seller_payout: true, shipping_cost: true, label_cost: true },
+          _count: true,
+          where,
+        }),
+      ]);
+
+      const totalBuyerTotal = Number(totalsResult._sum.buyer_total || 0);
+      const totalSellerPayout = Number(totalsResult._sum.seller_payout || 0);
+      const totalShippingCost = Number(totalsResult._sum.shipping_cost || 0);
+      const totalLabelCost = Number(totalsResult._sum.label_cost || 0);
+      const totalGross = totalBuyerTotal - totalSellerPayout - totalShippingCost - totalLabelCost;
+      const totalEstStripe = (totalBuyerTotal * EST_STRIPE_RATE) + (totalsResult._count * EST_STRIPE_FIXED);
+      const totalEstNet = totalGross - totalEstStripe;
+
+      const salesRows = orders.map(order => {
+        const buyerTotal = Number(order.buyer_total || 0);
+        const sellerPayout = Number(order.seller_payout || 0);
+        const shippingCost = Number(order.shipping_cost || 0);
+        const labelCost = Number(order.label_cost || 0);
+        const listingPrice = Number(order.listing_price || 0);
+
+        const mulligansGross = buyerTotal - sellerPayout - shippingCost - labelCost;
+        const formulaFee = (listingPrice * BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
+        const estStripeFee = (buyerTotal * EST_STRIPE_RATE) + EST_STRIPE_FIXED;
+        const estNet = mulligansGross - estStripeFee;
+
+        const buyer = order.users_orders_buyer_idTousers;
+        const seller = order.users_orders_seller_idTousers;
+
+        let timeToSell: string | null = null;
+        if (order.paid_at && order.created_at) {
+          const diffMs = new Date(order.paid_at).getTime() - new Date(order.created_at).getTime();
+          const diffHours = Math.floor(diffMs / 3600000);
+          const diffDays = Math.floor(diffMs / 86400000);
+          if (diffDays > 0) {
+            timeToSell = `${diffDays}d ${diffHours % 24}h`;
+          } else {
+            timeToSell = `${diffHours}h`;
+          }
+        }
+
+        return {
+          id: order.id,
+          listing_title: order.listing_title,
+          listing_image: order.listing_image,
+          buyer: buyer ? { id: buyer.id, name: buyer.display_name || buyer.email || 'Unknown' } : null,
+          seller: seller ? {
+            id: seller.id,
+            name: seller.display_name || seller.email || 'Unknown',
+            is_pro: seller.is_verified_seller || false,
+          } : null,
+          shipping_address: order.shipping_address,
+          original_list_price: Number(order.original_list_price || 0),
+          listing_price: listingPrice,
+          discount_amount: Number(order.discount_amount || 0),
+          offer_id: order.offer_id,
+          buyer_total: buyerTotal,
+          seller_payout: sellerPayout,
+          shipping_cost: shippingCost,
+          label_cost: labelCost,
+          label_pending: order.label_cost === null,
+          mulligans_gross: round2(mulligansGross),
+          formula_fee: round2(formulaFee),
+          est_stripe_fee: round2(estStripeFee),
+          est_net: round2(estNet),
+          time_to_sell: timeToSell,
+          source: order.source || 'unknown',
+          status: order.status,
+          created_at: order.created_at,
+          quantity: order.quantity,
+        };
+      });
+
+      res.json({
+        sales: salesRows,
+        pagination: {
+          page,
+          pageSize,
+          totalCount,
+          totalPages: Math.ceil(totalCount / pageSize),
+        },
+        totals: {
+          count: totalsResult._count,
+          mulligans_gross: round2(totalGross),
+          est_stripe_fee: round2(totalEstStripe),
+          est_net: round2(totalEstNet),
+        },
+        statusFilter,
+      });
+    } catch (error) {
+      console.error('Get sales error:', error);
+      res.status(500).json({ error: 'Failed to fetch sales data' });
     }
   }
 }
