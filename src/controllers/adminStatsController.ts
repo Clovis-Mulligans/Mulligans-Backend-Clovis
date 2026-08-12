@@ -6,6 +6,13 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
 
+// Per-metric status sets — different metrics count different order states.
+// Verified against prod order statuses: cancelled, completed, delivered,
+// disputed, in_transit, refunded, returned, to_ship.
+// 'shipped' and 'paid' do NOT exist in prod data.
+export const GMV_STATUSES = ['completed', 'delivered', 'in_transit', 'to_ship', 'disputed'] as const;
+export const REALISED_STATUSES = ['completed'] as const;
+export const PENDING_ESCROW_STATUSES = ['to_ship', 'in_transit', 'delivered'] as const;
 
 export class AdminStatsController {
   /**
@@ -69,19 +76,19 @@ export class AdminStatsController {
         }
       });
 
-      // ===== GMV (Gross Merchandise Value) =====
+      // ===== GMV (Gross Merchandise Value) — all genuine sales =====
       const gmvResult = await prisma.orders.aggregate({
         _sum: { amount: true },
-        where: { 
-          status: { in: ['completed', 'delivered', 'shipped', 'paid'] }
+        where: {
+          status: { in: [...GMV_STATUSES] }
         }
       });
       const totalGMV = Number(gmvResult._sum.amount || 0);
 
       const gmvThisWeekResult = await prisma.orders.aggregate({
         _sum: { amount: true },
-        where: { 
-          status: { in: ['completed', 'delivered', 'shipped', 'paid'] },
+        where: {
+          status: { in: [...GMV_STATUSES] },
           created_at: { gte: weekStart }
         }
       });
@@ -89,11 +96,11 @@ export class AdminStatsController {
 
       const gmvLastWeekResult = await prisma.orders.aggregate({
         _sum: { amount: true },
-        where: { 
-          status: { in: ['completed', 'delivered', 'shipped', 'paid'] },
-          created_at: { 
+        where: {
+          status: { in: [...GMV_STATUSES] },
+          created_at: {
             gte: lastWeekStart,
-            lt: weekStart 
+            lt: weekStart
           }
         }
       });
@@ -104,34 +111,53 @@ export class AdminStatsController {
         where: { created_at: { gte: todayStart } }
       });
 
+      // Today's GMV — uses GMV definition (all genuine sales)
       const todayRevenueResult = await prisma.orders.aggregate({
         _sum: { amount: true },
-        where: { 
+        where: {
           created_at: { gte: todayStart },
-          status: { in: ['completed', 'delivered', 'shipped', 'paid'] }
+          status: { in: [...GMV_STATUSES] }
         }
       });
       const todayRevenue = Number(todayRevenueResult._sum.amount || 0);
+
+      // ===== REALISED REVENUE — completed only =====
+      const realisedResult = await prisma.orders.aggregate({
+        _sum: { amount: true },
+        _count: true,
+        where: {
+          status: { in: [...REALISED_STATUSES] }
+        }
+      });
+      const realisedRevenue = Number(realisedResult._sum.amount || 0);
+      const realisedOrderCount = realisedResult._count || 0;
+
+      // ===== FEE REVENUE — gross (GMV set) and realised (completed only) =====
+      const gmvOrderCount = await prisma.orders.count({
+        where: { status: { in: [...GMV_STATUSES] } }
+      });
+      const grossFees = (totalGMV * BUYER_PROTECTION_RATE) + (gmvOrderCount * SERVICE_FEE_PER_ITEM);
+      const realisedFees = (realisedRevenue * BUYER_PROTECTION_RATE) + (realisedOrderCount * SERVICE_FEE_PER_ITEM);
 
       // ===== VERIFIED SELLERS =====
       const verifiedSellers = await prisma.users.count({
         where: { is_verified_seller: true }
       });
 
-      // ===== PENDING ESCROW =====
+      // ===== PENDING ESCROW — paid but not yet released to sellers =====
       const pendingEscrowResult = await prisma.orders.aggregate({
         _sum: { amount: true },
-        where: { 
-          status: { in: ['paid', 'shipped'] }
+        where: {
+          status: { in: [...PENDING_ESCROW_STATUSES] }
         }
       });
       const pendingEscrow = Number(pendingEscrowResult._sum.amount || 0);
 
-      // ===== AVERAGE ORDER VALUE =====
+      // ===== AVERAGE ORDER VALUE — across GMV set =====
       const avgOrderResult = await prisma.orders.aggregate({
         _avg: { amount: true },
-        where: { 
-          status: { in: ['completed', 'delivered', 'shipped', 'paid'] }
+        where: {
+          status: { in: [...GMV_STATUSES] }
         }
       });
       const avgOrderValue = Number(avgOrderResult._avg.amount || 0);
@@ -164,6 +190,9 @@ export class AdminStatsController {
         pendingEscrow,
         avgOrderValue,
         conversionRate,
+        realisedRevenue,
+        grossFees: Math.round(grossFees * 100) / 100,
+        realisedFees: Math.round(realisedFees * 100) / 100,
         
         // This week totals
         thisWeek: {
@@ -197,7 +226,7 @@ export class AdminStatsController {
         SELECT
           DATE(created_at) as day,
           COUNT(*)::bigint as count,
-          SUM(CASE WHEN status IN ('completed', 'delivered', 'shipped', 'paid') THEN amount ELSE 0 END) as revenue
+          SUM(CASE WHEN status IN ('completed', 'delivered', 'in_transit', 'to_ship', 'disputed') THEN amount ELSE 0 END) as revenue
         FROM orders
         WHERE created_at >= ${sevenDaysAgo} AND created_at < ${tomorrow}
         GROUP BY DATE(created_at)
@@ -216,7 +245,7 @@ export class AdminStatsController {
       // ===== Batch query: GMV (last 30 days) =====
       const gmvByDay = await prisma.$queryRaw<Array<{ day: Date; gmv: any }>>`
         SELECT DATE(created_at) as day,
-          SUM(CASE WHEN status IN ('completed', 'delivered', 'shipped', 'paid') THEN amount ELSE 0 END) as gmv
+          SUM(CASE WHEN status IN ('completed', 'delivered', 'in_transit', 'to_ship', 'disputed') THEN amount ELSE 0 END) as gmv
         FROM orders
         WHERE created_at >= ${thirtyDaysAgo} AND created_at < ${tomorrow}
         GROUP BY DATE(created_at)
@@ -285,7 +314,7 @@ export class AdminStatsController {
         by: ['listing_id'],
         _sum: { amount: true },
         where: {
-          status: { in: ['completed', 'delivered', 'shipped', 'paid'] },
+          status: { in: [...GMV_STATUSES] },
           listing_id: { not: null }
         }
       });
@@ -367,7 +396,7 @@ export class AdminStatsController {
           break;
       }
 
-      const validOrderStatuses = ['completed', 'delivered', 'shipped', 'paid'];
+      const validOrderStatuses = [...GMV_STATUSES];
 
       // ===== REVENUE METRICS =====
       const [gmvResult, orderCountResult, shippingResult] = await Promise.all([
@@ -397,7 +426,27 @@ export class AdminStatsController {
       const orderCount = orderCountResult;
       const avgOrderValue = orderCount > 0 ? totalGMV / orderCount : 0;
 
-      const estimatedFees = (totalGMV * BUYER_PROTECTION_RATE) + (orderCount * SERVICE_FEE_PER_ITEM);
+      const grossFees = (totalGMV * BUYER_PROTECTION_RATE) + (orderCount * SERVICE_FEE_PER_ITEM);
+
+      // Realised fees — completed orders only
+      const [realisedGmvResult, realisedCountResult] = await Promise.all([
+        prisma.orders.aggregate({
+          _sum: { amount: true },
+          where: {
+            status: { in: [...REALISED_STATUSES] },
+            created_at: { gte: periodStart, lt: tomorrow },
+          },
+        }),
+        prisma.orders.count({
+          where: {
+            status: { in: [...REALISED_STATUSES] },
+            created_at: { gte: periodStart, lt: tomorrow },
+          },
+        }),
+      ]);
+      const realisedGMV = Number(realisedGmvResult._sum.amount || 0);
+      const realisedCount = realisedCountResult;
+      const realisedFees = (realisedGMV * BUYER_PROTECTION_RATE) + (realisedCount * SERVICE_FEE_PER_ITEM);
 
       // Shipping margin estimate: charged shipping - label cost
       const totalShippingCharged = Number(shippingResult._sum.shipping_cost || 0);
@@ -455,7 +504,7 @@ export class AdminStatsController {
         SELECT
           DATE(created_at) as day,
           COUNT(*)::bigint as count,
-          SUM(CASE WHEN status IN ('completed', 'delivered', 'shipped', 'paid') THEN amount ELSE 0 END) as gmv
+          SUM(CASE WHEN status IN ('completed', 'delivered', 'in_transit', 'to_ship', 'disputed') THEN amount ELSE 0 END) as gmv
         FROM orders
         WHERE created_at >= ${periodStart} AND created_at < ${tomorrow}
         GROUP BY DATE(created_at)
@@ -545,7 +594,7 @@ export class AdminStatsController {
         by: ['listing_id'],
         _sum: { amount: true },
         where: {
-          status: { in: validOrderStatuses },
+          status: { in: [...GMV_STATUSES] },
           listing_id: { not: null },
           created_at: { gte: periodStart, lt: tomorrow },
         },
@@ -591,7 +640,9 @@ export class AdminStatsController {
         period,
         revenue: {
           totalGMV,
-          estimatedFees: Math.round(estimatedFees * 100) / 100,
+          realisedGMV,
+          grossFees: Math.round(grossFees * 100) / 100,
+          realisedFees: Math.round(realisedFees * 100) / 100,
           estimatedShippingMargin: Math.round(estimatedShippingMargin * 100) / 100,
           avgOrderValue: Math.round(avgOrderValue * 100) / 100,
           orderCount,
