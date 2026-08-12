@@ -1803,6 +1803,9 @@ router.get('/stats/charts', adminAuth, AdminStatsController.getChartData);
 // Get detailed analytics stats (Batch 4)
 router.get('/stats/detailed', adminAuth, AdminStatsController.getDetailedStats);
 
+// Per-sale P&L breakdown
+router.get('/sales', adminAuth, AdminStatsController.getSales);
+
 // ============================================
 // AUDIT LOG ROUTES (Batch 5)
 // ============================================
