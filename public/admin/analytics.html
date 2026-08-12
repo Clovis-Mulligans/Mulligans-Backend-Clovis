@@ -271,9 +271,14 @@
               <div class="revenue-card-sub" id="metricGMVSub">Total value of goods sold</div>
             </div>
             <div class="revenue-card">
-              <div class="revenue-card-label">Mulligans Fee Revenue</div>
+              <div class="revenue-card-label">Gross Fee Revenue</div>
               <div class="revenue-card-value green" id="metricFeeRevenue">-</div>
-              <div class="revenue-card-sub">7.5% buyer fee + £0.99/item</div>
+              <div class="revenue-card-sub">7.5% + £0.99 across all sales</div>
+            </div>
+            <div class="revenue-card">
+              <div class="revenue-card-label">Realised Fee Revenue</div>
+              <div class="revenue-card-value green" id="metricRealisedFees">-</div>
+              <div class="revenue-card-sub">Fees on completed orders only</div>
             </div>
             <div class="revenue-card">
               <div class="revenue-card-label">Shipping Margin (Est.)</div>
@@ -439,7 +444,8 @@
 
       // Revenue section
       document.getElementById('metricGMV').textContent = formatCurrency(revenue.totalGMV || 0);
-      document.getElementById('metricFeeRevenue').textContent = formatCurrency(revenue.estimatedFees || 0);
+      document.getElementById('metricFeeRevenue').textContent = formatCurrency(revenue.grossFees || revenue.estimatedFees || 0);
+      document.getElementById('metricRealisedFees').textContent = formatCurrency(revenue.realisedFees || 0);
       document.getElementById('metricShippingMargin').textContent = formatCurrency(revenue.estimatedShippingMargin || 0);
       document.getElementById('metricAOV').textContent = formatCurrency(revenue.avgOrderValue || 0);
 
@@ -781,7 +787,8 @@
       csv += 'REVENUE SUMMARY\n';
       csv += 'Metric,Value\n';
       csv += `Total GMV,${revenue.totalGMV || 0}\n`;
-      csv += `Estimated Fee Revenue,${revenue.estimatedFees || 0}\n`;
+      csv += `Gross Fee Revenue,${revenue.grossFees || revenue.estimatedFees || 0}\n`;
+      csv += `Realised Fee Revenue,${revenue.realisedFees || 0}\n`;
       csv += `Estimated Shipping Margin,${revenue.estimatedShippingMargin || 0}\n`;
       csv += `Average Order Value,${revenue.avgOrderValue || 0}\n`;
       csv += `Order Count,${revenue.orderCount || 0}\n\n`;
