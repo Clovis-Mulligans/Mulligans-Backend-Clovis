@@ -113,11 +113,10 @@ const SEED_ORDERS: SeedOrder[] = [
 function computeMargins(order: SeedOrder) {
   const buyerTotal = order.buyer_total;
   const sellerPayout = order.seller_payout;
-  const shippingCost = order.shipping_cost;
   const labelCost = order.label_cost ?? 0;
   const listingPrice = order.listing_price;
 
-  const mulligansGross = buyerTotal - sellerPayout - shippingCost - labelCost;
+  const mulligansGross = buyerTotal - sellerPayout - labelCost;
   const formulaFee = (listingPrice * BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
   const estStripeFee = (buyerTotal * EST_STRIPE_RATE) + EST_STRIPE_FIXED;
   const estNet = mulligansGross - estStripeFee;
@@ -133,16 +132,18 @@ function computeMargins(order: SeedOrder) {
 // ─── Per-order margin math ──────────────────────────────────────────
 
 describe('per-order margin math', () => {
-  test('mulligans_gross = buyer_total - seller_payout - shipping_cost - label_cost', () => {
+  test('mulligans_gross = buyer_total - seller_payout - label_cost', () => {
     const order = SEED_ORDERS[0];
     const m = computeMargins(order);
-    expect(m.mulligans_gross).toBeCloseTo(9.99, 2);
+    // 225.48 - 200 - 6.50 = 18.98
+    expect(m.mulligans_gross).toBeCloseTo(18.98, 2);
   });
 
   test('null label_cost treated as 0 for gross calculation', () => {
     const order = SEED_ORDERS[1];
     const m = computeMargins(order);
-    expect(m.mulligans_gross).toBeCloseTo(24.25, 2);
+    // 387.24 - 350 - 0 = 37.24
+    expect(m.mulligans_gross).toBeCloseTo(37.24, 2);
   });
 
   test('formula_fee uses imported constants, not hardcoded values', () => {
@@ -165,7 +166,32 @@ describe('per-order margin math', () => {
     const order = SEED_ORDERS[0];
     const m = computeMargins(order);
     expect(m.est_net).toBeCloseTo(m.mulligans_gross - m.est_stripe_fee, 2);
-    expect(m.est_net).toBeCloseTo(6.41, 2);
+    // 18.98 - 3.58 = 15.40
+    expect(m.est_net).toBeCloseTo(15.40, 2);
+  });
+});
+
+// ─── shipping_cost does NOT affect gross ────────────────────────────
+
+describe('shipping_cost independence', () => {
+  test('two orders with identical buyer_total/seller_payout/label_cost but different shipping_cost produce the same gross', () => {
+    const orderA: SeedOrder = {
+      ...SEED_ORDERS[0],
+      id: 'order-ship-a',
+      shipping_cost: 5.00,
+    };
+    const orderB: SeedOrder = {
+      ...SEED_ORDERS[0],
+      id: 'order-ship-b',
+      shipping_cost: 15.00,
+    };
+
+    expect(orderA.shipping_cost).not.toBe(orderB.shipping_cost);
+
+    const mA = computeMargins(orderA);
+    const mB = computeMargins(orderB);
+    expect(mA.mulligans_gross).toBe(mB.mulligans_gross);
+    expect(mA.est_net).toBe(mB.est_net);
   });
 });
 
@@ -232,9 +258,8 @@ describe('totals aggregation — respects status filter', () => {
     for (const o of filtered) {
       const bt = o.buyer_total;
       const sp = o.seller_payout;
-      const sc = o.shipping_cost;
       const lc = o.label_cost ?? 0;
-      sumGross += bt - sp - sc - lc;
+      sumGross += bt - sp - lc;
       sumStripe += (bt * EST_STRIPE_RATE) + EST_STRIPE_FIXED;
     }
 
