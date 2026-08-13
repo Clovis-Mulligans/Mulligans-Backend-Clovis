@@ -783,7 +783,7 @@ export class AdminStatsController {
       const totalSellerPayout = Number(totalsResult._sum.seller_payout || 0);
       const totalShippingCost = Number(totalsResult._sum.shipping_cost || 0);
       const totalLabelCost = Number(totalsResult._sum.label_cost || 0);
-      const totalGross = totalBuyerTotal - totalSellerPayout - totalShippingCost - totalLabelCost;
+      const totalGross = totalBuyerTotal - totalSellerPayout - totalLabelCost;
       const totalEstStripe = (totalBuyerTotal * EST_STRIPE_RATE) + (totalsResult._count * EST_STRIPE_FIXED);
       const totalEstNet = totalGross - totalEstStripe;
 
@@ -794,7 +794,7 @@ export class AdminStatsController {
         const labelCost = Number(order.label_cost || 0);
         const listingPrice = Number(order.listing_price || 0);
 
-        const mulligansGross = buyerTotal - sellerPayout - shippingCost - labelCost;
+        const mulligansGross = buyerTotal - sellerPayout - labelCost;
         const formulaFee = (listingPrice * BUYER_PROTECTION_RATE) + SERVICE_FEE_PER_ITEM;
         const estStripeFee = (buyerTotal * EST_STRIPE_RATE) + EST_STRIPE_FIXED;
         const estNet = mulligansGross - estStripeFee;

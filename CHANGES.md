@@ -1,86 +1,71 @@
-# CHANGES — `task/admin-exclude-test-orders`
+# CHANGES — `task/admin-sales-gross-formula-fix`
 
-**Branch:** `task/admin-exclude-test-orders`
-**Base:** `main` @ `e4858e4`
+**Branch:** `task/admin-sales-gross-formula-fix`
+**Base:** `main` @ `e863d14`
 
 ## Summary
 
-Excludes 18 legacy pre-dev test orders from ALL admin dashboard metrics. Non-destructive read filter only — no order rows were deleted, updated, or modified. The orders remain in the database; they are simply excluded from dashboard queries via `WHERE id NOT IN (...)`.
+Fixes a calculation bug in the admin Sales page where `mulligans_gross` wrongly subtracted `shipping_cost` (money the buyer paid IN, already a component of `buyer_total`) as if it were a cost out. This double-counted shipping against the platform, understating profit on every order.
 
-## Shared constant
+## The bug
 
-`EXCLUDED_ORDER_IDS` — exported from `src/controllers/adminStatsController.ts:20`, containing exactly 18 order IDs. Referenced by a single `excludeTestOrders` helper object at line 49: `{ id: { notIn: [...EXCLUDED_ORDER_IDS] } }`.
+**Old formula** (`adminStatsController.ts:797`):
+```
+mulligans_gross = buyer_total − seller_payout − shipping_cost − label_cost
+```
 
-Added `import { Prisma } from '@prisma/client'` at line 5 for safe parameterisation of raw SQL queries via `Prisma.join()`.
+`shipping_cost` is what the buyer paid for shipping — it flows into `buyer_total` (money IN). The only shipping money that actually leaves the platform is `label_cost` (the Shippo label). Subtracting `shipping_cost` double-counts it.
 
-## Every query that received the exclusion clause
+**Corrected formula** (`adminStatsController.ts:796`):
+```
+mulligans_gross = buyer_total − seller_payout − label_cost
+```
 
-### `getStats` (12 Prisma queries)
-- `totalOrders` — `adminStatsController.ts:100`
-- `ordersThisWeek` — `adminStatsController.ts:102`
-- `ordersLastWeek` — `adminStatsController.ts:106`
-- `gmvResult` — `adminStatsController.ts:118`
-- `gmvThisWeekResult` — `adminStatsController.ts:127`
-- `gmvLastWeekResult` — `adminStatsController.ts:137`
-- `todayOrders` — `adminStatsController.ts:149`
-- `todayRevenueResult` — `adminStatsController.ts:156`
-- `realisedResult` — `adminStatsController.ts:168`
-- `gmvOrderCount` — `adminStatsController.ts:177`
-- `pendingEscrowResult` — `adminStatsController.ts:191`
-- `avgOrderResult` — `adminStatsController.ts:201`
+### Correctness proof (RAM shoes order, verified against live Stripe):
+- Stripe Payment Intent: £30.91 received (= `buyer_total`) ✓
+- Stripe Transfer: £22.00 to seller (= `seller_payout`) ✓
+- Shippo label: £4.85 (= `label_cost`)
+- Old formula: `30.91 − 22.00 − 6.27 − 4.85 = −£2.21` (wrong)
+- New formula: `30.91 − 22.00 − 4.85 = +£4.06` gross, minus est. Stripe £0.66 = **+£3.40 net** ✓ matches Stripe exactly
 
-### `getChartData` (3 queries: 2 raw SQL + 1 groupBy)
-- `ordersByDay` (raw SQL) — `adminStatsController.ts:274` — `AND id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})`
-- `gmvByDay` (raw SQL) — `adminStatsController.ts:294` — `AND id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})`
-- `categoryBreakdown` (groupBy) — `adminStatsController.ts:361`
+## Changes made
 
-### `getDetailedStats` (9 queries: 6 Prisma + 3 raw SQL)
-- `gmvResult` — `adminStatsController.ts:451`
-- `orderCountResult` — `adminStatsController.ts:458`
-- `shippingResult` — `adminStatsController.ts:466`
-- `realisedGmvResult` — `adminStatsController.ts:485`
-- `realisedCountResult` — `adminStatsController.ts:492`
-- `soldOrders` (raw SQL) — `adminStatsController.ts:545` — `AND o.id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})`
-- `ordersByDay` (raw SQL) — `adminStatsController.ts:562` — `AND id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})`
-- `categoryBreakdown` (groupBy) — `adminStatsController.ts:650`
-- `orderStatusBreakdown` (groupBy) — `adminStatsController.ts:683`
+### `src/controllers/adminStatsController.ts`
+- **Line 796:** Per-order `mulligansGross` — removed `- shippingCost`
+- **Line 785:** `totalGross` in totals summary — removed `- totalShippingCost`
+- Everything else unchanged: `est_stripe_fee`, `formula_fee`, status filters, `EXCLUDED_ORDER_IDS`, `label_cost` null handling
 
-### `getSales` (3 queries via shared `where` object)
-- `findMany` — `adminStatsController.ts:757` (shared `where` includes exclusion)
-- `count` — `adminStatsController.ts:757` (same shared `where`)
-- `aggregate` — `adminStatsController.ts:757` (same shared `where`)
+### `public/admin/sales.html`
+- **Line 349:** Column subtitle updated from `buyer_total - seller_payout - shipping - labels` to `buyer_total - seller_payout - labels`
 
-**Total: 27 order queries updated across 4 controller methods.**
+### `src/__tests__/unit/adminSales.test.ts`
+- `computeMargins()` helper: removed `- shippingCost` from gross formula (line 119)
+- `computeTotals()` helper: removed `- sc` from gross sum (line 236)
+- Added new `shipping_cost independence` test: two orders with identical buyer_total/seller_payout/label_cost but DIFFERENT shipping_cost produce the SAME gross
 
-## Confirmation
+## Test expected-values corrected
 
-- **NO order rows were deleted or modified.** This is a read-filter only (`WHERE ... NOT IN (...)`).
-- **Raw SQL exclusion is parameterised** via `Prisma.join()` template literals — no string interpolation.
-- **Exclusion is fully reversible:** remove `EXCLUDED_ORDER_IDS`, `excludeTestOrders`, the `Prisma` import, and the spread/AND clauses, and the orders reappear in all metrics.
-- **Tier 1 status logic (`GMV_STATUSES` etc.) is unchanged.** Margin math is unchanged. No routes, HTML pages, or non-stats code was touched.
+The OLD expected values were **wrong** — they asserted the buggy formula that double-counted shipping. These are not regressions; the old values were incorrect.
 
-## Tests added
+| Test | Field | Old (wrong) | New (correct) | Derivation |
+|------|-------|-------------|---------------|------------|
+| `mulligans_gross = buyer_total - seller_payout - label_cost` | `mulligans_gross` | 9.99 | **18.98** | 225.48 − 200 − 6.50 |
+| `null label_cost treated as 0` | `mulligans_gross` | 24.25 | **37.24** | 387.24 − 350 − 0 |
+| `est_net = mulligans_gross - est_stripe_fee` | `est_net` | 6.41 | **15.40** | 18.98 − 3.58 |
 
-7 new tests in `src/__tests__/unit/adminSales.test.ts`:
-
-1. `EXCLUDED_ORDER_IDS contains exactly 18 order IDs`
-2. `every entry starts with "order_"`
-3. `has no duplicate entries`
-4. `includes known legacy IDs`
-5. `findMany, count, and aggregate all receive id: { notIn: EXCLUDED_ORDER_IDS }` (getSales)
-6. `order with an EXCLUDED_ORDER_IDS id does not appear in salesRows`
-7. `every order count/aggregate in getStats includes id notIn exclusion`
+The `computeTotals` and `computeMargins` helpers were also corrected so all downstream assertions (totals gross sums, est_net relationship, cancelled filter) now test the correct formula.
 
 ## Full suite result
 
 ```
 Test Suites: 16 passed, 16 total
-Tests:       2 skipped, 2 todo, 646 passed, 650 total
+Tests:       2 skipped, 2 todo, 647 passed, 651 total
 Snapshots:   0 total
-Time:        3.741 s
+Time:        4.75 s
 ```
 
 ## Files changed
-- `src/controllers/adminStatsController.ts` — added `EXCLUDED_ORDER_IDS`, `excludeTestOrders`, `Prisma` import, exclusion clauses on all 27 order queries
-- `src/__tests__/unit/adminSales.test.ts` — 7 new test cases for exclusion behaviour
+- `src/controllers/adminStatsController.ts` — removed `- shippingCost` from per-order gross and `- totalShippingCost` from totals
+- `public/admin/sales.html` — updated column subtitle text
+- `src/__tests__/unit/adminSales.test.ts` — corrected formula in test helpers, re-derived expected values, added shipping independence test
 - `CHANGES.md` — this file
