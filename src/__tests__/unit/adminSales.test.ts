@@ -11,6 +11,7 @@ import {
   GMV_STATUSES,
   EST_STRIPE_RATE,
   EST_STRIPE_FIXED,
+  EXCLUDED_ORDER_IDS,
 } from '../../controllers/adminStatsController';
 import {
   BUYER_PROTECTION_RATE,
@@ -303,6 +304,176 @@ describe('endpoint auth — route is behind adminAuth', () => {
       .find(line => line.includes("'/sales'") && line.includes('getSales'));
     expect(salesRoute).toBeDefined();
     expect(salesRoute).toContain('adminAuth');
+  });
+});
+
+// ─── EXCLUDED_ORDER_IDS constant validation ────────────────────────
+
+describe('EXCLUDED_ORDER_IDS constant', () => {
+  test('contains exactly 18 order IDs', () => {
+    expect(EXCLUDED_ORDER_IDS).toHaveLength(18);
+  });
+
+  test('every entry starts with "order_"', () => {
+    for (const id of EXCLUDED_ORDER_IDS) {
+      expect(id).toMatch(/^order_/);
+    }
+  });
+
+  test('has no duplicate entries', () => {
+    const unique = new Set(EXCLUDED_ORDER_IDS);
+    expect(unique.size).toBe(EXCLUDED_ORDER_IDS.length);
+  });
+
+  test('includes known legacy IDs', () => {
+    expect(EXCLUDED_ORDER_IDS).toContain('order_cdc05c80-4f33-400a-9092-a2e62db38d93');
+    expect(EXCLUDED_ORDER_IDS).toContain('order_1764523612193_isgwb6iee');
+  });
+});
+
+// ─── Exclusion filter is applied to all order queries ───────────────
+
+describe('test-order exclusion — getSales passes notIn filter to Prisma', () => {
+  test('findMany, count, and aggregate all receive id: { notIn: EXCLUDED_ORDER_IDS }', async () => {
+    const mockFindMany = jest.fn().mockResolvedValue([]);
+    const mockCount = jest.fn().mockResolvedValue(0);
+    const mockAggregate = jest.fn().mockResolvedValue({
+      _sum: { buyer_total: 0, seller_payout: 0, shipping_cost: 0, label_cost: 0 },
+      _count: 0,
+    });
+
+    let Controller: any;
+    jest.isolateModules(() => {
+      jest.doMock('../../lib/prisma', () => ({
+        prisma: {
+          orders: {
+            findMany: mockFindMany,
+            count: mockCount,
+            aggregate: mockAggregate,
+          },
+        },
+      }));
+      Controller = require('../../controllers/adminStatsController').AdminStatsController;
+    });
+
+    const req = { query: { page: '1', status: 'gmv' } } as any;
+    const res = { json: jest.fn(), status: jest.fn().mockReturnThis() } as any;
+
+    await Controller.getSales(req, res);
+
+    const excludedSet = [...EXCLUDED_ORDER_IDS];
+
+    const findManyWhere = mockFindMany.mock.calls[0][0].where;
+    expect(findManyWhere.id).toEqual({ notIn: excludedSet });
+
+    const countWhere = mockCount.mock.calls[0][0].where;
+    expect(countWhere.id).toEqual({ notIn: excludedSet });
+
+    const aggregateWhere = mockAggregate.mock.calls[0][0].where;
+    expect(aggregateWhere.id).toEqual({ notIn: excludedSet });
+  });
+});
+
+describe('test-order exclusion — excluded order absent from response rows', () => {
+  test('order with an EXCLUDED_ORDER_IDS id does not appear in salesRows', async () => {
+    const excludedId = EXCLUDED_ORDER_IDS[0];
+    const normalId = 'order-normal-001';
+
+    const fakeOrders = [
+      {
+        id: normalId,
+        listing_title: 'Normal Club',
+        listing_image: null,
+        listing_price: 100,
+        original_list_price: 100,
+        discount_amount: 0,
+        offer_id: null,
+        buyer_total: 115,
+        seller_payout: 100,
+        shipping_cost: 7,
+        label_cost: 5,
+        status: 'completed',
+        source: null,
+        quantity: 1,
+        created_at: new Date(),
+        paid_at: new Date(),
+        shipping_address: null,
+        users_orders_buyer_idTousers: { id: 'b1', display_name: 'Buyer', email: 'b@test.com' },
+        users_orders_seller_idTousers: { id: 's1', display_name: 'Seller', email: 's@test.com', is_verified_seller: false },
+      },
+    ];
+
+    const mockFindMany = jest.fn().mockResolvedValue(fakeOrders);
+    const mockCount = jest.fn().mockResolvedValue(1);
+    const mockAggregate = jest.fn().mockResolvedValue({
+      _sum: { buyer_total: 115, seller_payout: 100, shipping_cost: 7, label_cost: 5 },
+      _count: 1,
+    });
+
+    let Controller: any;
+    jest.isolateModules(() => {
+      jest.doMock('../../lib/prisma', () => ({
+        prisma: {
+          orders: {
+            findMany: mockFindMany,
+            count: mockCount,
+            aggregate: mockAggregate,
+          },
+        },
+      }));
+      Controller = require('../../controllers/adminStatsController').AdminStatsController;
+    });
+
+    const req = { query: { page: '1', status: 'all' } } as any;
+    const jsonSpy = jest.fn();
+    const res = { json: jsonSpy, status: jest.fn().mockReturnThis() } as any;
+
+    await Controller.getSales(req, res);
+
+    expect(jsonSpy).toHaveBeenCalled();
+    const body = jsonSpy.mock.calls[0][0];
+
+    const rowIds = body.sales.map((r: any) => r.id);
+    expect(rowIds).toContain(normalId);
+    expect(rowIds).not.toContain(excludedId);
+  });
+});
+
+describe('test-order exclusion — getStats passes notIn filter to all order queries', () => {
+  test('every order count/aggregate in getStats includes id notIn exclusion', async () => {
+    const mockOrderCount = jest.fn().mockResolvedValue(0);
+    const mockOrderAggregate = jest.fn().mockResolvedValue({
+      _sum: { amount: 0 }, _avg: { amount: 0 }, _count: 0,
+    });
+    const mockUsersCount = jest.fn().mockResolvedValue(0);
+    const mockListingsCount = jest.fn().mockResolvedValue(0);
+
+    let Controller: any;
+    jest.isolateModules(() => {
+      jest.doMock('../../lib/prisma', () => ({
+        prisma: {
+          orders: { count: mockOrderCount, aggregate: mockOrderAggregate },
+          users: { count: mockUsersCount },
+          listings: { count: mockListingsCount },
+        },
+      }));
+      Controller = require('../../controllers/adminStatsController').AdminStatsController;
+    });
+
+    const req = { query: {} } as any;
+    const res = { json: jest.fn(), status: jest.fn().mockReturnThis() } as any;
+
+    await Controller.getStats(req, res);
+
+    const excludedSet = [...EXCLUDED_ORDER_IDS];
+
+    for (const call of mockOrderCount.mock.calls) {
+      expect(call[0].where.id).toEqual({ notIn: excludedSet });
+    }
+
+    for (const call of mockOrderAggregate.mock.calls) {
+      expect(call[0].where.id).toEqual({ notIn: excludedSet });
+    }
   });
 });
 

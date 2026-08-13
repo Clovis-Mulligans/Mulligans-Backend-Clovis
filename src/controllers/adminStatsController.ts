@@ -3,6 +3,7 @@
 // No placeholders, no demo data - production ready
 
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { BUYER_PROTECTION_RATE, SERVICE_FEE_PER_ITEM } from '../lib/feeCalculations';
 
@@ -14,6 +15,29 @@ export const GMV_STATUSES = ['completed', 'delivered', 'in_transit', 'to_ship', 
 export const REALISED_STATUSES = ['completed'] as const;
 export const PENDING_ESCROW_STATUSES = ['to_ship', 'in_transit', 'delivered'] as const;
 
+// Legacy pre-dev test orders — excluded from dashboard metrics only, NOT deleted.
+// Future test data lives in the dev environment.
+export const EXCLUDED_ORDER_IDS = [
+  'order_cdc05c80-4f33-400a-9092-a2e62db38d93',
+  'order_bbb24b5c-6bd0-4d4b-b942-fcb6849e5521',
+  'order_36a36a6a-8835-47ab-8147-9262774ef7bb',
+  'order_a90e1276-b7ee-4b50-bed8-31c944f7ed35',
+  'order_85c8a91b-05d8-4bb3-a1e3-4658710118db',
+  'order_655d42f6-9031-4d83-9ee5-52bf5994d241',
+  'order_27c481f5-97aa-43ad-b5f6-bcf27a8e813a',
+  'order_9e8747b5-65f4-4976-8b2c-ee5914562403',
+  'order_3910a004-1eb2-44f0-9b73-9aec98cae497',
+  'order_59a35224-e6f9-418b-a071-0456b1ae67c8',
+  'order_c52adae2-1b9d-4e9c-bc00-af977c515c96',
+  'order_1768581703117_m8xcdh5tr',
+  'order_1768581703109_m1ripph1g',
+  'order_1768581703083_97rwrmu9u',
+  'order_1767461939807_qwuvkesmo',
+  'order_1767446213681_2xdm0wywz',
+  'order_1767441821097_t7dgbndl9',
+  'order_1764523612193_isgwb6iee',
+] as const;
+
 // UK domestic card estimate (1.5% + 20p) — not actual Stripe data
 export const EST_STRIPE_RATE = 0.015;
 export const EST_STRIPE_FIXED = 0.20;
@@ -21,6 +45,8 @@ export const EST_STRIPE_FIXED = 0.20;
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+const excludeTestOrders = { id: { notIn: [...EXCLUDED_ORDER_IDS] } };
 
 export class AdminStatsController {
   /**
@@ -71,16 +97,17 @@ export class AdminStatsController {
       });
 
       // ===== TOTAL ORDERS =====
-      const totalOrders = await prisma.orders.count();
+      const totalOrders = await prisma.orders.count({ where: { ...excludeTestOrders } });
       const ordersThisWeek = await prisma.orders.count({
-        where: { created_at: { gte: weekStart } }
+        where: { ...excludeTestOrders, created_at: { gte: weekStart } }
       });
       const ordersLastWeek = await prisma.orders.count({
-        where: { 
-          created_at: { 
+        where: {
+          ...excludeTestOrders,
+          created_at: {
             gte: lastWeekStart,
-            lt: weekStart 
-          } 
+            lt: weekStart
+          }
         }
       });
 
@@ -88,6 +115,7 @@ export class AdminStatsController {
       const gmvResult = await prisma.orders.aggregate({
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...GMV_STATUSES] }
         }
       });
@@ -96,6 +124,7 @@ export class AdminStatsController {
       const gmvThisWeekResult = await prisma.orders.aggregate({
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...GMV_STATUSES] },
           created_at: { gte: weekStart }
         }
@@ -105,6 +134,7 @@ export class AdminStatsController {
       const gmvLastWeekResult = await prisma.orders.aggregate({
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...GMV_STATUSES] },
           created_at: {
             gte: lastWeekStart,
@@ -116,13 +146,14 @@ export class AdminStatsController {
 
       // ===== TODAY'S STATS =====
       const todayOrders = await prisma.orders.count({
-        where: { created_at: { gte: todayStart } }
+        where: { ...excludeTestOrders, created_at: { gte: todayStart } }
       });
 
       // Today's GMV — uses GMV definition (all genuine sales)
       const todayRevenueResult = await prisma.orders.aggregate({
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           created_at: { gte: todayStart },
           status: { in: [...GMV_STATUSES] }
         }
@@ -134,6 +165,7 @@ export class AdminStatsController {
         _sum: { amount: true },
         _count: true,
         where: {
+          ...excludeTestOrders,
           status: { in: [...REALISED_STATUSES] }
         }
       });
@@ -142,7 +174,7 @@ export class AdminStatsController {
 
       // ===== FEE REVENUE — gross (GMV set) and realised (completed only) =====
       const gmvOrderCount = await prisma.orders.count({
-        where: { status: { in: [...GMV_STATUSES] } }
+        where: { ...excludeTestOrders, status: { in: [...GMV_STATUSES] } }
       });
       const grossFees = (totalGMV * BUYER_PROTECTION_RATE) + (gmvOrderCount * SERVICE_FEE_PER_ITEM);
       const realisedFees = (realisedRevenue * BUYER_PROTECTION_RATE) + (realisedOrderCount * SERVICE_FEE_PER_ITEM);
@@ -156,6 +188,7 @@ export class AdminStatsController {
       const pendingEscrowResult = await prisma.orders.aggregate({
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...PENDING_ESCROW_STATUSES] }
         }
       });
@@ -165,6 +198,7 @@ export class AdminStatsController {
       const avgOrderResult = await prisma.orders.aggregate({
         _avg: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...GMV_STATUSES] }
         }
       });
@@ -237,6 +271,7 @@ export class AdminStatsController {
           SUM(CASE WHEN status IN ('completed', 'delivered', 'in_transit', 'to_ship', 'disputed') THEN amount ELSE 0 END) as revenue
         FROM orders
         WHERE created_at >= ${sevenDaysAgo} AND created_at < ${tomorrow}
+          AND id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})
         GROUP BY DATE(created_at)
         ORDER BY day
       `;
@@ -256,6 +291,7 @@ export class AdminStatsController {
           SUM(CASE WHEN status IN ('completed', 'delivered', 'in_transit', 'to_ship', 'disputed') THEN amount ELSE 0 END) as gmv
         FROM orders
         WHERE created_at >= ${thirtyDaysAgo} AND created_at < ${tomorrow}
+          AND id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})
         GROUP BY DATE(created_at)
         ORDER BY day
       `;
@@ -322,6 +358,7 @@ export class AdminStatsController {
         by: ['listing_id'],
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...GMV_STATUSES] },
           listing_id: { not: null }
         }
@@ -411,12 +448,14 @@ export class AdminStatsController {
         prisma.orders.aggregate({
           _sum: { amount: true },
           where: {
+            ...excludeTestOrders,
             status: { in: validOrderStatuses },
             created_at: { gte: periodStart, lt: tomorrow },
           },
         }),
         prisma.orders.count({
           where: {
+            ...excludeTestOrders,
             status: { in: validOrderStatuses },
             created_at: { gte: periodStart, lt: tomorrow },
           },
@@ -424,6 +463,7 @@ export class AdminStatsController {
         prisma.orders.aggregate({
           _sum: { shipping_cost: true, label_cost: true },
           where: {
+            ...excludeTestOrders,
             status: { in: validOrderStatuses },
             created_at: { gte: periodStart, lt: tomorrow },
           },
@@ -442,12 +482,14 @@ export class AdminStatsController {
         prisma.orders.aggregate({
           _sum: { amount: true },
           where: {
+            ...excludeTestOrders,
             status: { in: [...REALISED_STATUSES] },
             created_at: { gte: periodStart, lt: tomorrow },
           },
         }),
         prisma.orders.count({
           where: {
+            ...excludeTestOrders,
             status: { in: [...REALISED_STATUSES] },
             created_at: { gte: periodStart, lt: tomorrow },
           },
@@ -500,6 +542,7 @@ export class AdminStatsController {
         AND o.created_at >= ${periodStart}
         AND o.created_at < ${tomorrow}
         AND l.created_at IS NOT NULL
+        AND o.id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})
       `;
       const avgDaysToSell = soldOrders[0]?.avg_days ? Number(soldOrders[0].avg_days) : null;
 
@@ -516,6 +559,7 @@ export class AdminStatsController {
           SUM(CASE WHEN status IN ('completed', 'delivered', 'in_transit', 'to_ship', 'disputed') THEN amount ELSE 0 END) as gmv
         FROM orders
         WHERE created_at >= ${periodStart} AND created_at < ${tomorrow}
+          AND id NOT IN (${Prisma.join(EXCLUDED_ORDER_IDS)})
         GROUP BY DATE(created_at)
         ORDER BY day
       `;
@@ -603,6 +647,7 @@ export class AdminStatsController {
         by: ['listing_id'],
         _sum: { amount: true },
         where: {
+          ...excludeTestOrders,
           status: { in: [...GMV_STATUSES] },
           listing_id: { not: null },
           created_at: { gte: periodStart, lt: tomorrow },
@@ -635,6 +680,7 @@ export class AdminStatsController {
         by: ['status'],
         _count: true,
         where: {
+          ...excludeTestOrders,
           created_at: { gte: periodStart, lt: tomorrow },
         },
       });
@@ -708,7 +754,7 @@ export class AdminStatsController {
         statusWhere = { in: [...GMV_STATUSES] };
       }
 
-      const where = statusWhere ? { status: statusWhere } : {};
+      const where = statusWhere ? { ...excludeTestOrders, status: statusWhere } : { ...excludeTestOrders };
 
       const [orders, totalCount, totalsResult] = await Promise.all([
         prisma.orders.findMany({
